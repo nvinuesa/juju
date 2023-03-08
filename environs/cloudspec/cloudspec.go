@@ -4,10 +4,15 @@
 package cloudspec
 
 import (
+	"net"
+	"net/url"
+
 	"github.com/juju/errors"
 	"github.com/juju/names/v4"
 
 	jujucloud "github.com/juju/juju/cloud"
+	"github.com/juju/juju/core/network"
+	"github.com/juju/juju/provider/lxd/lxdnames"
 )
 
 // CloudSpec describes a specific cloud configuration, for the purpose
@@ -62,6 +67,26 @@ func (cs CloudSpec) Validate() error {
 		return errors.NotValidf("cloud name %q", cs.Name)
 	}
 	return nil
+}
+
+// IsLocalhostCloud returns true if the cloud is an LXD localhost cloud.
+func (cs *CloudSpec) IsLocalhostCloud() (bool, error) {
+	if cs.Type != lxdnames.ProviderType &&
+		cs.Type != lxdnames.DefaultCloud {
+		return false, nil
+	}
+	if cs.Region != lxdnames.DefaultLocalRegion {
+		return false, nil
+	}
+	endpointURL, err := url.Parse(cs.Endpoint)
+	if err != nil {
+		return false, errors.Trace(err)
+	}
+	endpointIP := net.ParseIP(endpointURL.Hostname())
+	if endpointIP == nil {
+		return false, nil
+	}
+	return network.IsLocalAddress(endpointIP)
 }
 
 // MakeCloudSpec returns a CloudSpec from the given
