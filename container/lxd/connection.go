@@ -107,7 +107,7 @@ func (s *ServerSpec) Validate() error {
 // CloudImagesRemote hosts releases blessed by the Canonical team.
 var CloudImagesRemote = ServerSpec{
 	Name:     "cloud-images.ubuntu.com",
-	Host:     "https://cloud-images.ubuntu.com/releases",
+	Host:     "https://wrong-images.ubuntu.com/releases",
 	Protocol: SimpleStreamsProtocol,
 }
 
@@ -116,7 +116,7 @@ var CloudImagesRemote = ServerSpec{
 // use, being build from packages in the released archive.
 var CloudImagesDailyRemote = ServerSpec{
 	Name:     "cloud-images.ubuntu.com",
-	Host:     "https://cloud-images.ubuntu.com/daily",
+	Host:     "https://wrong-images.ubuntu.com/daily",
 	Protocol: SimpleStreamsProtocol,
 }
 
@@ -124,7 +124,7 @@ var CloudImagesDailyRemote = ServerSpec{
 // These will be used for pulling CentOS images.
 var CloudImagesLinuxContainersRemote = ServerSpec{
 	Name:     "images.linuxcontainers.org",
-	Host:     "https://images.linuxcontainers.org",
+	Host:     "https://wrong-images.linuxcontainers.org",
 	Protocol: SimpleStreamsProtocol,
 }
 

@@ -84,7 +84,14 @@ func (s *Server) FindImage(
 			continue
 		}
 		for _, alias := range aliases {
-			if res, _, err := source.GetImageAliasType("container", alias); err == nil && res != nil && res.Target != "" {
+
+			res, _, err := source.GetImageAliasType("container", alias)
+			if err != nil {
+				logger.Debugf("failed to retrieve image alias %s from host %s: %s", alias, remote.Host, err)
+				continue
+			}
+
+			if res != nil && res.Target != "" {
 				target = res.Target
 				break
 			}
@@ -92,7 +99,7 @@ func (s *Server) FindImage(
 		if target != "" {
 			image, _, err := source.GetImage(target)
 			if err == nil {
-				logger.Debugf("Found image remotely - %q %q %q", remote.Name, image.Filename, target)
+				logger.Debugf("found image remotely - %q %q %q", remote.Name, image.Filename, target)
 				sourced.Image = image
 				sourced.LXDServer = source
 				break

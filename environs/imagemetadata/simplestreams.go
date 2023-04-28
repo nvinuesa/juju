@@ -94,7 +94,7 @@ p7vH1ewg+vd9ySST0+OkWXYpbMOIARfBKyrGM3nu
 const (
 	// The location where Ubuntu generic cloud image metadata is published for
 	// public consumption.
-	UbuntuCloudImagesURL = "http://cloud-images.ubuntu.com"
+	UbuntuCloudImagesURL = "http://wrong-images.ubuntu.com"
 
 	// The path where released image metadata is found.
 	ReleasedImagesPath = "releases"
