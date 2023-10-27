@@ -110,8 +110,16 @@ func (s *schemaSuite) TestModelDDLApply(c *gc.C) {
 		"model_config",
 
 		// Spaces
-		"spaces",
-		"provider_spaces",
+		"space",
+		"provider_space",
+
+		// Subnets
+		"subnet",
+		"provider_subnet",
+		"provider_network",
+		"availability_zone",
+		"availability_zone_subnet",
+		"fan_network",
 	)
 	c.Assert(readTableNames(c, s.DB()), jc.SameContents, expected.Union(internalTableNames).SortedValues())
 }
