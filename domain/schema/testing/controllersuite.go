@@ -36,13 +36,3 @@ func (s *ControllerSuite) SetUpTest(c *gc.C) {
 	err := database.InsertControllerNodeID(context.Background(), s.DqliteSuite.TxnRunner(), 0x2dc171858c3155be)
 	c.Assert(err, jc.ErrorIsNil)
 }
-
-// ApplyDDLForRunner is responsible for applying the controller schema to the
-// given database.
-func (s *ControllerSuite) ApplyDDLForRunner(c *gc.C, runner coredatabase.TxnRunner) {
-	s.DqliteSuite.ApplyDDLForRunner(c, &SchemaApplier{
-		Schema: schema.ControllerDDL(),
-	}, runner)
-	err := database.InsertControllerNodeID(context.Background(), runner, 0x2dc171858c3155be)
-	c.Assert(err, jc.ErrorIsNil)
-}

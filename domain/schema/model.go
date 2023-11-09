@@ -142,7 +142,7 @@ CREATE TABLE subnet (
     fan_uuid                     TEXT,
     CONSTRAINT                   fk_subnets_spaces
         FOREIGN KEY                  (space_uuid)
-        REFERENCES                   spaces(uuid)
+        REFERENCES                   space(uuid)
     CONSTRAINT                   fk_subnets_fan_networks
         FOREIGN KEY                  (fan_uuid)
         REFERENCES                   fan_network(uuid)
