@@ -154,7 +154,7 @@ func (addr *Address) SubnetCIDR() string {
 // Subnet returns the Subnet this IP address comes from. Returns nil and
 // errors.NotFoundError if the address comes from an unknown subnet (i.e.
 // machine-local one).
-func (addr *Address) Subnet() (*Subnet, error) {
+func (addr *Address) Subnet() (*network.SubnetInfo, error) {
 	return addr.st.SubnetByCIDR(addr.doc.SubnetCIDR)
 }
 

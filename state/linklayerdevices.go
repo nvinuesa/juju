@@ -607,11 +607,11 @@ func (dev *LinkLayerDevice) EthernetDeviceForBridge(
 				)
 			}
 			newDev.ConfigType = network.ConfigStatic
-			newDev.ProviderSubnetId = sub.ProviderId()
-			newDev.VLANTag = sub.VLANTag()
+			newDev.ProviderSubnetId = sub.ProviderId
+			newDev.VLANTag = sub.VLANTag
 			newDev.IsDefaultGateway = addr.IsDefaultGateway()
 			newDev.Addresses = network.ProviderAddresses{
-				network.NewMachineAddress("", network.WithCIDR(sub.CIDR())).AsProviderAddress()}
+				network.NewMachineAddress("", network.WithCIDR(sub.CIDR)).AsProviderAddress()}
 		} else {
 			newDev.Addresses = network.ProviderAddresses{
 				network.NewMachineAddress("", network.WithCIDR(addr.SubnetCIDR())).AsProviderAddress()}
