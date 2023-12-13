@@ -126,14 +126,10 @@ func (st *State) filterHostPortsForManagementSpace(
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
-		spaceInfo, err := sp.NetworkSpace()
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
 
 		hostPortsForAgents = make([]network.SpaceHostPorts, len(apiHostPorts))
 		for i := range apiHostPorts {
-			if filtered, ok := apiHostPorts[i].InSpaces(spaceInfo); ok {
+			if filtered, ok := apiHostPorts[i].InSpaces(*sp); ok {
 				hostPortsForAgents[i] = filtered
 			} else {
 				hostPortsForAgents[i] = apiHostPorts[i]
@@ -470,7 +466,7 @@ func (st *State) ConvertSpaceHostPort(sHP network.SpaceHostPort) (network.Provid
 		if err != nil {
 			return hp, errors.Trace(err)
 		}
-		hp.SpaceName = network.SpaceName(space.Name())
+		hp.SpaceName = network.SpaceName(space.Name)
 	}
 	return hp, nil
 }

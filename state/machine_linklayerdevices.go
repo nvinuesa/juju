@@ -625,15 +625,13 @@ func (m *Machine) newIPAddressDocFromArgs(args *LinkLayerDeviceAddress) (*ipAddr
 	}
 	addressValue := ip.String()
 	subnetCIDR := ipNet.String()
-	subnet, err := m.st.SubnetByCIDR(subnetCIDR)
+	_, err = m.st.SubnetByCIDR(subnetCIDR)
 	if errors.Is(err, errors.NotFound) {
 		logger.Debugf(
 			"address %q on machine %q uses unknown or machine-local subnet %q",
 			addressValue, m.Id(), subnetCIDR,
 		)
 	} else if err != nil {
-		return nil, errors.Trace(err)
-	} else if err := m.verifySubnetAlive(subnet); err != nil {
 		return nil, errors.Trace(err)
 	}
 
@@ -660,13 +658,6 @@ func (m *Machine) newIPAddressDocFromArgs(args *LinkLayerDeviceAddress) (*ipAddr
 		Origin:            args.Origin,
 	}
 	return newDoc, nil
-}
-
-func (m *Machine) verifySubnetAlive(subnet *Subnet) error {
-	if subnet.Life() != Alive {
-		return errors.Errorf("subnet %q is not alive", subnet.CIDR())
-	}
-	return nil
 }
 
 func (m *Machine) setDevicesAddressesFromDocsOps(newDocs []ipAddressDoc) ([]txn.Op, error) {
@@ -714,10 +705,6 @@ func (m *Machine) setDevicesAddressesFromDocsOps(newDocs []ipAddressDoc) ([]txn.
 			return nil, errors.Trace(err)
 		}
 
-		thisDeviceOps, err := m.maybeAssertSubnetAliveOps(&newDoc, thisDeviceOps)
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
 		if hasChanges {
 			ops = append(ops, thisDeviceOps...)
 		}
@@ -756,26 +743,6 @@ func (m *Machine) maybeAddAddressProviderIDOps(
 
 	providerIDAddrs[doc.ProviderID] = doc.Value
 	return []txn.Op{m.st.networkEntityGlobalKeyOp("address", corenetwork.Id(doc.ProviderID))}, nil
-}
-
-func (m *Machine) maybeAssertSubnetAliveOps(newDoc *ipAddressDoc, opsSoFar []txn.Op) ([]txn.Op, error) {
-	subnet, err := m.st.SubnetByCIDR(newDoc.SubnetCIDR)
-	if errors.Is(err, errors.NotFound) {
-		// Subnet is machine-local, no need to assert whether it's alive.
-		return opsSoFar, nil
-	} else if err != nil {
-		return nil, errors.Trace(err)
-	}
-	if err := m.verifySubnetAlive(subnet); err != nil {
-		return nil, errors.Trace(err)
-	}
-
-	// Subnet exists and is still alive, assert that is stays that way.
-	return append(opsSoFar, txn.Op{
-		C:      subnetsC,
-		Id:     m.st.docID(subnet.ID()),
-		Assert: isAliveDoc,
-	}), nil
 }
 
 // RemoveAllAddresses removes all assigned addresses to all devices of the
@@ -829,8 +796,8 @@ func (m *Machine) AllSpaces() (set.Strings, error) {
 		}
 
 		for _, sub := range subnets {
-			if sub.CIDR() == doc.SubnetCIDR {
-				spaces.Add(sub.spaceID)
+			if sub.CIDR == doc.SubnetCIDR {
+				spaces.Add(sub.SpaceID)
 				break
 			}
 		}

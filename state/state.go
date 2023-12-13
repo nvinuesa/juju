@@ -31,6 +31,7 @@ import (
 	"github.com/juju/juju/core/config"
 	"github.com/juju/juju/core/constraints"
 	"github.com/juju/juju/core/instance"
+	"github.com/juju/juju/core/network"
 	corenetwork "github.com/juju/juju/core/network"
 	"github.com/juju/juju/core/objectstore"
 	"github.com/juju/juju/core/permission"
@@ -76,6 +77,40 @@ type State struct {
 
 	// TODO(anastasiamac 2015-07-16) As state gets broken up, remove this.
 	CloudImageMetadataStorage cloudimagemetadata.Storage
+
+	networkService NetworkService
+}
+
+type NetworkService interface {
+	Space(ctx context.Context, uuid string) (*network.SpaceInfo, error)
+	SpaceByName(ctx context.Context, name string) (*network.SpaceInfo, error)
+	GetAllSpaces(ctx context.Context) (network.SpaceInfos, error)
+	SubnetsByCIDR(ctx context.Context, cidrs ...string) ([]network.SubnetInfo, error)
+}
+
+func (st *State) Space(id string) (*network.SpaceInfo, error) {
+	return st.networkService.Space(context.TODO(), id)
+}
+
+func (st *State) SpaceByName(name string) (*network.SpaceInfo, error) {
+	return st.networkService.SpaceByName(context.TODO(), name)
+}
+
+func (st *State) AllSpaceInfos() (network.SpaceInfos, error) {
+	return st.networkService.GetAllSpaces(context.TODO())
+}
+
+func (st *State) SubnetByCIDR(cidr string) (*network.SubnetInfo, error) {
+	subnets, err := st.networkService.SubnetsByCIDR(context.TODO(), cidr)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	return &subnets[0], nil
+}
+
+func (st *State) AllSubnets() (subnets []network.SubnetInfo, err error) {
+	// TODO(nvinuesa): Implement!
+	return nil, errors.NotImplemented
 }
 
 func (st *State) newStateNoWorkers(modelUUID string) (*State, error) {

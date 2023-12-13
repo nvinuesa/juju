@@ -241,18 +241,12 @@ func (b *Bindings) updateOps(txnRevno int64, newMap map[string]string, newMeta *
 	// Ensure that the spaceIDs needed for the bindings exist.
 	spIdMap := set.NewStrings()
 	for _, spID := range b.Map() {
-		sp, err := b.st.Space(spID)
-		if err != nil {
+		if _, err := b.st.Space(spID); err != nil {
 			return ops, errors.Trace(err)
 		}
 		if spIdMap.Contains(spID) {
 			continue
 		}
-		ops = append(ops, txn.Op{
-			C:      spacesC,
-			Id:     sp.doc.DocId,
-			Assert: txn.DocExists,
-		})
 		spIdMap.Add(spID)
 	}
 
@@ -365,7 +359,7 @@ func (b *Bindings) spaceNotFeasibleError(msg, id string) error {
 		logger.Errorf(msg, id)
 		return errors.Annotatef(err, "cannot get space name for id %q", id)
 	}
-	return errors.Errorf(msg, space.Name())
+	return errors.Errorf(msg, space.Name)
 }
 
 // removeEndpointBindingsOp returns an op removing the bindings for the given
@@ -467,7 +461,7 @@ func (st *State) DefaultEndpointBindingSpace() (string, error) {
 		return "", errors.Trace(err)
 	}
 	if err == nil {
-		defaultBinding = space.Id()
+		defaultBinding = space.ID
 	}
 
 	return defaultBinding, nil
@@ -499,7 +493,7 @@ func DefaultEndpointBindingsForCharm(st EndpointBinding, charmMeta *charm.Meta) 
 type EndpointBinding interface {
 	network.SpaceLookup
 	DefaultEndpointBindingSpace() (string, error)
-	Space(id string) (*Space, error)
+	Space(id string) (*network.SpaceInfo, error)
 }
 
 // Bindings are EndpointBindings.
