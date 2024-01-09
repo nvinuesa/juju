@@ -14,6 +14,7 @@ import (
 	"github.com/juju/juju/agent"
 	"github.com/juju/juju/core/flags"
 	"github.com/juju/juju/core/objectstore"
+	"github.com/juju/juju/environs"
 	"github.com/juju/juju/internal/bootstrap"
 	"github.com/juju/juju/internal/servicefactory"
 	"github.com/juju/juju/internal/worker/common"
@@ -48,13 +49,14 @@ type BinaryAgentStorage interface {
 // AgentBinaryBootstrapFunc is the function that is used to populate the tools.
 type AgentBinaryBootstrapFunc func(context.Context, string, BinaryAgentStorageService, objectstore.ObjectStore, Logger) (func(), error)
 
-// ManifoldConfig defines the configuration for the trace manifold.
+// ManifoldConfig defines the configuration for the bootstrap manifold.
 type ManifoldConfig struct {
 	AgentName          string
 	StateName          string
 	ObjectStoreName    string
 	BootstrapGateName  string
 	ServiceFactoryName string
+	EnvironName        string
 
 	Logger              Logger
 	AgentBinaryUploader AgentBinaryBootstrapFunc
@@ -78,6 +80,9 @@ func (cfg ManifoldConfig) Validate() error {
 	if cfg.ServiceFactoryName == "" {
 		return errors.NotValidf("empty ServiceFactoryName")
 	}
+	if cfg.EnvironName == "" {
+		return errors.NotValidf("empty EnvironName")
+	}
 	if cfg.Logger == nil {
 		return errors.NotValidf("nil Logger")
 	}
@@ -99,6 +104,7 @@ func Manifold(config ManifoldConfig) dependency.Manifold {
 			config.ObjectStoreName,
 			config.BootstrapGateName,
 			config.ServiceFactoryName,
+			config.EnvironName,
 		},
 		Start: func(ctx dependency.Context) (worker.Worker, error) {
 			if err := config.Validate(); err != nil {
@@ -117,6 +123,16 @@ func Manifold(config ManifoldConfig) dependency.Manifold {
 
 			var controllerServiceFactory servicefactory.ControllerServiceFactory
 			if err := ctx.Get(config.ServiceFactoryName, &controllerServiceFactory); err != nil {
+				return nil, errors.Trace(err)
+			}
+
+			var modelServiceFactory servicefactory.ModelServiceFactory
+			if err := ctx.Get(config.ServiceFactoryName, &modelServiceFactory); err != nil {
+				return nil, errors.Trace(err)
+			}
+
+			var environ environs.Environ
+			if err := ctx.Get(config.EnvironName, &environ); err != nil {
 				return nil, errors.Trace(err)
 			}
 
@@ -158,11 +174,13 @@ func Manifold(config ManifoldConfig) dependency.Manifold {
 				Agent:                   a,
 				ObjectStoreGetter:       objectStoreGetter,
 				ControllerConfigService: controllerServiceFactory.ControllerConfig(),
+				SpaceService:            modelServiceFactory.Space(),
 				FlagService:             flagService,
 				State:                   systemState,
 				BootstrapUnlocker:       bootstrapUnlocker,
 				AgentBinaryUploader:     config.AgentBinaryUploader,
 				Logger:                  config.Logger,
+				Environ:                 environ,
 			})
 			if err != nil {
 				_ = stTracker.Done()

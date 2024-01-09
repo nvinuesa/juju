@@ -7,14 +7,20 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/juju/collections/set"
 	"github.com/juju/errors"
 	"gopkg.in/tomb.v2"
 
 	"github.com/juju/juju/agent"
 	"github.com/juju/juju/controller"
 	"github.com/juju/juju/core/flags"
+	"github.com/juju/juju/core/network"
 	"github.com/juju/juju/core/objectstore"
+	"github.com/juju/juju/environs"
+	"github.com/juju/juju/environs/envcontext"
+	"github.com/juju/juju/environs/space"
 	"github.com/juju/juju/internal/worker/gate"
+	"github.com/juju/juju/state"
 	"github.com/juju/juju/state/binarystorage"
 )
 
@@ -28,6 +34,15 @@ const (
 // controller configuration.
 type ControllerConfigService interface {
 	ControllerConfig(context.Context) (controller.Config, error)
+}
+
+// SpaceService is the interface that is used to manage network spaces.
+type SpaceService interface {
+	AddSpace(ctx context.Context, name string, providerID network.Id, subnetIDs []string) (network.Id, error)
+	Space(ctx context.Context, uuid string) (*network.SpaceInfo, error)
+	GetAllSpaces(ctx context.Context) (network.SpaceInfos, error)
+	SaveProviderSubnets(ctx context.Context, subnets []network.SubnetInfo, spaceUUID network.Id, fans network.FanConfig) error
+	Remove(ctx context.Context, uuid string) error
 }
 
 // FlagService is the interface that is used to set the value of a
@@ -55,6 +70,15 @@ type LegacyState interface {
 	// ToolsStorage returns a new binarystorage.StorageCloser that stores tools
 	// metadata in the "juju" database "toolsmetadata" collection.
 	ToolsStorage(store objectstore.ObjectStore) (binarystorage.StorageCloser, error)
+	// AllEndpointBindingsSpaceNames returns a set of spaces names for all the
+	// endpoint bindings.
+	AllEndpointBindingsSpaceNames() (set.Strings, error)
+	// ConstraintsBySpaceName returns all Constraints that include a positive
+	// or negative space constraint for the input space name.
+	ConstraintsBySpaceName(spaceName string) ([]*state.Constraints, error)
+	// DefaultEndpointBindingSpace returns the current space ID to be used for
+	// the default endpoint binding.
+	DefaultEndpointBindingSpace() (string, error)
 }
 
 // WorkerConfig encapsulates the configuration options for the
@@ -63,9 +87,11 @@ type WorkerConfig struct {
 	Agent                   agent.Agent
 	ObjectStoreGetter       ObjectStoreGetter
 	ControllerConfigService ControllerConfigService
+	SpaceService            SpaceService
 	FlagService             FlagService
 	BootstrapUnlocker       gate.Unlocker
 	AgentBinaryUploader     AgentBinaryBootstrapFunc
+	Environ                 environs.BootstrapEnviron
 
 	// Deprecated: This is only here, until we can remove the state layer.
 	State LegacyState
@@ -152,6 +178,18 @@ func (w *bootstrapWorker) loop() error {
 	cleanup, err := w.seedAgentBinary(ctx, dataDir)
 	if err != nil {
 		return errors.Trace(err)
+	}
+
+	// Fetch spaces from substrate.
+	// We need to do this before setting the API host-ports,
+	// because any space names in the bootstrap machine addresses must be
+	// reconcilable with space IDs at that point.
+	allCtx := envcontext.WithoutCredentialInvalidator(ctx)
+	if err := space.ReloadSpaces(allCtx, w.cfg.State, w.cfg.SpaceService, w.cfg.Environ); err != nil {
+		if !errors.Is(err, errors.NotSupported) {
+			return errors.Trace(err)
+		}
+		w.cfg.Logger.Debugf("Not performing spaces load on a non-networking environment")
 	}
 
 	// Set the bootstrap flag, to indicate that the bootstrap has completed.

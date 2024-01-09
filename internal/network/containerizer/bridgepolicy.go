@@ -280,7 +280,7 @@ func linkLayerDevicesForSpaces(host Machine, spaces corenetwork.SpaceInfos) (map
 				return nil, errors.Trace(err)
 			}
 		} else {
-			spaceID = subnet.SpaceID()
+			spaceID = subnet.SpaceID
 		}
 		spaceToDevices = includeDevice(spaceToDevices, spaceID, device)
 	}

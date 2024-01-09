@@ -134,7 +134,7 @@ func (m *MachineShim) Raw() *state.Machine {
 
 // Address is an indirection for state.Address.
 type Address interface {
-	Subnet() (Subnet, error)
+	Subnet() (*network.SubnetInfo, error)
 	DeviceName() string
 }
 
@@ -148,7 +148,7 @@ func NewAddress(a *state.Address) Address {
 	return &addressShim{Address: a}
 }
 
-func (a *addressShim) Subnet() (Subnet, error) {
+func (a *addressShim) Subnet() (*network.SubnetInfo, error) {
 	return a.Address.Subnet()
 }
 

@@ -668,6 +668,9 @@ func (a *MachineAgent) makeEngineCreator(
 			SetupLogging:            agentconf.SetupAgentLogging,
 			DependencyEngineMetrics: metrics,
 			CharmhubHTTPClient:      charmhubHTTPClient,
+			NewEnvironFunc:          newEnvirons,
+			LoggingContext:          loggingContext,
+			RunFlagDuration:         time.Minute,
 		}
 		manifolds := iaasMachineManifolds(manifoldsCfg)
 		if a.isCaasAgent {

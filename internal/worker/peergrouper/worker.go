@@ -4,6 +4,7 @@
 package peergrouper
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"reflect"
@@ -40,7 +41,6 @@ type State interface {
 	WatchControllerInfo() state.StringsWatcher
 	WatchControllerStatusChanges() state.StringsWatcher
 	WatchControllerConfig() state.NotifyWatcher
-	Space(name string) (Space, error)
 }
 
 type ControllerNode interface {
@@ -110,6 +110,11 @@ type Hub interface {
 	Publish(topic string, data interface{}) (func(), error)
 }
 
+// SpaceGetter defines the methods needed to retrieve a space.
+type SpaceGetter interface {
+	Space(context.Context, string) (*network.SpaceInfo, error)
+}
+
 // pgWorker is a worker which watches the controller nodes in state
 // as well as the MongoDB replicaset configuration, adding and
 // removing controller nodes as they change or are added and
@@ -143,6 +148,7 @@ type pgWorker struct {
 // Config holds the configuration for a peergrouper worker.
 type Config struct {
 	State              State
+	SpaceGetter        SpaceGetter
 	APIHostPortsSetter APIHostPortsSetter
 	MongoSession       MongoSession
 	Clock              clock.Clock
@@ -174,6 +180,9 @@ type Config struct {
 func (config Config) Validate() error {
 	if config.State == nil {
 		return errors.NotValidf("nil State")
+	}
+	if config.SpaceGetter == nil {
+		return errors.NotValidf("nil SpaceGetter")
 	}
 	if config.APIHostPortsSetter == nil {
 		return errors.NotValidf("nil APIHostPortsSetter")
@@ -771,26 +780,22 @@ func (w *pgWorker) peerGroupInfo() (*peerGroupInfo, error) {
 	if logger.IsTraceEnabled() {
 		logger.Tracef("read peer group info: %# v\n%# v", pretty.Formatter(sts), pretty.Formatter(members))
 	}
-	return newPeerGroupInfo(w.controllerTrackers, sts.Members, members, w.config.MongoPort, haSpace)
+	return newPeerGroupInfo(w.controllerTrackers, sts.Members, members, w.config.MongoPort, *haSpace)
 }
 
 // getHASpaceFromConfig returns a space based on the controller's
 // configuration for the HA space.
-func (w *pgWorker) getHASpaceFromConfig() (network.SpaceInfo, error) {
+func (w *pgWorker) getHASpaceFromConfig() (*network.SpaceInfo, error) {
 	config, err := w.config.State.ControllerConfig()
 	if err != nil {
-		return network.SpaceInfo{}, errors.Trace(err)
+		return nil, errors.Trace(err)
 	}
 
 	jujuHASpace := config.JujuHASpace()
 	if jujuHASpace == "" {
-		return network.SpaceInfo{}, nil
+		return nil, nil
 	}
-	space, err := w.config.State.Space(jujuHASpace)
-	if err != nil {
-		return network.SpaceInfo{}, errors.Trace(err)
-	}
-	return space.NetworkSpace()
+	return w.config.SpaceGetter.Space(w.catacomb.Context(context.Background()), jujuHASpace)
 }
 
 // setHasVote sets the HasVote status of all the given nodes to hasVote.

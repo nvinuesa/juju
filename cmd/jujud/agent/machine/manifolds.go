@@ -33,6 +33,7 @@ import (
 	"github.com/juju/juju/core/paths"
 	"github.com/juju/juju/core/presence"
 	coretrace "github.com/juju/juju/core/trace"
+	"github.com/juju/juju/environs"
 	containerbroker "github.com/juju/juju/internal/container/broker"
 	"github.com/juju/juju/internal/container/lxd"
 	internalobjectstore "github.com/juju/juju/internal/objectstore"
@@ -64,6 +65,7 @@ import (
 	"github.com/juju/juju/internal/worker/dbaccessor"
 	"github.com/juju/juju/internal/worker/deployer"
 	"github.com/juju/juju/internal/worker/diskmanager"
+	"github.com/juju/juju/internal/worker/environ"
 	"github.com/juju/juju/internal/worker/externalcontrollerupdater"
 	"github.com/juju/juju/internal/worker/fanconfigurer"
 	"github.com/juju/juju/internal/worker/filenotifywatcher"
@@ -275,6 +277,21 @@ type ManifoldsConfig struct {
 
 	// CharmhubHTTPClient is the HTTP client used for Charmhub API requests.
 	CharmhubHTTPClient HTTPClient
+
+	// NewEnvironFunc is a function opens a provider "environment"
+	// (typically environs.New).
+	NewEnvironFunc environs.NewEnvironFunc
+
+	// LoggingContext holds the model writers so that the loggers
+	// for the workers running on behalf of other models get their logs
+	// written into the model's logging collection rather than the controller's.
+	LoggingContext *loggo.Context
+
+	// RunFlagDuration defines for how long this controller will ask
+	// for model administration rights; most of the workers controlled
+	// by this agent will only be started when the run flag is known
+	// to be held.
+	RunFlagDuration time.Duration
 }
 
 type HTTPClient interface {
@@ -322,6 +339,17 @@ func commonManifolds(config ManifoldsConfig) dependency.Manifolds {
 	controllerTag := agentConfig.Controller()
 
 	manifolds := dependency.Manifolds{
+		isResponsibleFlagName: singular.Manifold(singular.ManifoldConfig{
+			Clock:         config.Clock,
+			APICallerName: apiCallerName,
+			Duration:      config.RunFlagDuration,
+			Claimant:      agentTag,
+			Entity:        agentTag,
+
+			NewFacade: singular.NewFacade,
+			NewWorker: singular.NewWorker,
+			// No Logger defined in singular package.
+		}),
 		// The agent manifold references the enclosing agent, and is the
 		// foundation stone on which most other manifolds ultimately depend.
 		agentName: agent.Manifold(config.Agent),
@@ -691,6 +719,7 @@ func commonManifolds(config ManifoldsConfig) dependency.Manifolds {
 			Hub:                  config.CentralHub,
 			PrometheusRegisterer: config.PrometheusRegisterer,
 			NewWorker:            peergrouper.New,
+			NewSpaceGetter:       peergrouper.NewSpaceGetter,
 		})),
 
 		serviceFactoryName: workersf.Manifold(workersf.ManifoldConfig{
@@ -836,10 +865,16 @@ func commonManifolds(config ManifoldsConfig) dependency.Manifolds {
 // various responsibilities of a IAAS machine agent.
 func IAASManifolds(config ManifoldsConfig) dependency.Manifolds {
 	manifolds := dependency.Manifolds{
+		environTrackerName: ifCredentialValid(ifResponsible(environ.Manifold(environ.ManifoldConfig{
+			APICallerName:  apiCallerName,
+			NewEnvironFunc: config.NewEnvironFunc,
+			Logger:         config.LoggingContext.GetLogger("juju.worker.environ"),
+		}))),
 		// Bootstrap worker is responsible for setting up the initial machine.
 		bootstrapName: ifDatabaseUpgradeComplete(bootstrap.Manifold(bootstrap.ManifoldConfig{
 			AgentName:           agentName,
 			StateName:           stateName,
+			EnvironName:         environTrackerName,
 			ObjectStoreName:     objectStoreName,
 			ServiceFactoryName:  serviceFactoryName,
 			BootstrapGateName:   isBootstrapGateName,
@@ -1184,6 +1219,14 @@ var ifDatabaseUpgradeComplete = engine.Housing{
 	},
 }.Decorate
 
+// ifResponsible wraps a manifold such that it only runs if the
+// responsibility flag is set.
+var ifResponsible = engine.Housing{
+	Flags: []string{
+		isResponsibleFlagName,
+	},
+}.Decorate
+
 const (
 	agentName              = "agent"
 	agentConfigUpdaterName = "agent-config-updater"
@@ -1278,4 +1321,7 @@ const (
 	charmhubHTTPClientName = "charmhub-http-client"
 
 	controlSocketName = "control-socket"
+
+	environTrackerName    = "environ-tracker"
+	isResponsibleFlagName = "is-responsible-flag"
 )
