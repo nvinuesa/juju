@@ -38,7 +38,7 @@ type EnvironSpaces interface {
 	// ReloadSpaces loads spaces and subnets from provider specified by environ
 	// into state.
 	// Currently it's an append-only operation, no spaces/subnets are deleted.
-	ReloadSpaces(envcontext.ProviderCallContext, ReloadSpacesState, environs.BootstrapEnviron) error
+	ReloadSpaces(envcontext.ProviderCallContext, ReloadSpacesState, space.SpaceService, environs.BootstrapEnviron) error
 }
 
 // ReloadSpacesAPI provides the reload spaces API facade for version.
@@ -48,14 +48,17 @@ type ReloadSpacesAPI struct {
 	spaces                      EnvironSpaces
 	credentialInvalidatorGetter envcontext.ModelCredentialInvalidatorGetter
 	authorize                   ReloadSpacesAuthorizer
+	spaceService                common.SpaceService
 }
 
 // NewReloadSpacesAPI creates a new ReloadSpacesAPI.
-func NewReloadSpacesAPI(state ReloadSpacesState,
+func NewReloadSpacesAPI(
+	state ReloadSpacesState,
 	environs ReloadSpacesEnviron,
 	spaces EnvironSpaces,
 	credentialInvalidatorGetter envcontext.ModelCredentialInvalidatorGetter,
 	authorizer ReloadSpacesAuthorizer,
+	spaceService common.SpaceService,
 ) *ReloadSpacesAPI {
 	return &ReloadSpacesAPI{
 		state:                       state,
@@ -63,6 +66,7 @@ func NewReloadSpacesAPI(state ReloadSpacesState,
 		spaces:                      spaces,
 		credentialInvalidatorGetter: credentialInvalidatorGetter,
 		authorize:                   authorizer,
+		spaceService:                spaceService,
 	}
 }
 
@@ -80,7 +84,7 @@ func (api *ReloadSpacesAPI) ReloadSpaces(ctx stdcontext.Context) error {
 		return errors.Trace(err)
 	}
 	callCtx := envcontext.WithCredentialInvalidator(ctx, invalidatorFunc)
-	return errors.Trace(api.spaces.ReloadSpaces(callCtx, api.state, env))
+	return errors.Trace(api.spaces.ReloadSpaces(callCtx, api.state, api.spaceService, env))
 }
 
 // ReloadSpacesAuthorizer represents a way to authorize reload spaces.
@@ -145,6 +149,11 @@ type EnvironSpacesAdaptor struct{}
 // ReloadSpaces loads spaces and subnets from provider specified by environ
 // into state.
 // Currently it's an append-only operation, no spaces/subnets are deleted.
-func (EnvironSpacesAdaptor) ReloadSpaces(ctx envcontext.ProviderCallContext, st ReloadSpacesState, env environs.BootstrapEnviron) error {
-	return space.ReloadSpaces(ctx, st, env)
+func (EnvironSpacesAdaptor) ReloadSpaces(
+	ctx envcontext.ProviderCallContext,
+	st ReloadSpacesState,
+	spaceService space.SpaceService,
+	env environs.BootstrapEnviron,
+) error {
+	return space.ReloadSpaces(ctx, st, spaceService, env)
 }

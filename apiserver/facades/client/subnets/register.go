@@ -16,13 +16,13 @@ import (
 // Register is called to expose a package of facades onto a given registry.
 func Register(registry facade.FacadeRegistry) {
 	registry.MustRegister("Subnets", 5, func(stdCtx context.Context, ctx facade.Context) (facade.Facade, error) {
-		return newAPI(ctx) // Removes AddSubnets.
+		return newAPI(stdCtx, ctx) // Removes AddSubnets.
 	}, reflect.TypeOf((*API)(nil)))
 }
 
 // newAPI creates a new Subnets API server-side facade with a
 // state.State backing.
-func newAPI(ctx facade.Context) (*API, error) {
+func newAPI(stdCtx context.Context, ctx facade.Context) (*API, error) {
 	st := ctx.State()
 	stateShim, err := NewStateShim(st, ctx.ServiceFactory().Cloud(), ctx.ServiceFactory().Credential())
 	if err != nil {
@@ -30,7 +30,12 @@ func newAPI(ctx facade.Context) (*API, error) {
 	}
 
 	return newAPIWithBacking(
+		stdCtx,
 		stateShim,
 		credentialcommon.CredentialInvalidatorGetter(ctx),
-		ctx.Resources(), ctx.Auth(), ctx.Logger().Child("subnets"))
+		ctx.Resources(),
+		ctx.Auth(),
+		ctx.Logger().Child("subnets"),
+		ctx.ServiceFactory().Subnet(),
+	)
 }

@@ -24,7 +24,7 @@ func NewSubnetService(st SubnetState) *SubnetService {
 	}
 }
 
-// AddSubnet creates and returns a new subnet.
+// AddSubnet creates a subnet and returns its ID.
 func (s *SubnetService) AddSubnet(ctx context.Context, args network.SubnetInfo) (network.Id, error) {
 	if args.ID == "" {
 		uuid, err := utils.NewUUID()
@@ -52,6 +52,12 @@ func (s *SubnetService) Subnet(ctx context.Context, uuid string) (*network.Subne
 func (s *SubnetService) SubnetsByCIDR(ctx context.Context, cidrs ...string) ([]network.SubnetInfo, error) {
 	subnets, err := s.st.GetSubnetsByCIDR(ctx, cidrs...)
 	return subnets, errors.Trace(err)
+}
+
+// GetAllSubnets returns all subnets.
+func (s *SubnetService) GetAllSubnets(ctx context.Context) (network.SubnetInfos, error) {
+	subnet, err := s.st.GetAllSubnets(ctx)
+	return subnet, errors.Trace(err)
 }
 
 // UpdateSubnet updates the spaceUUID of the subnet identified by the input

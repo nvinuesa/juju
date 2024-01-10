@@ -15,6 +15,7 @@ import (
 	"github.com/juju/names/v5"
 
 	"github.com/juju/juju/apiserver/authentication"
+	"github.com/juju/juju/apiserver/common"
 	"github.com/juju/juju/apiserver/common/crossmodel"
 	"github.com/juju/juju/apiserver/facade"
 	jujucrossmodel "github.com/juju/juju/core/crossmodel"
@@ -32,6 +33,7 @@ type BaseAPI struct {
 	GetApplicationOffers        func(interface{}) jujucrossmodel.ApplicationOffers
 	ControllerModel             Backend
 	StatePool                   StatePool
+	SpaceService                common.SpaceService
 	getEnviron                  environFromModelFunc
 	getControllerInfo           func(context.Context) (apiAddrs []string, caCert string, _ error)
 	credentialInvalidatorGetter envcontext.ModelCredentialInvalidatorGetter
@@ -570,15 +572,10 @@ func (api *BaseAPI) collectRemoteSpaces(ctx context.Context, backend Backend, sp
 	for _, name := range spaceNames {
 		space := environs.DefaultSpaceInfo
 		if name != "" {
-			dbSpace, err := backend.SpaceByName(name)
+			space, err = api.SpaceService.SpaceByName(ctx, name)
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
-			dbSpaceInfo, err := dbSpace.NetworkSpace()
-			if err != nil {
-				return nil, errors.Trace(err)
-			}
-			space = &dbSpaceInfo
 		}
 		providerSpace, err := netEnv.ProviderSpaceInfo(callCtx, space)
 		if err != nil && !errors.Is(err, errors.NotFound) {

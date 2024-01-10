@@ -27,14 +27,22 @@ import (
 var logger = loggo.GetLogger("juju.apiserver.common.networkingcommon")
 
 type NetworkConfigAPI struct {
-	st           LinkLayerAndSubnetsState
-	getCanModify common.GetAuthFunc
-	getModelOp   func(LinkLayerMachine, network.InterfaceInfos) state.ModelOperation
+	ctx           context.Context
+	st            LinkLayerAndSubnetsState
+	subnetService common.SubnetService
+	getCanModify  common.GetAuthFunc
+	getModelOp    func(LinkLayerMachine, network.InterfaceInfos) state.ModelOperation
 }
 
 // NewNetworkConfigAPI constructs a new common network configuration API
 // and returns its reference.
-func NewNetworkConfigAPI(ctx context.Context, st *state.State, cloudService common.CloudService, getCanModify common.GetAuthFunc) (*NetworkConfigAPI, error) {
+func NewNetworkConfigAPI(
+	ctx context.Context,
+	st *state.State,
+	cloudService common.CloudService,
+	subnetService common.SubnetService,
+	getCanModify common.GetAuthFunc,
+) (*NetworkConfigAPI, error) {
 	// TODO (manadart 2020-08-11): This is a second access of the model when
 	// being instantiated by the provisioner API.
 	// We should ameliorate repeat model access at some point,
@@ -52,13 +60,15 @@ func NewNetworkConfigAPI(ctx context.Context, st *state.State, cloudService comm
 	getModelOp := func(machine LinkLayerMachine, incoming network.InterfaceInfos) state.ModelOperation {
 		// We discover subnets via reported link-layer devices for the
 		// manual provider, which allows us to use spaces there.
-		return newUpdateMachineLinkLayerOp(machine, incoming, strings.EqualFold(cloud.Type, "manual"), st)
+		return newUpdateMachineLinkLayerOp(ctx, machine, incoming, strings.EqualFold(cloud.Type, "manual"), subnetService)
 	}
 
 	return &NetworkConfigAPI{
-		st:           &linkLayerState{st},
-		getCanModify: getCanModify,
-		getModelOp:   getModelOp,
+		ctx:           ctx,
+		st:            &linkLayerState{st},
+		subnetService: subnetService,
+		getCanModify:  getCanModify,
+		getModelOp:    getModelOp,
 	}, nil
 }
 
@@ -99,7 +109,7 @@ func (api *NetworkConfigAPI) SetObservedNetworkConfig(ctx context.Context, args 
 // See core/network/fan.go for more detail on how Fan overlays are divided
 // into segments.
 func (api *NetworkConfigAPI) fixUpFanSubnets(networkConfig []params.NetworkConfig) ([]params.NetworkConfig, error) {
-	subnets, err := api.st.AllSubnetInfos()
+	subnets, err := api.subnetService.GetAllSubnets(api.ctx)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -168,6 +178,8 @@ func (api *NetworkConfigAPI) getMachine(tag names.MachineTag) (LinkLayerMachine,
 // agent-sourced network configuration with existing data for a single
 // machine/host/container.
 type updateMachineLinkLayerOp struct {
+	ctx context.Context
+
 	*MachineLinkLayerOp
 
 	// removalCandidates are devices that exist in state, but since have not
@@ -184,18 +196,23 @@ type updateMachineLinkLayerOp struct {
 	// updated link-layer devices to the state subnets collection.
 	discoverSubnets bool
 
-	// st is the state indirection required to persist discovered subnets.
-	st AddSubnetsState
+	// subnetService is the state indirection required to persist discovered subnets.
+	subnetService common.SubnetService
 }
 
 func newUpdateMachineLinkLayerOp(
-	machine LinkLayerMachine, incoming network.InterfaceInfos, discoverSubnets bool, st AddSubnetsState,
+	ctx context.Context,
+	machine LinkLayerMachine,
+	incoming network.InterfaceInfos,
+	discoverSubnets bool,
+	subnetService common.SubnetService,
 ) *updateMachineLinkLayerOp {
 	return &updateMachineLinkLayerOp{
+		ctx:                   ctx,
 		MachineLinkLayerOp:    NewMachineLinkLayerOp("agent", machine, incoming),
 		observedParentDevices: set.NewStrings(),
 		discoverSubnets:       discoverSubnets,
-		st:                    st,
+		subnetService:         subnetService,
 	}
 }
 
@@ -386,11 +403,9 @@ func (o *updateMachineLinkLayerOp) processNewDevices() ([]txn.Op, error) {
 		// Since this is a new device, ensure that we have
 		// discovered all the subnets it is connected to.
 		if o.discoverSubnets {
-			subNetOps, err := o.processSubnets(dev.InterfaceName)
-			if err != nil {
+			if err := o.processSubnets(dev.InterfaceName); err != nil {
 				return nil, errors.Trace(err)
 			}
-			ops = append(ops, subNetOps...)
 		}
 
 		o.MarkDevProcessed(dev.InterfaceName)
@@ -401,7 +416,7 @@ func (o *updateMachineLinkLayerOp) processNewDevices() ([]txn.Op, error) {
 // processSubnets takes an incoming NIC hardware address and ensures that the
 // subnets of addresses on the device are present in state.
 // Loopback subnets are ignored.
-func (o *updateMachineLinkLayerOp) processSubnets(name string) ([]txn.Op, error) {
+func (o *updateMachineLinkLayerOp) processSubnets(name string) error {
 	// Accrue all incoming CIDRs matching the input device.
 	cidrSet := set.NewStrings()
 	var isVLAN bool
@@ -422,18 +437,15 @@ func (o *updateMachineLinkLayerOp) processSubnets(name string) ([]txn.Op, error)
 		logger.Warningf("ignoring VLAN tag for incoming device subnets: %v", cidrs)
 	}
 
-	var ops []txn.Op
 	for _, cidr := range cidrs {
-		addOps, err := o.st.AddSubnetOps(network.SubnetInfo{CIDR: cidr})
-		if err != nil {
+		if _, err := o.subnetService.AddSubnet(o.ctx, network.SubnetInfo{CIDR: cidr}); err != nil {
 			if errors.Is(err, errors.AlreadyExists) {
 				continue
 			}
-			return nil, errors.Trace(err)
+			return errors.Trace(err)
 		}
-		ops = append(ops, addOps...)
 	}
-	return ops, nil
+	return nil
 }
 
 // processRemovalCandidates returns transaction operations for

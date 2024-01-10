@@ -121,22 +121,22 @@ type NetworkBacking interface {
 
 // BackingSubnetToParamsSubnetV2 converts a network backing subnet to the new
 // version of the subnet API parameter.
-func BackingSubnetToParamsSubnetV2(subnet BackingSubnet) params.SubnetV2 {
+func BackingSubnetToParamsSubnetV2(subnet network.SubnetInfo) params.SubnetV2 {
 	return params.SubnetV2{
-		ID:     subnet.ID(),
+		ID:     subnet.ID.String(),
 		Subnet: BackingSubnetToParamsSubnet(subnet),
 	}
 }
 
-func BackingSubnetToParamsSubnet(subnet BackingSubnet) params.Subnet {
+func BackingSubnetToParamsSubnet(subnet network.SubnetInfo) params.Subnet {
 	return params.Subnet{
-		CIDR:              subnet.CIDR(),
-		VLANTag:           subnet.VLANTag(),
-		ProviderId:        subnet.ProviderId().String(),
-		ProviderNetworkId: subnet.ProviderNetworkId().String(),
-		Zones:             subnet.AvailabilityZones(),
-		SpaceTag:          names.NewSpaceTag(subnet.SpaceName()).String(),
-		Life:              subnet.Life().Value(),
+		CIDR:              subnet.CIDR,
+		VLANTag:           subnet.VLANTag,
+		ProviderId:        subnet.ProviderId.String(),
+		ProviderNetworkId: subnet.ProviderNetworkId.String(),
+		Zones:             subnet.AvailabilityZones,
+		SpaceTag:          names.NewSpaceTag(subnet.SpaceName).String(),
+		Life:              subnet.Life,
 	}
 }
 

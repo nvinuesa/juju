@@ -43,7 +43,6 @@ type Backend interface {
 	AllIPAddresses() ([]*state.Address, error)
 	AllLinkLayerDevices() ([]*state.LinkLayerDevice, error)
 	AllRelations() ([]*state.Relation, error)
-	AllSubnets() ([]*state.Subnet, error)
 	Annotations(state.GlobalEntity) (map[string]string, error)
 	APIHostPortsForClients(controller.Config) ([]network.SpaceHostPorts, error)
 	Application(string) (Application, error)

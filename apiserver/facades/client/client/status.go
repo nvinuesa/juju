@@ -280,7 +280,7 @@ func (c *Client) FullStatus(ctx context.Context, args params.StatusParams) (para
 	}
 	// These may be empty when machines have not finished deployment.
 	if context.ipAddresses, context.spaces, context.linkLayerDevices, err =
-		fetchNetworkInterfaces(c.api.stateAccessor, context.spaceInfos); err != nil {
+		fetchNetworkInterfaces(ctx, c.api.stateAccessor, c.api.subnetService, context.spaceInfos); err != nil {
 		return noStatus, errors.Annotate(err, "could not fetch IP addresses and link layer devices")
 	}
 	if context.relations, context.relationsById, err = fetchRelations(c.api.stateAccessor); err != nil {
@@ -808,17 +808,17 @@ func fetchControllerNodes(st Backend) (map[string]state.ControllerNode, error) {
 //
 // All are required to determine a machine's network interfaces configuration,
 // so we want all or none.
-func fetchNetworkInterfaces(st Backend, spaceInfos network.SpaceInfos) (map[string][]*state.Address,
+func fetchNetworkInterfaces(ctx context.Context, st Backend, subnetService common.SubnetService, spaceInfos network.SpaceInfos) (map[string][]*state.Address,
 	map[string]map[string]set.Strings, map[string][]*state.LinkLayerDevice, error) {
 	ipAddresses := make(map[string][]*state.Address)
 	spacesPerMachine := make(map[string]map[string]set.Strings)
-	subnets, err := st.AllSubnets()
+	subnets, err := subnetService.GetAllSubnets(ctx)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	subnetsByCIDR := make(map[string]*state.Subnet)
+	subnetsByCIDR := make(map[string]network.SubnetInfo)
 	for _, subnet := range subnets {
-		subnetsByCIDR[subnet.CIDR()] = subnet
+		subnetsByCIDR[subnet.CIDR] = subnet
 	}
 
 	// For every machine, track what devices have addresses so we can filter linklayerdevices later
@@ -835,7 +835,7 @@ func fetchNetworkInterfaces(st Backend, spaceInfos network.SpaceInfos) (map[stri
 		ipAddresses[machineID] = append(ipAddresses[machineID], ipAddr)
 		if subnet, ok := subnetsByCIDR[ipAddr.SubnetCIDR()]; ok {
 			spaceName := network.AlphaSpaceName
-			spaceInfo := spaceInfos.GetByID(subnet.SpaceID())
+			spaceInfo := spaceInfos.GetByID(subnet.SpaceID)
 			if spaceInfo != nil {
 				spaceName = string(spaceInfo.Name)
 			}

@@ -4,6 +4,7 @@
 package spaces
 
 import (
+	"context"
 	stdcontext "context"
 	"fmt"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/juju/loggo"
 	"github.com/juju/names/v5"
 
+	"github.com/juju/juju/apiserver/common"
 	"github.com/juju/juju/apiserver/common/networkingcommon"
 	apiservererrors "github.com/juju/juju/apiserver/errors"
 	"github.com/juju/juju/apiserver/facade"
@@ -31,9 +33,11 @@ type API struct {
 	auth                        facade.Authorizer
 	credentialInvalidatorGetter envcontext.ModelCredentialInvalidatorGetter
 
-	check     BlockChecker
-	opFactory OpFactory
-	logger    loggo.Logger
+	check         BlockChecker
+	opFactory     OpFactory
+	logger        loggo.Logger
+	spaceService  common.SpaceService
+	subnetService common.SubnetService
 }
 
 type apiConfig struct {
@@ -45,6 +49,7 @@ type apiConfig struct {
 	Authorizer                  facade.Authorizer
 	Factory                     OpFactory
 	logger                      loggo.Logger
+	spaceService                common.SpaceService
 }
 
 // newAPIWithBacking creates a new server-side Spaces API facade with
@@ -64,6 +69,7 @@ func newAPIWithBacking(cfg apiConfig) (*API, error) {
 		check:                       cfg.Check,
 		opFactory:                   cfg.Factory,
 		logger:                      cfg.logger,
+		spaceService:                cfg.spaceService,
 	}, nil
 }
 
@@ -84,7 +90,7 @@ func (api *API) CreateSpaces(ctx stdcontext.Context, args params.CreateSpacesPar
 	results.Results = make([]params.ErrorResult, len(args.Spaces))
 
 	for i, space := range args.Spaces {
-		err := api.createOneSpace(space)
+		err := api.createOneSpace(ctx, space)
 		if err == nil {
 			continue
 		}
@@ -96,7 +102,7 @@ func (api *API) CreateSpaces(ctx stdcontext.Context, args params.CreateSpacesPar
 
 // createOneSpace creates one new Juju network space, associating the
 // specified subnets with it (optional; can be empty).
-func (api *API) createOneSpace(args params.CreateSpaceParams) error {
+func (api *API) createOneSpace(ctx context.Context, args params.CreateSpaceParams) error {
 	// Validate the args, assemble information for api.backing.AddSpaces
 	spaceTag, err := names.ParseSpaceTag(args.SpaceTag)
 	if err != nil {
@@ -116,7 +122,7 @@ func (api *API) createOneSpace(args params.CreateSpaceParams) error {
 	}
 
 	// Add the validated space.
-	_, err = api.backing.AddSpace(spaceTag.Id(), network.Id(args.ProviderId), subnetIDs)
+	_, err = api.spaceService.AddSpace(ctx, spaceTag.Id(), network.Id(args.ProviderId), subnetIDs)
 	if err != nil {
 		return errors.Trace(err)
 	}

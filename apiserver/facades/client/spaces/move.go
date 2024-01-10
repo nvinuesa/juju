@@ -8,7 +8,6 @@ import (
 
 	"github.com/juju/collections/set"
 	"github.com/juju/errors"
-	"github.com/juju/mgo/v3/txn"
 	"github.com/juju/names/v5"
 
 	apiservererrors "github.com/juju/juju/apiserver/errors"
@@ -17,102 +16,9 @@ import (
 	"github.com/juju/juju/state"
 )
 
-// MovingSubnetBacking describes the state backing required to move a subnet
-type MovingSubnetBacking interface {
-	UpdateSubnetSpaceOps(string, string) []txn.Op
-}
-
-// MovingSubnet describes a subnet that is to be relocated to a new space.
-type MovingSubnet interface {
-	ID() string
-	CIDR() string
-	SpaceName() string
-	SpaceID() string
-	FanLocalUnderlay() string
-
-	Refresh() error
-}
-
-// MovedSubnet identifies a subnet and the space it was moved from.
-type MovedSubnet struct {
-	ID        string
-	FromSpace string
-	CIDR      string
-}
-
-// MoveSubnetsOp describes a model operation for moving subnets to a new space.
-type MoveSubnetsOp interface {
-	state.ModelOperation
-
-	// GetMovedSubnets returns the information for subnets that were
-	// successfully moved as a result of applying this operation.
-	GetMovedSubnets() []MovedSubnet
-}
-
-// moveSubnetsOp implements MoveSubnetsOp.
-// It is a model operation that updates the subnets collection to indicate
-// subnets moving from one space to another.
-type moveSubnetsOp struct {
-	backing MovingSubnetBacking
-	spaceID string
-	subnets []MovingSubnet
-	results []MovedSubnet
-}
-
-// NewMoveSubnetsOp returns an operation reference that can be
-// used to move the input subnets into the input space.
-func NewMoveSubnetsOp(
-	backing MovingSubnetBacking, spaceID string, subnets []MovingSubnet,
-) *moveSubnetsOp {
-	return &moveSubnetsOp{
-		backing: backing,
-		spaceID: spaceID,
-		subnets: subnets,
-	}
-}
-
-// Build (ModelOperation) returns a collection of transaction operations
-// that will modify state to indicate the movement of subnets.
-func (o *moveSubnetsOp) Build(attempt int) ([]txn.Op, error) {
-	if attempt > 0 {
-		for _, subnet := range o.subnets {
-			if err := subnet.Refresh(); err != nil {
-				return nil, errors.Trace(err)
-			}
-		}
-	}
-
-	var ops []txn.Op
-	for _, subnet := range o.subnets {
-		ops = append(ops, o.backing.UpdateSubnetSpaceOps(subnet.ID(), o.spaceID)...)
-	}
-	return ops, nil
-}
-
-// Done (ModelOperation) is called upon execution of the operations returned by
-// Build. It records the successfully moved subnets for later retrieval.
-func (o *moveSubnetsOp) Done(err error) error {
-	if err == nil {
-		o.results = make([]MovedSubnet, len(o.subnets))
-		for i, subnet := range o.subnets {
-			mc := MovedSubnet{
-				ID:        subnet.ID(),
-				FromSpace: subnet.SpaceName(),
-				CIDR:      subnet.CIDR(),
-			}
-			o.results[i] = mc
-		}
-	}
-	return err
-}
-
-// GetMovedSubnets (MoveSubnetsOp) returns the results of successfully
-// executed movement of subnets to a new space.
-func (o *moveSubnetsOp) GetMovedSubnets() []MovedSubnet {
-	return o.results
-}
-
 // MoveSubnets ensures that the input subnets are in the input space.
+// NOTE(nvinuesa): this method is not transactional, it applies each change
+// on each subnet independently.
 func (api *API) MoveSubnets(ctx context.Context, args params.MoveSubnetsParams) (params.MoveSubnetsResults, error) {
 	var result params.MoveSubnetsResults
 
@@ -121,6 +27,7 @@ func (api *API) MoveSubnets(ctx context.Context, args params.MoveSubnetsParams) 
 	}
 
 	results := make([]params.MoveSubnetsResult, len(args.Args))
+OUTER:
 	for i, toSpaceParams := range args.Args {
 		// Note that although spaces have an ID, a space tag represents
 		// a space *name*, which remains a unique identifier.
@@ -132,7 +39,7 @@ func (api *API) MoveSubnets(ctx context.Context, args params.MoveSubnetsParams) 
 		}
 		spaceName := spaceTag.Id()
 
-		subnets, err := api.getMovingSubnets(toSpaceParams.SubnetTags)
+		subnets, err := api.getMovingSubnets(ctx, toSpaceParams.SubnetTags)
 		if err != nil {
 			results[i].Error = apiservererrors.ServerError(errors.Trace(err))
 			continue
@@ -143,19 +50,22 @@ func (api *API) MoveSubnets(ctx context.Context, args params.MoveSubnetsParams) 
 			continue
 		}
 
-		operation, err := api.opFactory.NewMoveSubnetsOp(spaceName, subnets)
+		space, err := api.spaceService.SpaceByName(ctx, spaceName)
 		if err != nil {
 			results[i].Error = apiservererrors.ServerError(errors.Trace(err))
 			continue
 		}
 
-		if err = api.backing.ApplyOperation(operation); err != nil {
-			results[i].Error = apiservererrors.ServerError(errors.Trace(err))
-			continue
+		for _, subnet := range subnets {
+			err := api.subnetService.UpdateSubnet(ctx, subnet.ID.String(), space.ID)
+			if err != nil {
+				results[i].Error = apiservererrors.ServerError(errors.Trace(err))
+				continue OUTER
+			}
 		}
 
 		results[i].NewSpaceTag = spaceTag.String()
-		results[i].MovedSubnets = paramsFromMovedSubnet(operation.GetMovedSubnets())
+		results[i].MovedSubnets = paramsFromMovedSubnet(spaceName, subnets)
 	}
 
 	result.Results = results
@@ -164,18 +74,18 @@ func (api *API) MoveSubnets(ctx context.Context, args params.MoveSubnetsParams) 
 
 // getMovingSubnets acquires all the subnets that we have
 // been requested to relocate, identified by their tags.
-func (api *API) getMovingSubnets(tags []string) ([]MovingSubnet, error) {
-	subnets := make([]MovingSubnet, len(tags))
+func (api *API) getMovingSubnets(ctx context.Context, tags []string) ([]network.SubnetInfo, error) {
+	subnets := make([]network.SubnetInfo, len(tags))
 	for i, tag := range tags {
 		subTag, err := names.ParseSubnetTag(tag)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
-		subnet, err := api.backing.MovingSubnet(subTag.Id())
+		subnet, err := api.subnetService.Subnet(ctx, subTag.Id())
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
-		subnets[i] = subnet
+		subnets[i] = *subnet
 	}
 	return subnets, nil
 }
@@ -184,11 +94,11 @@ func (api *API) getMovingSubnets(tags []string) ([]MovingSubnet, error) {
 // determine the validity of constraints and endpoint bindings resulting from
 // a relocation of subnets.
 // An error is returned if validity is violated and force is passed as false.
-func (api *API) ensureSubnetsCanBeMoved(subnets []MovingSubnet, spaceName string, force bool) error {
+func (api *API) ensureSubnetsCanBeMoved(subnets []network.SubnetInfo, spaceName string, force bool) error {
 	for _, subnet := range subnets {
 		if subnet.FanLocalUnderlay() != "" {
 			return errors.Errorf("subnet %q is a fan overlay of %q and cannot be moved; move the underlay instead",
-				subnet.CIDR(), subnet.FanLocalUnderlay())
+				subnet.CIDR, subnet.FanLocalUnderlay())
 		}
 	}
 
@@ -207,10 +117,10 @@ func (api *API) ensureSubnetsCanBeMoved(subnets []MovingSubnet, spaceName string
 // getAffectedNetworks interrogates machines connected to moving subnets.
 // From these it generates lists of common unit/subnet-topologies,
 // grouped by application.
-func (api *API) getAffectedNetworks(subnets []MovingSubnet, spaceName string, force bool) (*affectedNetworks, error) {
+func (api *API) getAffectedNetworks(subnets []network.SubnetInfo, spaceName string, force bool) (*affectedNetworks, error) {
 	movingSubnetIDs := network.MakeIDSet()
 	for _, subnet := range subnets {
-		movingSubnetIDs.Add(network.Id(subnet.ID()))
+		movingSubnetIDs.Add(network.Id(subnet.ID))
 	}
 
 	allSpaces, err := api.backing.AllSpaceInfos()
@@ -278,12 +188,12 @@ func (api *API) ensureEndpointBindingsIntegrity(affected *affectedNetworks) erro
 	return errors.Trace(affected.ensureBindingsIntegrity(allBindings))
 }
 
-func paramsFromMovedSubnet(movedSubnets []MovedSubnet) []params.MovedSubnet {
+func paramsFromMovedSubnet(spaceName string, movedSubnets []network.SubnetInfo) []params.MovedSubnet {
 	results := make([]params.MovedSubnet, len(movedSubnets))
 	for i, v := range movedSubnets {
 		results[i] = params.MovedSubnet{
-			SubnetTag:   names.NewSubnetTag(v.ID).String(),
-			OldSpaceTag: names.NewSpaceTag(v.FromSpace).String(),
+			SubnetTag:   v.ID.String(),
+			OldSpaceTag: names.NewSpaceTag(spaceName).String(),
 			CIDR:        v.CIDR,
 		}
 	}

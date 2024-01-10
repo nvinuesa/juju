@@ -58,6 +58,7 @@ func newOffersAPI(facadeContext facade.Context) (*OffersAPI, error) {
 		getControllerInfo,
 		GetStateAccess(st),
 		GetStatePool(facadeContext.StatePool()),
+		serviceFactory.Space(),
 		facadeContext.Auth(),
 		authContext.(*commoncrossmodel.AuthContext),
 		credentialcommon.CredentialInvalidatorGetter(facadeContext),

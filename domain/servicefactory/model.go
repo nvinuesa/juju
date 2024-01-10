@@ -63,3 +63,10 @@ func (s *ModelFactory) Space() *networkservice.SpaceService {
 		s.logger.Child("network"),
 	)
 }
+
+// Subnet returns the subnet service.
+func (s *ModelFactory) Subnet() *networkservice.SubnetService {
+	return networkservice.NewSubnetService(
+		networkstate.NewState(changestream.NewTxnRunnerFactory(s.modelDB)),
+	)
+}

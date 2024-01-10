@@ -4,6 +4,7 @@
 package subnets
 
 import (
+	"context"
 	stdcontext "context"
 
 	"github.com/juju/collections/set"
@@ -11,6 +12,7 @@ import (
 	"github.com/juju/loggo"
 	"github.com/juju/names/v5"
 
+	"github.com/juju/juju/apiserver/common"
 	"github.com/juju/juju/apiserver/common/networkingcommon"
 	apiservererrors "github.com/juju/juju/apiserver/errors"
 	"github.com/juju/juju/apiserver/facade"
@@ -33,29 +35,19 @@ type Backing interface {
 	// zones with the given zones.
 	SetAvailabilityZones(network.AvailabilityZones) error
 
-	// AllSubnets returns all backing subnets.
-	AllSubnets() ([]networkingcommon.BackingSubnet, error)
-
-	// SubnetByCIDR returns a unique subnet based on the input CIDR.
-	SubnetByCIDR(cidr string) (networkingcommon.BackingSubnet, error)
-
-	// SubnetsByCIDR returns any subnets with the input CIDR.
-	SubnetsByCIDR(cidr string) ([]networkingcommon.BackingSubnet, error)
-
-	// AllSpaces returns all known Juju network spaces.
-	AllSpaces() ([]networkingcommon.BackingSpace, error)
-
 	// ModelTag returns the tag of the model this state is associated to.
 	ModelTag() names.ModelTag
 }
 
 // API provides the subnets API facade for version 5.
 type API struct {
+	ctx                         context.Context
 	backing                     Backing
 	resources                   facade.Resources
 	authorizer                  facade.Authorizer
 	credentialInvalidatorGetter envcontext.ModelCredentialInvalidatorGetter
 	logger                      loggo.Logger
+	subnetService               common.SubnetService
 }
 
 func (api *API) checkCanRead() error {
@@ -65,19 +57,26 @@ func (api *API) checkCanRead() error {
 // newAPIWithBacking creates a new server-side Subnets API facade with
 // a common.NetworkBacking
 func newAPIWithBacking(
-	backing Backing, credentialInvalidatorGetter envcontext.ModelCredentialInvalidatorGetter,
-	resources facade.Resources, authorizer facade.Authorizer, logger loggo.Logger,
+	ctx context.Context,
+	backing Backing,
+	credentialInvalidatorGetter envcontext.ModelCredentialInvalidatorGetter,
+	resources facade.Resources,
+	authorizer facade.Authorizer,
+	logger loggo.Logger,
+	subnetService common.SubnetService,
 ) (*API, error) {
 	// Only clients can access the Subnets facade.
 	if !authorizer.AuthClient() {
 		return nil, apiservererrors.ErrPerm
 	}
 	return &API{
+		ctx:                         ctx,
 		backing:                     backing,
 		resources:                   resources,
 		authorizer:                  authorizer,
 		credentialInvalidatorGetter: credentialInvalidatorGetter,
 		logger:                      logger,
+		subnetService:               subnetService,
 	}, nil
 }
 
@@ -103,7 +102,7 @@ func (api *API) ListSubnets(ctx stdcontext.Context, args params.SubnetsFilters) 
 		return params.ListSubnetsResults{}, err
 	}
 
-	subs, err := api.backing.AllSubnets()
+	subs, err := api.subnetService.GetAllSubnets(api.ctx)
 	if err != nil {
 		return results, errors.Trace(err)
 	}
@@ -119,18 +118,18 @@ func (api *API) ListSubnets(ctx stdcontext.Context, args params.SubnetsFilters) 
 	zoneFilter := args.Zone
 
 	for _, subnet := range subs {
-		if spaceFilter != "" && subnet.SpaceName() != spaceFilter {
+		if spaceFilter != "" && subnet.SpaceName != spaceFilter {
 			api.logger.Tracef(
 				"filtering subnet %q from space %q not matching filter %q",
-				subnet.CIDR(), subnet.SpaceName(), spaceFilter,
+				subnet.CIDR, subnet.SpaceName, spaceFilter,
 			)
 			continue
 		}
-		zoneSet := set.NewStrings(subnet.AvailabilityZones()...)
+		zoneSet := set.NewStrings(subnet.AvailabilityZones...)
 		if zoneFilter != "" && !zoneSet.IsEmpty() && !zoneSet.Contains(zoneFilter) {
 			api.logger.Tracef(
 				"filtering subnet %q with zones %v not matching filter %q",
-				subnet.CIDR(), subnet.AvailabilityZones(), zoneFilter,
+				subnet.CIDR, subnet.AvailabilityZones, zoneFilter,
 			)
 			continue
 		}
@@ -155,7 +154,7 @@ func (api *API) SubnetsByCIDR(ctx stdcontext.Context, arg params.CIDRParams) (pa
 			continue
 		}
 
-		subnets, err := api.backing.SubnetsByCIDR(cidr)
+		subnets, err := api.subnetService.SubnetsByCIDR(api.ctx, cidr)
 		if err != nil {
 			results[i].Error = apiservererrors.ServerError(err)
 			continue

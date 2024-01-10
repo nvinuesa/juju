@@ -7,7 +7,6 @@ import (
 	"context"
 
 	"github.com/juju/errors"
-	"github.com/juju/mgo/v3/txn"
 	"github.com/juju/names/v5"
 
 	apiservererrors "github.com/juju/juju/apiserver/errors"
@@ -16,39 +15,6 @@ import (
 	"github.com/juju/juju/rpc/params"
 	"github.com/juju/juju/state"
 )
-
-// RemoveSpace describes a space that can be removed.
-type RemoveSpace interface {
-	Refresh() error
-	RemoveSpaceOps() ([]txn.Op, error)
-}
-
-type spaceRemoveModelOp struct {
-	space RemoveSpace
-}
-
-func (o *spaceRemoveModelOp) Done(err error) error {
-	return err
-}
-
-func NewRemoveSpaceOp(space RemoveSpace) *spaceRemoveModelOp {
-	return &spaceRemoveModelOp{
-		space: space,
-	}
-}
-
-func (o *spaceRemoveModelOp) Build(attempt int) ([]txn.Op, error) {
-	if attempt > 0 {
-		if err := o.space.Refresh(); err != nil {
-			return nil, errors.Trace(err)
-		}
-	}
-	removeOps, err := o.space.RemoveSpaceOps()
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	return removeOps, nil
-}
 
 // RemoveSpace removes a space.
 // Returns SpaceResults if entities/settings are found which makes the deletion not possible.
@@ -71,7 +37,7 @@ func (api *API) RemoveSpace(ctx context.Context, spaceParams params.RemoveSpaceP
 			continue
 		}
 
-		operation, err := api.opFactory.NewRemoveSpaceOp(spacesTag.Id())
+		space, err := api.spaceService.SpaceByName(ctx, spacesTag.Id())
 		if err != nil {
 			result.Results[i].Error = apiservererrors.ServerError(errors.Trace(err))
 			continue
@@ -81,7 +47,8 @@ func (api *API) RemoveSpace(ctx context.Context, spaceParams params.RemoveSpaceP
 			continue
 		}
 
-		if err = api.backing.ApplyOperation(operation); err != nil {
+		err = api.spaceService.Remove(ctx, space.ID)
+		if err != nil {
 			result.Results[i].Error = apiservererrors.ServerError(errors.Trace(err))
 			continue
 		}

@@ -41,6 +41,7 @@ func createOffersAPI(
 	getControllerInfo func(context.Context) ([]string, string, error),
 	backend Backend,
 	statePool StatePool,
+	spaceService common.SpaceService,
 	authorizer facade.Authorizer,
 	authContext *commoncrossmodel.AuthContext,
 	credentialInvalidatorGetter envcontext.ModelCredentialInvalidatorGetter,
@@ -63,6 +64,7 @@ func createOffersAPI(
 			getEnviron:                  getEnviron,
 			getControllerInfo:           getControllerInfo,
 			logger:                      logger,
+			SpaceService:                spaceService,
 		},
 	}
 	return api, nil

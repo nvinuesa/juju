@@ -9,6 +9,7 @@ import (
 	"github.com/juju/errors"
 	"github.com/juju/names/v5"
 
+	"github.com/juju/juju/apiserver/common"
 	"github.com/juju/juju/core/network"
 	environscloudspec "github.com/juju/juju/environs/cloudspec"
 	"github.com/juju/juju/environs/config"
@@ -52,7 +53,9 @@ type SSHMachine interface {
 type sshMachine struct {
 	*state.Machine
 
-	st *state.State
+	ctx           context.Context
+	st            *state.State
+	subnetService common.SubnetService
 }
 
 // AllDeviceSpaceAddresses returns all machine link-layer
@@ -63,7 +66,7 @@ func (m *sshMachine) AllDeviceSpaceAddresses() (network.SpaceAddresses, error) {
 		return nil, errors.Trace(err)
 	}
 
-	subs, err := m.st.AllSubnetInfos()
+	subs, err := m.subnetService.GetAllSubnets(m.ctx)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -81,8 +84,10 @@ type backend struct {
 	*state.State
 	stateenvirons.EnvironConfigGetter
 
+	ctx           context.Context
 	controllerTag names.ControllerTag
 	modelTag      names.ModelTag
+	subnetService common.SubnetService
 }
 
 // ModelTag returns the model tag of the backend.
@@ -117,7 +122,12 @@ func (b *backend) GetMachineForEntity(tagString string) (SSHMachine, error) {
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
-		return &sshMachine{Machine: m, st: b.State}, nil
+		return &sshMachine{
+			ctx:           b.ctx,
+			Machine:       m,
+			st:            b.State,
+			subnetService: b.subnetService,
+		}, nil
 	case names.UnitTag:
 		unit, err := b.State.Unit(tag.Id())
 		if err != nil {
@@ -131,7 +141,12 @@ func (b *backend) GetMachineForEntity(tagString string) (SSHMachine, error) {
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
-		return &sshMachine{Machine: m, st: b.State}, nil
+		return &sshMachine{
+			ctx:           b.ctx,
+			Machine:       m,
+			st:            b.State,
+			subnetService: b.subnetService,
+		}, nil
 	default:
 		return nil, errors.Errorf("unsupported entity: %q", tagString)
 	}

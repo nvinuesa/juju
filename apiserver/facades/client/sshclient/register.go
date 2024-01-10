@@ -4,6 +4,7 @@
 package sshclient
 
 import (
+	"context"
 	stdcontext "context"
 	"reflect"
 
@@ -18,11 +19,11 @@ import (
 // Register is called to expose a package of facades onto a given registry.
 func Register(registry facade.FacadeRegistry) {
 	registry.MustRegister("SSHClient", 4, func(stdCtx stdcontext.Context, ctx facade.Context) (facade.Facade, error) {
-		return newFacade(ctx)
+		return newFacade(stdCtx, ctx)
 	}, reflect.TypeOf((*Facade)(nil)))
 }
 
-func newFacade(ctx facade.Context) (*Facade, error) {
+func newFacade(stdCtx context.Context, ctx facade.Context) (*Facade, error) {
 	st := ctx.State()
 	m, err := st.Model()
 	if err != nil {
@@ -38,6 +39,8 @@ func newFacade(ctx facade.Context) (*Facade, error) {
 			Model: m, CloudService: ctx.ServiceFactory().Cloud(), CredentialService: ctx.ServiceFactory().Credential()},
 		controllerTag: m.ControllerTag(),
 		modelTag:      m.ModelTag(),
+		subnetService: ctx.ServiceFactory().Subnet(),
+		ctx:           stdCtx,
 	}
 	return internalFacade(
 		&facadeBackend,

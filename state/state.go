@@ -86,6 +86,7 @@ type NetworkService interface {
 	SpaceByName(ctx context.Context, name string) (*network.SpaceInfo, error)
 	GetAllSpaces(ctx context.Context) (network.SpaceInfos, error)
 	SubnetsByCIDR(ctx context.Context, cidrs ...string) ([]network.SubnetInfo, error)
+	GetAllSubnets(ctx context.Context) (network.SubnetInfos, error)
 }
 
 func (st *State) Space(id string) (*network.SpaceInfo, error) {
@@ -102,15 +103,12 @@ func (st *State) AllSpaceInfos() (network.SpaceInfos, error) {
 
 func (st *State) SubnetByCIDR(cidr string) (*network.SubnetInfo, error) {
 	subnets, err := st.networkService.SubnetsByCIDR(context.TODO(), cidr)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	return &subnets[0], nil
+	return &subnets[0], errors.Trace(err)
 }
 
-func (st *State) AllSubnets() (subnets []network.SubnetInfo, err error) {
-	// TODO(nvinuesa): Implement!
-	return nil, errors.NotImplemented
+func (st *State) AllSubnets() (network.SubnetInfos, error) {
+	subnets, err := st.networkService.GetAllSubnets(context.TODO())
+	return subnets, errors.Trace(err)
 }
 
 func (st *State) newStateNoWorkers(modelUUID string) (*State, error) {

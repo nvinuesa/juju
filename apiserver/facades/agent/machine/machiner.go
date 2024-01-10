@@ -47,6 +47,7 @@ func NewMachinerAPIForState(
 	ctrlSt, st *state.State,
 	controllerConfigService ControllerConfigService,
 	cloudService common.CloudService,
+	subnetService common.SubnetService,
 	resources facade.Resources,
 	authorizer facade.Authorizer,
 ) (*MachinerAPI, error) {
@@ -58,7 +59,7 @@ func NewMachinerAPIForState(
 		return authorizer.AuthOwner, nil
 	}
 
-	netConfigAPI, err := networkingcommon.NewNetworkConfigAPI(ctx, st, cloudService, getCanAccess)
+	netConfigAPI, err := networkingcommon.NewNetworkConfigAPI(ctx, st, cloudService, subnetService, getCanAccess)
 	if err != nil {
 		return nil, errors.Annotate(err, "instantiating network config API")
 	}

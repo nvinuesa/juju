@@ -95,6 +95,7 @@ type ModelManagerAPI struct {
 	ctlrState           common.ModelManagerBackend
 	cloudService        CloudService
 	credentialService   CredentialService
+	spaceService        common.SpaceService
 	store               objectstore.ObjectStore
 	check               common.BlockCheckerInterface
 	authorizer          facade.Authorizer
@@ -115,6 +116,7 @@ func NewModelManagerAPI(
 	credentialService CredentialService,
 	modelManagerService ModelManagerService,
 	modelService ModelService,
+	spaceService common.SpaceService,
 	store objectstore.ObjectStore,
 	toolsFinder common.ToolsFinder,
 	getBroker newCaasBrokerFunc,
@@ -153,6 +155,7 @@ func NewModelManagerAPI(
 		isAdmin:             isAdmin,
 		model:               m,
 		modelService:        modelService,
+		spaceService:        spaceService,
 	}, nil
 }
 
@@ -553,9 +556,7 @@ func (m *ModelManagerAPI) newModel(
 		return nil, errors.Trace(err)
 	}
 	callCtx = environsContext.WithCredentialInvalidator(ctx, invalidatorFunc)
-	if err = space.ReloadSpaces(callCtx, spaceStateShim{
-		ModelManagerBackend: st,
-	}, env); err != nil {
+	if err = space.ReloadSpaces(callCtx, st, m.spaceService, env); err != nil {
 		if errors.Is(err, errors.NotSupported) {
 			logger.Debugf("Not performing spaces load on a non-networking environment")
 		} else {

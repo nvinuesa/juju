@@ -74,10 +74,6 @@ type Backing interface {
 	// SubnetByCIDR returns a unique subnet based on the input CIDR.
 	SubnetByCIDR(cidr string) (networkingcommon.BackingSubnet, error)
 
-	// MovingSubnet returns the subnet for the input ID,
-	// suitable for moving to a new space.
-	MovingSubnet(id string) (MovingSubnet, error)
-
 	// AddSpace creates a space.
 	AddSpace(name string, providerID network.Id, subnets []string) (networkingcommon.BackingSpace, error)
 

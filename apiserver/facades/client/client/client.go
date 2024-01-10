@@ -41,6 +41,7 @@ type API struct {
 	auth            facade.Authorizer
 	resources       facade.Resources
 	presence        facade.Presence
+	subnetService   common.SubnetService
 
 	multiwatcherFactory multiwatcher.Factory
 
@@ -160,6 +161,7 @@ func NewFacade(ctx facade.Context) (*Client, error) {
 		blockChecker,
 		leadershipReader,
 		factory,
+		ctx.ServiceFactory().Subnet(),
 		registry.New,
 	)
 }
@@ -177,6 +179,7 @@ func NewClient(
 	blockChecker *common.BlockChecker,
 	leadershipReader leadership.Reader,
 	factory multiwatcher.Factory,
+	subnetService common.SubnetService,
 	registryAPIFunc func(docker.ImageRepoDetails) (registry.Registry, error),
 ) (*Client, error) {
 	if !authorizer.AuthClient() {
@@ -193,6 +196,7 @@ func NewClient(
 			toolsFinder:         toolsFinder,
 			leadershipReader:    leadershipReader,
 			multiwatcherFactory: factory,
+			subnetService:       subnetService,
 		},
 		newEnviron:      newEnviron,
 		check:           blockChecker,

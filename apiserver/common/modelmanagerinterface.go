@@ -135,6 +135,25 @@ type CloudService interface {
 	WatchCloud(ctx context.Context, name string) (watcher.NotifyWatcher, error)
 }
 
+// SpaceService defines the methods for handling spaces.
+type SpaceService interface {
+	SpaceByName(ctx context.Context, name string) (*network.SpaceInfo, error)
+	GetAllSpaces(context.Context) (network.SpaceInfos, error)
+	AddSpace(ctx context.Context, name string, providerID network.Id, subnetIDs []string) (network.Id, error)
+	Space(ctx context.Context, uuid string) (*network.SpaceInfo, error)
+	SaveProviderSubnets(ctx context.Context, subnets []network.SubnetInfo, spaceUUID network.Id, fans network.FanConfig) error
+	Remove(context.Context, string) error
+}
+
+// SubnetService defines the methods for handling subnets.
+type SubnetService interface {
+	AddSubnet(ctx context.Context, args network.SubnetInfo) (network.Id, error)
+	GetAllSubnets(ctx context.Context) (network.SubnetInfos, error)
+	Subnet(ctx context.Context, uuid string) (*network.SubnetInfo, error)
+	SubnetsByCIDR(ctx context.Context, cidrs ...string) ([]network.SubnetInfo, error)
+	UpdateSubnet(ctx context.Context, uuid, spaceUUID string) error
+}
+
 var _ ModelManagerBackend = (*modelManagerStateShim)(nil)
 
 type modelManagerStateShim struct {
