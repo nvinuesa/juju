@@ -114,11 +114,11 @@ func (api *API) createOneSpace(ctx context.Context, args params.CreateSpaceParam
 		if !network.IsValidCIDR(cidr) {
 			return errors.New(fmt.Sprintf("%q is not a valid CIDR", cidr))
 		}
-		subnet, err := api.backing.SubnetByCIDR(cidr)
+		subnet, err := api.subnetService.SubnetsByCIDR(ctx, cidr)
 		if err != nil {
 			return err
 		}
-		subnetIDs[i] = subnet.ID()
+		subnetIDs[i] = subnet[0].ID.String()
 	}
 
 	// Add the validated space.
@@ -141,7 +141,7 @@ func (api *API) ListSpaces(ctx stdcontext.Context) (results params.ListSpacesRes
 		return results, apiservererrors.ServerError(errors.Trace(err))
 	}
 
-	spaces, err := api.backing.AllSpaces()
+	spaces, err := api.spaceService.GetAllSpaces(ctx)
 	if err != nil {
 		return results, errors.Trace(err)
 	}
@@ -149,17 +149,16 @@ func (api *API) ListSpaces(ctx stdcontext.Context) (results params.ListSpacesRes
 	results.Results = make([]params.Space, len(spaces))
 	for i, space := range spaces {
 		result := params.Space{}
-		result.Id = space.Id()
-		result.Name = space.Name()
+		result.Id = space.ID
+		result.Name = string(space.Name)
 
-		spaceInfo, err := space.NetworkSpace()
 		if err != nil {
 			err = errors.Annotatef(err, "fetching subnets")
 			result.Error = apiservererrors.ServerError(err)
 			results.Results[i] = result
 			continue
 		}
-		subnets := spaceInfo.Subnets
+		subnets := space.Subnets
 
 		result.Subnets = make([]params.Subnet, len(subnets))
 		for i, subnet := range subnets {
@@ -189,28 +188,27 @@ func (api *API) ShowSpace(ctx stdcontext.Context, entities params.Entities) (par
 			continue
 		}
 		var result params.ShowSpaceResult
-		space, err := api.backing.SpaceByName(spaceName.Id())
+		space, err := api.spaceService.SpaceByName(ctx, spaceName.Id())
 		if err != nil {
 			newErr := errors.Annotatef(err, "fetching space %q", spaceName)
 			results[i].Error = apiservererrors.ServerError(newErr)
 			continue
 		}
-		result.Space.Name = space.Name()
-		result.Space.Id = space.Id()
-		spaceInfo, err := space.NetworkSpace()
+		result.Space.Name = string(space.Name)
+		result.Space.Id = space.ID
 		if err != nil {
 			newErr := errors.Annotatef(err, "fetching subnets")
 			results[i].Error = apiservererrors.ServerError(newErr)
 			continue
 		}
-		subnets := spaceInfo.Subnets
+		subnets := space.Subnets
 
 		result.Space.Subnets = make([]params.Subnet, len(subnets))
 		for i, subnet := range subnets {
 			result.Space.Subnets[i] = networkingcommon.SubnetInfoToParamsSubnet(subnet)
 		}
 
-		applications, err := api.applicationsBoundToSpace(space.Id())
+		applications, err := api.applicationsBoundToSpace(space.ID)
 		if err != nil {
 			newErr := errors.Annotatef(err, "fetching applications")
 			results[i].Error = apiservererrors.ServerError(newErr)
@@ -218,7 +216,7 @@ func (api *API) ShowSpace(ctx stdcontext.Context, entities params.Entities) (par
 		}
 		result.Applications = applications
 
-		machineCount, err := api.getMachineCountBySpaceID(space.Id())
+		machineCount, err := api.getMachineCountBySpaceID(space.ID)
 		if err != nil {
 			newErr := errors.Annotatef(err, "fetching machine count")
 			results[i].Error = apiservererrors.ServerError(newErr)

@@ -15,6 +15,7 @@ import (
 	"github.com/juju/names/v5"
 	"github.com/juju/retry"
 
+	"github.com/juju/juju/apiserver/common"
 	apiservererrors "github.com/juju/juju/apiserver/errors"
 	"github.com/juju/juju/core/network"
 	"github.com/juju/juju/rpc/params"
@@ -38,7 +39,8 @@ type NetworkInfo interface {
 // NetworkInfoBase is responsible for processing requests for network data
 // for unit endpoint bindings and/or relations.
 type NetworkInfoBase struct {
-	st *state.State
+	st            *state.State
+	subnetService common.SubnetService
 
 	// retryFactory returns a retry strategy template used to poll for
 	// and resolve addresses that may not yet have landed in state,
@@ -58,8 +60,14 @@ type NetworkInfoBase struct {
 
 // NewNetworkInfo initialises and returns a new NetworkInfo
 // based on the input state and unit tag.
-func NewNetworkInfo(ctx context.Context, st *state.State, tag names.UnitTag, logger loggo.Logger) (NetworkInfo, error) {
-	n, err := NewNetworkInfoForStrategy(ctx, st, tag, defaultRetryFactory, net.LookupHost, logger)
+func NewNetworkInfo(
+	ctx context.Context,
+	st *state.State,
+	subnetService common.SubnetService,
+	tag names.UnitTag,
+	logger loggo.Logger,
+) (NetworkInfo, error) {
+	n, err := NewNetworkInfoForStrategy(ctx, st, subnetService, tag, defaultRetryFactory, net.LookupHost, logger)
 	return n, errors.Trace(err)
 }
 
@@ -68,7 +76,12 @@ func NewNetworkInfo(ctx context.Context, st *state.State, tag names.UnitTag, log
 // behaviour via the input retry factory and host resolver.
 func NewNetworkInfoForStrategy(
 	ctx context.Context,
-	st *state.State, tag names.UnitTag, retryFactory func() retry.CallArgs, lookupHost func(string) ([]string, error), logger loggo.Logger,
+	st *state.State,
+	subnetService common.SubnetService,
+	tag names.UnitTag,
+	retryFactory func() retry.CallArgs,
+	lookupHost func(string) ([]string, error),
+	logger loggo.Logger,
 ) (NetworkInfo, error) {
 	model, err := st.Model()
 	if err != nil {
@@ -101,7 +114,7 @@ func NewNetworkInfoForStrategy(
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
-		defaultSpaceID = defaultSpace.Id()
+		defaultSpaceID = defaultSpace.ID
 	}
 
 	// Initialise the bindings map with all application endpoints.
@@ -127,6 +140,7 @@ func NewNetworkInfoForStrategy(
 
 	base := &NetworkInfoBase{
 		st:            st,
+		subnetService: subnetService,
 		unit:          unit,
 		app:           app,
 		bindings:      allBindings,
@@ -138,7 +152,7 @@ func NewNetworkInfoForStrategy(
 
 	var netInfo NetworkInfo
 	if unit.ShouldBeAssigned() {
-		netInfo, err = newNetworkInfoIAAS(base)
+		netInfo, err = newNetworkInfoIAAS(ctx, base)
 	} else {
 		netInfo, err = newNetworkInfoCAAS(base)
 	}

@@ -45,7 +45,7 @@ OUTER:
 			continue
 		}
 
-		if err := api.ensureSubnetsCanBeMoved(subnets, spaceName, toSpaceParams.Force); err != nil {
+		if err := api.ensureSubnetsCanBeMoved(ctx, subnets, spaceName, toSpaceParams.Force); err != nil {
 			results[i].Error = apiservererrors.ServerError(errors.Trace(err))
 			continue
 		}
@@ -94,7 +94,7 @@ func (api *API) getMovingSubnets(ctx context.Context, tags []string) ([]network.
 // determine the validity of constraints and endpoint bindings resulting from
 // a relocation of subnets.
 // An error is returned if validity is violated and force is passed as false.
-func (api *API) ensureSubnetsCanBeMoved(subnets []network.SubnetInfo, spaceName string, force bool) error {
+func (api *API) ensureSubnetsCanBeMoved(ctx context.Context, subnets []network.SubnetInfo, spaceName string, force bool) error {
 	for _, subnet := range subnets {
 		if subnet.FanLocalUnderlay() != "" {
 			return errors.Errorf("subnet %q is a fan overlay of %q and cannot be moved; move the underlay instead",
@@ -102,7 +102,7 @@ func (api *API) ensureSubnetsCanBeMoved(subnets []network.SubnetInfo, spaceName 
 		}
 	}
 
-	affected, err := api.getAffectedNetworks(subnets, spaceName, force)
+	affected, err := api.getAffectedNetworks(ctx, subnets, spaceName, force)
 	if err != nil {
 		return errors.Annotate(err, "determining affected networks")
 	}
@@ -117,13 +117,13 @@ func (api *API) ensureSubnetsCanBeMoved(subnets []network.SubnetInfo, spaceName 
 // getAffectedNetworks interrogates machines connected to moving subnets.
 // From these it generates lists of common unit/subnet-topologies,
 // grouped by application.
-func (api *API) getAffectedNetworks(subnets []network.SubnetInfo, spaceName string, force bool) (*affectedNetworks, error) {
+func (api *API) getAffectedNetworks(ctx context.Context, subnets []network.SubnetInfo, spaceName string, force bool) (*affectedNetworks, error) {
 	movingSubnetIDs := network.MakeIDSet()
 	for _, subnet := range subnets {
 		movingSubnetIDs.Add(network.Id(subnet.ID))
 	}
 
-	allSpaces, err := api.backing.AllSpaceInfos()
+	allSpaces, err := api.spaceService.GetAllSpaces(ctx)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}

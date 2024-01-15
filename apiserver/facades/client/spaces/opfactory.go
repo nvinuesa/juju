@@ -4,6 +4,8 @@
 package spaces
 
 import (
+	"context"
+
 	"github.com/juju/errors"
 
 	"github.com/juju/juju/state"
@@ -14,7 +16,7 @@ import (
 type OpFactory interface {
 
 	// NewRenameSpaceOp returns an operation for renaming a space.
-	NewRenameSpaceOp(spaceName, toName string) (state.ModelOperation, error)
+	NewRenameSpaceOp(ctx context.Context, spaceName, toName string) (state.ModelOperation, error)
 }
 
 type opFactory struct {
@@ -27,11 +29,17 @@ func newOpFactory(st *state.State) OpFactory {
 
 // NewRenameSpaceOp (OpFactory) returns an operation
 // for renaming a space.
-func (f *opFactory) NewRenameSpaceOp(fromName, toName string) (state.ModelOperation, error) {
+func (f *opFactory) NewRenameSpaceOp(ctx context.Context, fromName, toName string) (state.ModelOperation, error) {
 	space, err := f.st.SpaceByName(fromName)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 	return NewRenameSpaceOp(
-		f.st.IsController(), f.st.NewControllerSettings(), &renameSpaceState{f.st}, space, toName), nil
+		ctx,
+		f.st.IsController(),
+		f.st.NewControllerSettings(),
+		&renameSpaceState{f.st},
+		space,
+		toName,
+	), nil
 }

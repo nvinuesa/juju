@@ -33,7 +33,7 @@ func (api *API) RemoveSpace(ctx context.Context, spaceParams params.RemoveSpaceP
 			continue
 		}
 
-		if !api.checkSpaceIsRemovable(i, spacesTag, &result, spaceParam.Force) {
+		if !api.checkSpaceIsRemovable(ctx, i, spacesTag, &result, spaceParam.Force) {
 			continue
 		}
 
@@ -57,7 +57,11 @@ func (api *API) RemoveSpace(ctx context.Context, spaceParams params.RemoveSpaceP
 }
 
 func (api *API) checkSpaceIsRemovable(
-	index int, spacesTag names.Tag, results *params.RemoveSpaceResults, force bool,
+	ctx context.Context,
+	index int,
+	spacesTag names.Tag,
+	results *params.RemoveSpaceResults,
+	force bool,
 ) bool {
 	removable := true
 
@@ -66,22 +70,22 @@ func (api *API) checkSpaceIsRemovable(
 		results.Results[index].Error = apiservererrors.ServerError(newErr)
 		return false
 	}
-	space, err := api.backing.SpaceByName(spacesTag.Id())
+	space, err := api.spaceService.SpaceByName(ctx, spacesTag.Id())
 	if err != nil {
 		results.Results[index].Error = apiservererrors.ServerError(errors.Trace(err))
 		return false
 	}
-	bindingTags, err := api.applicationTagsForSpace(space.Id())
+	bindingTags, err := api.applicationTagsForSpace(space.ID)
 	if err != nil {
 		results.Results[index].Error = apiservererrors.ServerError(errors.Trace(err))
 		return false
 	}
-	constraintTags, err := api.entityTagsForSpaceConstraintsBlockingRemove(space.Name())
+	constraintTags, err := api.entityTagsForSpaceConstraintsBlockingRemove(string(space.Name))
 	if err != nil {
 		results.Results[index].Error = apiservererrors.ServerError(errors.Trace(err))
 		return false
 	}
-	settingMatches, err := api.getSpaceControllerSettings(space.Name())
+	settingMatches, err := api.getSpaceControllerSettings(string(space.Name))
 	if err != nil {
 		results.Results[index].Error = apiservererrors.ServerError(errors.Trace(err))
 		return false

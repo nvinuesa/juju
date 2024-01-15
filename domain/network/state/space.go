@@ -254,7 +254,7 @@ func (st *State) GetAllSpaces(
 	return rows.ToSpaceInfos(), nil
 }
 
-// UpdateSpace updates the space identified by the passed uuid.
+// UpdateSpace updates the space name identified by the passed uuid.
 func (st *State) UpdateSpace(
 	ctx context.Context,
 	uuid string,

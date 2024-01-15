@@ -67,7 +67,7 @@ type DeployFromRepositoryState interface {
 
 	network.SpaceLookup
 	DefaultEndpointBindingSpace() (string, error)
-	Space(id string) (*state.Space, error)
+	Space(context.Context, string) (*network.SpaceInfo, error)
 }
 
 // DeployFromRepositoryAPI provides the deploy from repository
@@ -306,6 +306,11 @@ func makeDeployFromRepositoryValidator(ctx context.Context, cfg validatorConfig)
 	return &iaasDeployFromRepositoryValidator{
 		validator: v,
 	}
+}
+
+type DeployFromRepositoryStateAndService interface {
+	DeployFromRepositoryState
+	common.SpaceService
 }
 
 type deployFromRepositoryValidator struct {

@@ -143,6 +143,7 @@ type SpaceService interface {
 	Space(ctx context.Context, uuid string) (*network.SpaceInfo, error)
 	SaveProviderSubnets(ctx context.Context, subnets []network.SubnetInfo, spaceUUID network.Id, fans network.FanConfig) error
 	Remove(context.Context, string) error
+	UpdateSpace(ctx context.Context, uuid string, name string) error
 }
 
 // SubnetService defines the methods for handling subnets.

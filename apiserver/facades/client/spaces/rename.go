@@ -10,6 +10,7 @@ import (
 	"github.com/juju/mgo/v3/txn"
 	"github.com/juju/names/v5"
 
+	"github.com/juju/juju/apiserver/common"
 	apiservererrors "github.com/juju/juju/apiserver/errors"
 	"github.com/juju/juju/controller"
 	"github.com/juju/juju/core/network"
@@ -61,17 +62,25 @@ func (st renameSpaceState) ConstraintsBySpaceName(spaceName string) ([]Constrain
 }
 
 type spaceRenameModelOp struct {
+	ctx          context.Context
 	st           RenameSpaceState
+	spaceService common.SpaceService
 	isController bool
-	space        RenameSpace
+	space        *network.SpaceInfo
 	settings     Settings
 	toName       string
 }
 
 func NewRenameSpaceOp(
-	isController bool, settings Settings, st RenameSpaceState, space RenameSpace, toName string,
+	ctx context.Context,
+	isController bool,
+	settings Settings,
+	st RenameSpaceState,
+	space *network.SpaceInfo,
+	toName string,
 ) *spaceRenameModelOp {
 	return &spaceRenameModelOp{
+		ctx:          ctx,
 		st:           st,
 		settings:     settings,
 		space:        space,
@@ -83,24 +92,26 @@ func NewRenameSpaceOp(
 // Build (state.ModelOperation) creates and returns a slice of transaction
 // operations necessary to rename a space.
 func (o *spaceRenameModelOp) Build(attempt int) ([]txn.Op, error) {
-	if attempt > 0 {
-		if err := o.space.Refresh(); err != nil {
-			return nil, errors.Trace(err)
-		}
-	}
-
-	ops := o.space.RenameSpaceOps(o.toName)
-
-	constraintsWithSpace, err := o.st.ConstraintsBySpaceName(o.space.Name())
+	// NOTE(nvinuesa): this method is not transactional since we are using
+	// a mix of new domain methods and the legacy mongodb state. We'll be
+	// able to make it transactional once we complete the migration to
+	// dqlite.
+	err := o.spaceService.UpdateSpace(o.ctx, o.space.ID, o.toName)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
+
+	constraintsWithSpace, err := o.st.ConstraintsBySpaceName(string(o.space.Name))
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	var ops []txn.Op
 	for _, cons := range constraintsWithSpace {
-		ops = append(ops, cons.ChangeSpaceNameOps(o.space.Name(), o.toName)...)
+		ops = append(ops, cons.ChangeSpaceNameOps(string(o.space.Name), o.toName)...)
 	}
 
 	if o.isController {
-		settingsDelta, err := o.getSettingsChanges(o.space.Name(), o.toName)
+		settingsDelta, err := o.getSettingsChanges(string(o.space.Name), o.toName)
 		if err != nil {
 			return nil, errors.Annotatef(err, "retrieving settings changes")
 		}
@@ -161,7 +172,7 @@ func (api *API) RenameSpace(ctx context.Context, args params.RenameSpacesParams)
 			result.Results[i].Error = apiservererrors.ServerError(errors.Trace(err))
 			continue
 		}
-		toSpace, err := api.backing.SpaceByName(toTag.Id())
+		toSpace, err := api.spaceService.SpaceByName(ctx, toTag.Id())
 		if err != nil && !errors.Is(err, errors.NotFound) {
 			newErr := errors.Annotatef(err, "retrieving space %q", toTag.Id())
 			result.Results[i].Error = apiservererrors.ServerError(errors.Trace(newErr))
@@ -172,7 +183,7 @@ func (api *API) RenameSpace(ctx context.Context, args params.RenameSpacesParams)
 			result.Results[i].Error = apiservererrors.ServerError(errors.Trace(newErr))
 			continue
 		}
-		operation, err := api.opFactory.NewRenameSpaceOp(fromTag.Id(), toTag.Id())
+		operation, err := api.opFactory.NewRenameSpaceOp(ctx, fromTag.Id(), toTag.Id())
 		if err != nil {
 			result.Results[i].Error = apiservererrors.ServerError(errors.Trace(err))
 			continue

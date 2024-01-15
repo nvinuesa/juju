@@ -26,7 +26,7 @@ type SpaceState interface {
 	GetSpaceByName(ctx context.Context, name string) (*network.SpaceInfo, error)
 	// GetAllSpaces returns all spaces for the model.
 	GetAllSpaces(ctx context.Context) (network.SpaceInfos, error)
-	// UpdateSpace updates the space identified by the passed uuid.
+	// UpdateSpace updates the space name identified by the passed uuid.
 	UpdateSpace(ctx context.Context, uuid string, name string) error
 	// DeleteSpace deletes the space identified by the passed uuid.
 	DeleteSpace(ctx context.Context, uuid string) error
