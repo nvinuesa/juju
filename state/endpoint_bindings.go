@@ -497,9 +497,9 @@ func DefaultEndpointBindingsForCharm(st EndpointBinding, charmMeta *charm.Meta) 
 //
 //go:generate go run go.uber.org/mock/mockgen -package mocks -destination mocks/endpointbinding_mock.go github.com/juju/juju/state EndpointBinding
 type EndpointBinding interface {
-	network.SpaceLookup
 	DefaultEndpointBindingSpace() (string, error)
 	Space(id string) (*Space, error)
+	AllSpaceInfos() (network.SpaceInfos, error)
 }
 
 // Bindings are EndpointBindings.

@@ -16,6 +16,7 @@ import (
 	modelconfigservice "github.com/juju/juju/domain/modelconfig/service"
 	modeldefaultsservice "github.com/juju/juju/domain/modeldefaults/service"
 	modelmanagerservice "github.com/juju/juju/domain/modelmanager/service"
+	networkservice "github.com/juju/juju/domain/network/service"
 	objectstoreservice "github.com/juju/juju/domain/objectstore/service"
 	upgradeservice "github.com/juju/juju/domain/upgrade/service"
 	userservice "github.com/juju/juju/domain/user/service"
@@ -63,6 +64,8 @@ type ModelServiceFactory interface {
 	ObjectStore() *objectstoreservice.Service
 	// Machine returns the machine service.
 	Machine() *machineservice.Service
+	// Space returns the space service.
+	Space() *networkservice.SpaceService
 }
 
 // ServiceFactory provides access to the services required by the apiserver.

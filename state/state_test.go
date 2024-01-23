@@ -4601,7 +4601,7 @@ func (s *StateSuite) TestSetAPIHostPortsNoMgmtSpace(c *gc.C) {
 		SpaceAddress: network.NewSpaceAddress("0.6.1.2", network.WithScope(network.ScopeCloudLocal)),
 		NetPort:      5,
 	}}}
-	err = s.State.SetAPIHostPorts(cfg, newHostPorts)
+	err = s.State.SetAPIHostPorts(cfg, newHostPorts, newHostPorts)
 	c.Assert(err, jc.ErrorIsNil)
 
 	ctrlSt, err := s.StatePool.SystemState()
@@ -4618,7 +4618,7 @@ func (s *StateSuite) TestSetAPIHostPortsNoMgmtSpace(c *gc.C) {
 		SpaceAddress: network.NewSpaceAddress("0.2.4.6", network.WithScope(network.ScopeCloudLocal)),
 		NetPort:      13,
 	}}}
-	err = s.State.SetAPIHostPorts(cfg, newHostPorts)
+	err = s.State.SetAPIHostPorts(cfg, newHostPorts, newHostPorts)
 	c.Assert(err, jc.ErrorIsNil)
 
 	gotHostPorts, err = ctrlSt.APIHostPortsForClients(cfg)
@@ -4649,7 +4649,7 @@ func (s *StateSuite) TestSetAPIHostPortsNoMgmtSpaceConcurrentSame(c *gc.C) {
 	var prevRevno int64
 	var prevAgentsRevno int64
 	defer state.SetBeforeHooks(c, s.State, func() {
-		err := s.State.SetAPIHostPorts(cfg, hostPorts)
+		err := s.State.SetAPIHostPorts(cfg, hostPorts, hostPorts)
 		c.Assert(err, jc.ErrorIsNil)
 		revno, err := state.TxnRevno(s.State, ctrC, "apiHostPorts")
 		c.Assert(err, jc.ErrorIsNil)
@@ -4659,7 +4659,7 @@ func (s *StateSuite) TestSetAPIHostPortsNoMgmtSpaceConcurrentSame(c *gc.C) {
 		prevAgentsRevno = revno
 	}).Check()
 
-	err := s.State.SetAPIHostPorts(cfg, hostPorts)
+	err := s.State.SetAPIHostPorts(cfg, hostPorts, hostPorts)
 	c.Assert(err, jc.ErrorIsNil)
 	c.Assert(prevRevno, gc.Not(gc.Equals), 0)
 
@@ -4707,7 +4707,7 @@ func (s *StateSuite) TestSetAPIHostPortsWithMgmtSpace(c *gc.C) {
 	}
 	newHostPorts := []network.SpaceHostPorts{{hostPort1, hostPort2}, {hostPort3}}
 
-	err = s.State.SetAPIHostPorts(cfg, newHostPorts)
+	err = s.State.SetAPIHostPorts(cfg, newHostPorts, []network.SpaceHostPorts{{hostPort2}, {hostPort3}})
 	c.Assert(err, jc.ErrorIsNil)
 
 	ctrlSt, err := s.StatePool.SystemState()
@@ -4742,7 +4742,7 @@ func (s *StateSuite) TestSetAPIHostPortsForAgentsNoDocument(c *gc.C) {
 	c.Assert(err, jc.ErrorIsNil)
 	c.Assert(col.FindId(key).One(&bson.D{}), gc.Equals, mgo.ErrNotFound)
 
-	err = s.State.SetAPIHostPorts(cfg, newHostPorts)
+	err = s.State.SetAPIHostPorts(cfg, newHostPorts, newHostPorts)
 	c.Assert(err, jc.ErrorIsNil)
 
 	ctrlSt, err := s.StatePool.SystemState()
@@ -4764,7 +4764,7 @@ func (s *StateSuite) TestAPIHostPortsForAgentsNoDocument(c *gc.C) {
 		NetPort:      1,
 	}}}
 
-	err = s.State.SetAPIHostPorts(cfg, newHostPorts)
+	err = s.State.SetAPIHostPorts(cfg, newHostPorts, newHostPorts)
 	c.Assert(err, jc.ErrorIsNil)
 
 	// Delete the addresses for agents document after setting.
