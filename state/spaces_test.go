@@ -651,16 +651,6 @@ func (s *SpacesSuite) TestSpaceToNetworkSpace(c *gc.C) {
 	network.SortSubnetInfos(expSpaceInfo.Subnets)
 
 	c.Assert(spaceInfo, gc.DeepEquals, expSpaceInfo)
-
-	// Test that AllSpaceInfos works the same way.
-	allSpaceInfos, err := s.State.AllSpaceInfos()
-	c.Assert(err, jc.ErrorIsNil)
-
-	space1 := allSpaceInfos.GetByName("space1")
-	c.Assert(space1, gc.NotNil)
-
-	network.SortSubnetInfos(space1.Subnets)
-	c.Assert(*space1, gc.DeepEquals, expSpaceInfo)
 }
 
 type SpacesDiscoverySuite struct {

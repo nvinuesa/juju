@@ -52,6 +52,12 @@ type ControllerConfigGetter interface {
 	ControllerConfig(ctx context.Context) (controller.Config, error)
 }
 
+// SpaceService is the interface that is used to interact with the
+// network spaces.
+type SpaceService interface {
+	GetAllSpaces(ctx context.Context) (network.SpaceInfos, error)
+}
+
 // HighAvailabilityAPI implements the HighAvailability interface and is the concrete
 // implementation of the api end point.
 type HighAvailabilityAPI struct {
@@ -60,6 +66,7 @@ type HighAvailabilityAPI struct {
 	nodeService        NodeService
 	machineService     MachineService
 	applicationService ApplicationService
+	spaceService       SpaceService
 	controllerConfig   ControllerConfigGetter
 	authorizer         facade.Authorizer
 	logger             loggo.Logger
@@ -147,7 +154,7 @@ func (api *HighAvailabilityAPI) enableHASingle(ctx context.Context, spec params.
 
 	spec.Constraints.Spaces = cfg.AsSpaceConstraints(spec.Constraints.Spaces)
 
-	if err = validatePlacementForSpaces(st, spec.Constraints.Spaces, spec.Placement); err != nil {
+	if err = api.validatePlacementForSpaces(ctx, st, spec.Constraints.Spaces, spec.Placement); err != nil {
 		return params.ControllersChanges{}, errors.Trace(err)
 	}
 
@@ -252,7 +259,7 @@ func validateCurrentControllers(st *state.State, cfg controller.Config, machineI
 // and machine placement directives.
 // If there are, checks are made to ensure that the machines specified have at
 // least one address in all of the spaces.
-func validatePlacementForSpaces(st *state.State, spaceNames *[]string, placement []string) error {
+func (api *HighAvailabilityAPI) validatePlacementForSpaces(ctx context.Context, st *state.State, spaceNames *[]string, placement []string) error {
 	if spaceNames == nil || len(*spaceNames) == 0 || len(placement) == 0 {
 		return nil
 	}
@@ -284,7 +291,7 @@ func validatePlacementForSpaces(st *state.State, spaceNames *[]string, placement
 			return errors.Annotate(err, "retrieving machine")
 		}
 
-		spaceInfos, err := st.AllSpaceInfos()
+		spaceInfos, err := api.spaceService.GetAllSpaces(ctx)
 		if err != nil {
 			return errors.Trace(err)
 		}

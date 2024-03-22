@@ -1797,14 +1797,9 @@ func (st *State) addMachineWithPlacement(prechecker environs.InstancePrechecker,
 		return nil, errors.Trace(err)
 	}
 
-	lookup, err := st.AllSpaceInfos()
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-
 	// Space constraints must be space name format as they are
 	// used by the providers directly.
-	bindingsNameMap, err := bindings.MapWithSpaceNames(lookup)
+	bindingsNameMap, err := bindings.MapWithSpaceNames(allSpaces)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}

@@ -22,6 +22,7 @@ import (
 	"github.com/juju/juju/apiserver/facades/controller/firewaller"
 	apiservertesting "github.com/juju/juju/apiserver/testing"
 	"github.com/juju/juju/core/network"
+	jujutesting "github.com/juju/juju/juju/testing"
 	"github.com/juju/juju/rpc/params"
 	"github.com/juju/juju/state"
 	statetesting "github.com/juju/juju/state/testing"
@@ -239,7 +240,7 @@ func (s *firewallerSuite) TestGetExposeInfo(c *gc.C) {
 			ExposeToSpaceIDs: []string{network.AlphaSpaceId},
 			ExposeToCIDRs:    []string{"10.0.0.0/0"},
 		},
-	})
+	}, jujutesting.DefaultSpacesWithAlpha())
 	c.Assert(err, jc.ErrorIsNil)
 
 	args := addFakeEntities(params.Entities{Entities: []params.Entity{

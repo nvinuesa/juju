@@ -493,7 +493,7 @@ func (s *MigrationImportSuite) setupSourceApplications(
 			ExposeToSpaceIDs: exposedSpaceIDs,
 			ExposeToCIDRs:    []string{"13.37.0.0/16"},
 		},
-	})
+	}, state.DefaultSpacesWithAlpha())
 	c.Assert(err, jc.ErrorIsNil)
 	if testModel.Type() == state.ModelTypeCAAS {
 		application.SetOperatorStatus(status.StatusInfo{Status: status.Running})

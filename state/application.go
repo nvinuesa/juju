@@ -940,7 +940,7 @@ func (a *Application) UnsetExposeSettings(exposedEndpoints []string) error {
 // operation will overwrites expose settings for each existing endpoint name.
 //
 // See ClearExposed and IsExposed.
-func (a *Application) MergeExposeSettings(exposedEndpoints map[string]ExposedEndpoint) error {
+func (a *Application) MergeExposeSettings(exposedEndpoints map[string]ExposedEndpoint, allSpaces network.SpaceInfos) error {
 	bindings, _, err := readEndpointBindings(a.st, a.globalKey())
 	if err != nil {
 		return errors.Trace(err)
@@ -951,23 +951,15 @@ func (a *Application) MergeExposeSettings(exposedEndpoints map[string]ExposedEnd
 		mergedExposedEndpoints[endpoint] = exposeParams
 	}
 
-	var allSpaceInfos network.SpaceInfos
 	for endpoint, exposeParams := range exposedEndpoints {
 		// The empty endpoint ("") value represents all endpoints.
 		if _, found := bindings[endpoint]; !found && endpoint != "" {
 			return errors.NotFoundf("endpoint %q", endpoint)
 		}
 
-		// Verify expose parameters
-		if len(exposeParams.ExposeToSpaceIDs) != 0 && allSpaceInfos == nil {
-			if allSpaceInfos, err = a.st.AllSpaceInfos(); err != nil {
-				return errors.Trace(err)
-			}
-		}
-
 		exposeParams.ExposeToSpaceIDs = uniqueSortedStrings(exposeParams.ExposeToSpaceIDs)
 		for _, spaceID := range exposeParams.ExposeToSpaceIDs {
-			if allSpaceInfos.GetByID(spaceID) == nil {
+			if allSpaces.GetByID(spaceID) == nil {
 				return errors.NotFoundf("space with ID %q", spaceID)
 			}
 		}

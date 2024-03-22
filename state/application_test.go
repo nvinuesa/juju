@@ -2616,7 +2616,7 @@ func (s *ApplicationSuite) TestApplicationExposed(c *gc.C) {
 	c.Assert(s.mysql.IsExposed(), jc.IsFalse)
 
 	// Check that setting and clearing the exposed flag works correctly.
-	err := s.mysql.MergeExposeSettings(nil)
+	err := s.mysql.MergeExposeSettings(nil, state.DefaultSpacesWithAlpha())
 	c.Assert(err, jc.ErrorIsNil)
 	c.Assert(s.mysql.IsExposed(), jc.IsTrue)
 	err = s.mysql.ClearExposed()
@@ -2624,15 +2624,15 @@ func (s *ApplicationSuite) TestApplicationExposed(c *gc.C) {
 	c.Assert(s.mysql.IsExposed(), jc.IsFalse)
 
 	// Check that setting and clearing the exposed flag repeatedly does not fail.
-	err = s.mysql.MergeExposeSettings(nil)
+	err = s.mysql.MergeExposeSettings(nil, state.DefaultSpacesWithAlpha())
 	c.Assert(err, jc.ErrorIsNil)
-	err = s.mysql.MergeExposeSettings(nil)
-	c.Assert(err, jc.ErrorIsNil)
-	err = s.mysql.ClearExposed()
+	err = s.mysql.MergeExposeSettings(nil, state.DefaultSpacesWithAlpha())
 	c.Assert(err, jc.ErrorIsNil)
 	err = s.mysql.ClearExposed()
 	c.Assert(err, jc.ErrorIsNil)
-	err = s.mysql.MergeExposeSettings(nil)
+	err = s.mysql.ClearExposed()
+	c.Assert(err, jc.ErrorIsNil)
+	err = s.mysql.MergeExposeSettings(nil, state.DefaultSpacesWithAlpha())
 	c.Assert(err, jc.ErrorIsNil)
 	c.Assert(s.mysql.IsExposed(), jc.IsTrue)
 
@@ -2645,7 +2645,7 @@ func (s *ApplicationSuite) TestApplicationExposed(c *gc.C) {
 	assertLife(c, s.mysql, state.Dying)
 	err = s.mysql.ClearExposed()
 	c.Assert(err, gc.ErrorMatches, notAliveErr)
-	err = s.mysql.MergeExposeSettings(nil)
+	err = s.mysql.MergeExposeSettings(nil, state.DefaultSpacesWithAlpha())
 	c.Assert(err, gc.ErrorMatches, notAliveErr)
 
 	// Remove the application and check that both fail.
@@ -2653,7 +2653,7 @@ func (s *ApplicationSuite) TestApplicationExposed(c *gc.C) {
 	c.Assert(err, jc.ErrorIsNil)
 	err = u.Remove(state.NewObjectStore(c, s.State.ModelUUID()))
 	c.Assert(err, jc.ErrorIsNil)
-	err = s.mysql.MergeExposeSettings(nil)
+	err = s.mysql.MergeExposeSettings(nil, state.DefaultSpacesWithAlpha())
 	c.Assert(err, gc.ErrorMatches, notAliveErr)
 	err = s.mysql.ClearExposed()
 	c.Assert(err, gc.ErrorMatches, notAliveErr)
@@ -2667,15 +2667,15 @@ func (s *ApplicationSuite) TestApplicationExposeEndpoints(c *gc.C) {
 	err := s.mysql.MergeExposeSettings(map[string]state.ExposedEndpoint{
 		"":               {},
 		"bogus-endpoint": {},
-	})
+	}, state.DefaultSpacesWithAlpha())
 	c.Assert(err, gc.ErrorMatches, `.*endpoint "bogus-endpoint" not found`)
 	err = s.mysql.MergeExposeSettings(map[string]state.ExposedEndpoint{
 		"server": {ExposeToSpaceIDs: []string{"bogus-space-id"}},
-	})
+	}, state.DefaultSpacesWithAlpha())
 	c.Assert(err, gc.ErrorMatches, `.*space with ID "bogus-space-id" not found`)
 	err = s.mysql.MergeExposeSettings(map[string]state.ExposedEndpoint{
 		"server": {ExposeToCIDRs: []string{"not-a-cidr"}},
-	})
+	}, state.DefaultSpacesWithAlpha())
 	c.Assert(err, gc.ErrorMatches, `.*unable to parse "not-a-cidr" as a CIDR.*`)
 
 	// Check that the expose parameters are properly persisted
@@ -2685,7 +2685,7 @@ func (s *ApplicationSuite) TestApplicationExposeEndpoints(c *gc.C) {
 			ExposeToCIDRs:    []string{"13.37.0.0/16"},
 		},
 	}
-	err = s.mysql.MergeExposeSettings(exp)
+	err = s.mysql.MergeExposeSettings(exp, state.DefaultSpacesWithAlpha())
 	c.Assert(err, jc.ErrorIsNil)
 
 	c.Assert(s.mysql.ExposedEndpoints(), gc.DeepEquals, exp)
@@ -2707,7 +2707,7 @@ func (s *ApplicationSuite) TestApplicationExposeEndpointMergeLogic(c *gc.C) {
 			ExposeToCIDRs:    []string{"13.37.0.0/16"},
 		},
 	}
-	err := s.mysql.MergeExposeSettings(initial)
+	err := s.mysql.MergeExposeSettings(initial, state.DefaultSpacesWithAlpha())
 	c.Assert(err, jc.ErrorIsNil)
 	c.Assert(s.mysql.ExposedEndpoints(), gc.DeepEquals, initial)
 
@@ -2722,7 +2722,7 @@ func (s *ApplicationSuite) TestApplicationExposeEndpointMergeLogic(c *gc.C) {
 			ExposeToCIDRs:    []string{"13.37.0.0/16"},
 		},
 	}
-	err = s.mysql.MergeExposeSettings(updated)
+	err = s.mysql.MergeExposeSettings(updated, state.DefaultSpacesWithAlpha())
 	c.Assert(err, jc.ErrorIsNil)
 	c.Assert(s.mysql.ExposedEndpoints(), gc.DeepEquals, updated)
 }
@@ -2735,7 +2735,7 @@ func (s *ApplicationSuite) TestApplicationExposeWithoutSpaceAndCIDR(c *gc.C) {
 		// If the expose params are empty, an implicit 0.0.0.0/0 will
 		// be assumed (equivalent to: juju expose --endpoints server)
 		"server": {},
-	})
+	}, state.DefaultSpacesWithAlpha())
 	c.Assert(err, jc.ErrorIsNil)
 
 	exp := map[string]state.ExposedEndpoint{
@@ -2760,7 +2760,7 @@ func (s *ApplicationSuite) TestApplicationUnsetExposeEndpoints(c *gc.C) {
 			ExposeToCIDRs:    []string{"13.37.0.0/16"},
 		},
 	}
-	err := s.mysql.MergeExposeSettings(initial)
+	err := s.mysql.MergeExposeSettings(initial, state.DefaultSpacesWithAlpha())
 	c.Assert(err, jc.ErrorIsNil)
 	c.Assert(s.mysql.ExposedEndpoints(), gc.DeepEquals, initial)
 
@@ -4018,7 +4018,7 @@ func (s *ApplicationSuite) TestWatchApplication(c *gc.C) {
 	// Make one change (to a separate instance), check one event.
 	application, err := s.State.Application(s.mysql.Name())
 	c.Assert(err, jc.ErrorIsNil)
-	err = application.MergeExposeSettings(nil)
+	err = application.MergeExposeSettings(nil, state.DefaultSpacesWithAlpha())
 	c.Assert(err, jc.ErrorIsNil)
 	wc.AssertOneChange()
 

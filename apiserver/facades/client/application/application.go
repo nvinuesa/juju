@@ -1344,7 +1344,11 @@ func (api *APIBase) Expose(ctx context.Context, args params.ApplicationExpose) e
 		}
 	}
 
-	if err = app.MergeExposeSettings(mappedExposeParams); err != nil {
+	allSpaces, err := api.spaceService.GetAllSpaces(ctx)
+	if err != nil {
+		return apiservererrors.ServerError(err)
+	}
+	if err = app.MergeExposeSettings(mappedExposeParams, allSpaces); err != nil {
 		return apiservererrors.ServerError(err)
 	}
 	return nil

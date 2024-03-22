@@ -314,7 +314,7 @@ func (s *statusUnitTestSuite) TestApplicationWithExposedEndpoints(c *gc.C) {
 			ExposeToSpaceIDs: []string{network.AlphaSpaceId},
 			ExposeToCIDRs:    []string{"10.0.0.0/24", "192.168.0.0/24"},
 		},
-	})
+	}, nil)
 	c.Assert(err, jc.ErrorIsNil)
 
 	conn := s.OpenControllerModelAPI(c)

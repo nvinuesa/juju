@@ -107,10 +107,6 @@ func (s *stateShim) Model() (Model, error) {
 	return &modelShim{m}, err
 }
 
-func (s *stateShim) AllSpaceInfos() (network.SpaceInfos, error) {
-	return s.st.AllSpaceInfos()
-}
-
 type stateCharmShim struct {
 	*state.Charm
 }

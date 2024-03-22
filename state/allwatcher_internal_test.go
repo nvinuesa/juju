@@ -201,7 +201,7 @@ func (s *allWatcherBaseSuite) setUpScenario(c *gc.C, st *State, units int) (enti
 	})
 
 	wordpress := AddTestingApplication(c, st, s.objectStore, "wordpress", AddTestingCharm(c, st, "wordpress"), nil)
-	err = wordpress.MergeExposeSettings(nil)
+	err = wordpress.MergeExposeSettings(nil, nil)
 	c.Assert(err, jc.ErrorIsNil)
 	err = wordpress.SetMinUnits(units)
 	c.Assert(err, jc.ErrorIsNil)
@@ -1897,7 +1897,7 @@ func testChangeApplications(c *gc.C, owner names.UserTag, runChangeTests func(*g
 		},
 		func(c *gc.C, st *State, objectStore objectstore.ObjectStore) changeTestCase {
 			wordpress := AddTestingApplication(c, st, objectStore, "wordpress", AddTestingCharm(c, st, "wordpress"), nil)
-			err := wordpress.MergeExposeSettings(nil)
+			err := wordpress.MergeExposeSettings(nil, DefaultSpacesWithAlpha())
 			c.Assert(err, jc.ErrorIsNil)
 			err = wordpress.SetMinUnits(42)
 			c.Assert(err, jc.ErrorIsNil)

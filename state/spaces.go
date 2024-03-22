@@ -264,27 +264,6 @@ func (st *State) SpaceByName(name string) (*Space, error) {
 	return &Space{st, doc}, nil
 }
 
-// AllSpaceInfos returns SpaceInfos for all spaces in the model.
-func (st *State) AllSpaceInfos() (network.SpaceInfos, error) {
-	spaces, err := st.AllSpaces()
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-
-	subs, err := st.AllSubnetInfos()
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-
-	result := make(network.SpaceInfos, len(spaces))
-	for i, space := range spaces {
-		if result[i], err = space.networkSpace(subs); err != nil {
-			return nil, err
-		}
-	}
-	return result, nil
-}
-
 // AllSpaces returns all spaces for the model.
 func (st *State) AllSpaces() ([]*Space, error) {
 	spacesCollection, closer := st.db().GetCollection(spacesC)

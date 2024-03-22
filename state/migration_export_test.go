@@ -580,7 +580,7 @@ func (s *MigrationExportSuite) TestApplicationExposeParameters(c *gc.C) {
 			ExposeToSpaceIDs: []string{serverSpace.Id()},
 			ExposeToCIDRs:    []string{"13.37.0.0/16"},
 		},
-	})
+	}, state.DefaultSpacesWithAlpha())
 	c.Assert(err, jc.ErrorIsNil)
 
 	model, err := s.State.Export(map[string]string{}, state.NewObjectStore(c, s.State.ModelUUID()))
