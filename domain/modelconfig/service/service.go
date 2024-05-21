@@ -201,16 +201,22 @@ func (s *Service) reconcileRemovedAttributes(
 	return updates, nil
 }
 
-// SetModelConfig will remove any existing model config for the model and
-// replace with the new config provided. The new config will also be hydrated
-// with any model default attributes that have not been set on the config.
-func (s *Service) SetModelConfig(
+type ModelConfigSetter interface {
+	Run(context.Context) (map[string]any, error)
+}
+
+func (s *Service) RunModelConfigSetter(
 	ctx context.Context,
-	cfg map[string]any,
+	setter ModelConfigSetter,
 ) error {
 	defaults, err := s.defaultsProvider.ModelDefaults(ctx)
 	if err != nil {
 		return fmt.Errorf("getting model defaults: %w", err)
+	}
+
+	cfg, err := setter.Run(ctx)
+	if err != nil {
+		return fmt.Errorf("getting model config from function: %w", err)
 	}
 
 	for k, v := range defaults {
@@ -236,6 +242,18 @@ func (s *Service) SetModelConfig(
 	}
 
 	return s.st.SetModelConfig(ctx, rawCfg)
+}
+
+// SetModelConfig will remove any existing model config for the model and
+// replace with the new config provided. The new config will also be hydrated
+// with any model default attributes that have not been set on the config.
+func (s *Service) SetModelConfig(
+	ctx context.Context,
+	cfg map[string]any,
+) error {
+	return s.RunModelConfigSetter(ctx, defaultModelConfigSetter(func(context.Context) (map[string]any, error) {
+		return cfg, nil
+	}))
 }
 
 // UpdateModelConfig takes a set of updated and removed attributes to apply.
@@ -377,4 +395,10 @@ func (s *WatchableService) Watch() (watcher.StringsWatcher, error) {
 		"model_config", changestream.All,
 		InitialNamespaceChanges(s.st.AllKeysQuery()),
 	)
+}
+
+type defaultModelConfigSetter func(context.Context) (map[string]any, error)
+
+func (f defaultModelConfigSetter) Run(ctx context.Context) (map[string]any, error) {
+	return f(ctx)
 }
