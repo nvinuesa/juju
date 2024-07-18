@@ -16,12 +16,11 @@ import (
 	loggertesting "github.com/juju/juju/internal/logger/testing"
 	"github.com/juju/juju/internal/worker/common"
 	"github.com/juju/juju/internal/worker/provisioner"
-	"github.com/juju/juju/internal/worker/provisioner/mocks"
 )
 
 type containerManifoldSuite struct {
-	machine *mocks.MockContainerMachine
-	getter  *mocks.MockContainerMachineGetter
+	machine *MockContainerMachine
+	getter  *MockContainerMachineGetter
 }
 
 var _ = gc.Suite(&containerManifoldSuite{})
@@ -168,8 +167,8 @@ func (s *containerManifoldSuite) TestContainerProvisioningManifoldMachineDead(c 
 func (s *containerManifoldSuite) setupMocks(c *gc.C) *gomock.Controller {
 	ctrl := gomock.NewController(c)
 
-	s.machine = mocks.NewMockContainerMachine(ctrl)
-	s.getter = mocks.NewMockContainerMachineGetter(ctrl)
+	s.machine = NewMockContainerMachine(ctrl)
+	s.getter = NewMockContainerMachineGetter(ctrl)
 
 	return ctrl
 }

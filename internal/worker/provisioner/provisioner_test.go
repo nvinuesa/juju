@@ -36,16 +36,16 @@ import (
 	coretesting "github.com/juju/juju/internal/testing"
 	coretools "github.com/juju/juju/internal/tools"
 	"github.com/juju/juju/internal/worker/provisioner"
-	"github.com/juju/juju/internal/worker/provisioner/mocks"
 	"github.com/juju/juju/rpc/params"
 )
 
 type CommonProvisionerSuite struct {
 	jujutesting.IsolationSuite
 
-	controllerAPI *mocks.MockControllerAPI
-	machinesAPI   *mocks.MockMachinesAPI
-	broker        *environmocks.MockEnviron
+	controllerAPI  *MockControllerAPI
+	machineService *MockMachineService
+	machinesAPI    *MockMachinesAPI
+	broker         *environmocks.MockEnviron
 
 	modelConfigCh chan struct{}
 	machinesCh    chan []string
@@ -55,8 +55,9 @@ type CommonProvisionerSuite struct {
 
 func (s *CommonProvisionerSuite) setUpMocks(c *gc.C) *gomock.Controller {
 	ctrl := gomock.NewController(c)
-	s.controllerAPI = mocks.NewMockControllerAPI(ctrl)
-	s.machinesAPI = mocks.NewMockMachinesAPI(ctrl)
+	s.controllerAPI = NewMockControllerAPI(ctrl)
+	s.machineService = NewMockMachineService(ctrl)
+	s.machinesAPI = NewMockMachinesAPI(ctrl)
 	s.broker = environmocks.NewMockEnviron(ctrl)
 	s.expectAuth()
 	s.expectStartup(c)
@@ -245,7 +246,9 @@ func (s *CommonProvisionerSuite) newEnvironProvisioner(c *gc.C) provisioner.Prov
 	c.Assert(err, jc.ErrorIsNil)
 
 	w, err := provisioner.NewEnvironProvisioner(
-		s.controllerAPI, s.machinesAPI,
+		s.controllerAPI,
+		s.machineService,
+		s.machinesAPI,
 		mockToolsFinder{},
 		&mockDistributionGroupFinder{},
 		agentConfig,
@@ -295,6 +298,7 @@ func (s *ProvisionerSuite) TestMachineStartedAndStopped(c *gc.C) {
 	s.machinesAPI.EXPECT().Machines(gomock.Any(), mTag).Return([]apiprovisioner.MachineResult{{
 		Machine: m666,
 	}}, nil).Times(2)
+	s.machineService.EXPECT().SetMachineCloudInstance(gomock.Any(), m666.id, instance.Id("inst-666"), nil)
 	s.machinesAPI.EXPECT().ProvisioningInfo(gomock.Any(), []names.MachineTag{mTag}).Return(params.ProvisioningInfoResults{
 		Results: []params.ProvisioningInfoResult{{
 			Result: &params.ProvisioningInfo{

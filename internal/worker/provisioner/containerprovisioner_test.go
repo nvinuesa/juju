@@ -64,7 +64,7 @@ func (s *lxdProvisionerSuite) newLXDProvisioner(c *gc.C, ctrl *gomock.Controller
 
 	toolsFinder := &mockToolsFinder{}
 	w, err := provisioner.NewContainerProvisioner(
-		instance.LXD, s.controllerAPI, s.machinesAPI, loggertesting.WrapCheckLog(c),
+		instance.LXD, s.controllerAPI, s.machineService, s.machinesAPI, loggertesting.WrapCheckLog(c),
 		cfg, s.broker,
 		toolsFinder, &mockDistributionGroupFinder{}, &credentialAPIForTest{})
 	c.Assert(err, jc.ErrorIsNil)
@@ -130,6 +130,7 @@ func (s *lxdProvisionerSuite) TestContainerStartedAndStopped(c *gc.C) {
 	s.broker.EXPECT().StartInstance(gomock.Any(), newDefaultStartInstanceParamsMatcher(c, startArg)).Return(&environs.StartInstanceResult{
 		Instance: &testInstance{id: "inst-666"},
 	}, nil)
+	s.machineService.EXPECT().SetMachineCloudInstance(gomock.Any(), c666.id, instance.Id("inst-666"), nil)
 
 	s.sendMachineContainersChange(c, c666.Id())
 	s.checkStartInstance(c, c666)

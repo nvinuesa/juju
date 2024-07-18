@@ -58,7 +58,7 @@ func (st *State) SetMachineCloudInstance(
 	ctx context.Context,
 	machineUUID string,
 	instanceID instance.Id,
-	hardwareCharacteristics instance.HardwareCharacteristics,
+	hardwareCharacteristics *instance.HardwareCharacteristics,
 ) error {
 	db, err := st.DB()
 	if err != nil {
@@ -99,7 +99,7 @@ VALUES ($instanceTag.*)
 		if err := tx.Query(ctx, setInstanceDataStmt, instanceData).Run(); err != nil {
 			return errors.Annotatef(err, "inserting machine cloud instance for machine %q", machineUUID)
 		}
-		if instanceTags := tagsFromHardwareCharacteristics(machineUUID, &hardwareCharacteristics); len(instanceTags) > 0 {
+		if instanceTags := tagsFromHardwareCharacteristics(machineUUID, hardwareCharacteristics); len(instanceTags) > 0 {
 			if err := tx.Query(ctx, setInstanceTagStmt, instanceTags).Run(); err != nil {
 				return errors.Annotatef(err, "inserting instance tags for machine %q", machineUUID)
 			}
