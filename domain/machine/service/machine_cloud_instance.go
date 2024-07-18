@@ -24,7 +24,7 @@ func (s *Service) SetMachineCloudInstance(
 	ctx context.Context,
 	machineUUID string,
 	instanceID instance.Id,
-	hardwareCharacteristics instance.HardwareCharacteristics,
+	hardwareCharacteristics *instance.HardwareCharacteristics,
 ) error {
 	return errors.Annotatef(
 		s.st.SetMachineCloudInstance(ctx, machineUUID, instanceID, hardwareCharacteristics),
@@ -40,5 +40,4 @@ func (s *Service) DeleteMachineCloudInstance(ctx context.Context, machineUUID st
 		s.st.DeleteMachineCloudInstance(ctx, machineUUID),
 		"deleting machine cloud instance for machine %q", machineUUID,
 	)
-
 }

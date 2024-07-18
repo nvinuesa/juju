@@ -33,7 +33,6 @@ import (
 	coretesting "github.com/juju/juju/internal/testing"
 	"github.com/juju/juju/internal/uuid"
 	"github.com/juju/juju/internal/worker/provisioner"
-	"github.com/juju/juju/internal/worker/provisioner/mocks"
 	"github.com/juju/juju/rpc/params"
 )
 
@@ -47,7 +46,7 @@ type containerWorkerSuite struct {
 	caller         *apimocks.MockAPICaller
 	machine        *provisionermocks.MockMachineProvisioner
 	manager        *testing.MockManager
-	stringsWatcher *mocks.MockStringsWatcher
+	stringsWatcher *MockStringsWatcher
 
 	machineLock *fakeMachineLock
 
@@ -120,7 +119,7 @@ func (s *containerWorkerSuite) TestContainerSetupAndProvisionerErrWatcherClose(c
 	s.initialiser = testing.NewMockInitialiser(ctrl)
 	s.caller = apimocks.NewMockAPICaller(ctrl)
 	s.caller.EXPECT().BestFacadeVersion("Provisioner").Return(0).AnyTimes()
-	s.stringsWatcher = mocks.NewMockStringsWatcher(ctrl)
+	s.stringsWatcher = NewMockStringsWatcher(ctrl)
 	s.machine = provisionermocks.NewMockMachineProvisioner(ctrl)
 	s.manager = testing.NewMockManager(ctrl)
 	s.machine.EXPECT().MachineTag().Return(names.NewMachineTag("0")).AnyTimes()
@@ -196,7 +195,7 @@ func (s *containerWorkerSuite) patch(c *gc.C) *gomock.Controller {
 	s.caller.EXPECT().BestFacadeVersion("Provisioner").Return(0).AnyTimes()
 	s.caller.EXPECT().BestFacadeVersion("NotifyWatcher").Return(0).AnyTimes()
 	s.caller.EXPECT().BestFacadeVersion("StringsWatcher").Return(0).AnyTimes()
-	s.stringsWatcher = mocks.NewMockStringsWatcher(ctrl)
+	s.stringsWatcher = NewMockStringsWatcher(ctrl)
 	s.machine = provisionermocks.NewMockMachineProvisioner(ctrl)
 	s.manager = testing.NewMockManager(ctrl)
 

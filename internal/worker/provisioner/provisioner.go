@@ -60,6 +60,7 @@ type containerProvisioner struct {
 type provisioner struct {
 	Provisioner
 	controllerAPI           ControllerAPI
+	machineService          MachineService
 	machinesAPI             MachinesAPI
 	agentConfig             agent.Config
 	logger                  logger.Logger
@@ -154,6 +155,7 @@ func (p *provisioner) getStartTask(ctx context.Context, harvestMode config.Harve
 		Logger:                     p.logger,
 		HarvestMode:                harvestMode,
 		ControllerAPI:              p.controllerAPI,
+		MachineService:             p.machineService,
 		MachinesAPI:                p.machinesAPI,
 		DistributionGroupFinder:    p.distributionGroupFinder,
 		ToolsFinder:                p.toolsFinder,
@@ -176,6 +178,7 @@ func (p *provisioner) getStartTask(ctx context.Context, harvestMode config.Harve
 // from the environment and allocates them to the new machines.
 func NewEnvironProvisioner(
 	controllerAPI ControllerAPI,
+	machineService MachineService,
 	machinesAPI MachinesAPI,
 	toolsFinder ToolsFinder,
 	distributionGroupFinder DistributionGroupFinder,
@@ -192,6 +195,7 @@ func NewEnvironProvisioner(
 			agentConfig:             agentConfig,
 			logger:                  logger,
 			controllerAPI:           controllerAPI,
+			machineService:          machineService,
 			machinesAPI:             machinesAPI,
 			toolsFinder:             toolsFinder,
 			distributionGroupFinder: distributionGroupFinder,
@@ -296,6 +300,7 @@ func (p *environProvisioner) scopedContext() (context.Context, context.CancelFun
 func NewContainerProvisioner(
 	containerType instance.ContainerType,
 	controllerAPI ControllerAPI,
+	machineService MachineService,
 	machinesAPI MachinesAPI,
 	logger logger.Logger,
 	agentConfig agent.Config,
@@ -309,6 +314,7 @@ func NewContainerProvisioner(
 			agentConfig:             agentConfig,
 			logger:                  logger,
 			controllerAPI:           controllerAPI,
+			machineService:          machineService,
 			machinesAPI:             machinesAPI,
 			broker:                  broker,
 			toolsFinder:             toolsFinder,

@@ -115,6 +115,7 @@ type TaskConfig struct {
 	Logger                     logger.Logger
 	HarvestMode                config.HarvestMode
 	ControllerAPI              ControllerAPI
+	MachineService             MachineService
 	MachinesAPI                MachinesAPI
 	DistributionGroupFinder    DistributionGroupFinder
 	ToolsFinder                ToolsFinder
@@ -141,6 +142,7 @@ func NewProvisionerTask(cfg TaskConfig) (ProvisionerTask, error) {
 		hostTag:                    cfg.HostTag,
 		logger:                     cfg.Logger,
 		controllerAPI:              cfg.ControllerAPI,
+		machineService:             cfg.MachineService,
 		machinesAPI:                cfg.MachinesAPI,
 		distributionGroupFinder:    cfg.DistributionGroupFinder,
 		toolsFinder:                cfg.ToolsFinder,
@@ -186,6 +188,7 @@ type provisionerTask struct {
 	hostTag                    names.Tag
 	logger                     logger.Logger
 	controllerAPI              ControllerAPI
+	machineService             MachineService
 	machinesAPI                MachinesAPI
 	distributionGroupFinder    DistributionGroupFinder
 	toolsFinder                ToolsFinder
@@ -1505,6 +1508,8 @@ func (task *provisionerTask) doStartMachine(
 	volumeNameToAttachmentInfo := volumeAttachmentsToAPIServer(result.VolumeAttachments)
 	instanceID := result.Instance.Id()
 
+	// TODO(nvinuesa): The charm LXD profiles will have to be re-wired once
+	// they are implemented as a dqlite domain.
 	// Gather the charm LXD profile names, including the lxd profile names from
 	// the container brokers.
 	charmLXDProfiles, err := task.gatherCharmLXDProfiles(
@@ -1513,6 +1518,8 @@ func (task *provisionerTask) doStartMachine(
 		return errors.Trace(err)
 	}
 
+	// TODO(nvinuesa): We are still double writing instance info / machine
+	// cloud instance (dqlite).
 	if err := machine.SetInstanceInfo(
 		ctx,
 		instanceID,
@@ -1523,6 +1530,22 @@ func (task *provisionerTask) doStartMachine(
 		volumes,
 		volumeNameToAttachmentInfo,
 		charmLXDProfiles,
+	); err != nil {
+		// We need to stop the instance right away here, set error status and go on.
+		if err2 := task.setErrorStatus(ctx, "cannot register instance for machine %v: %v", machine, err); err2 != nil {
+			task.logger.Errorf("%v", errors.Annotate(err2, "setting machine status"))
+		}
+		if err2 := task.broker.StopInstances(providerContext, instanceID); err2 != nil {
+			task.logger.Errorf("%v", errors.Annotate(err2, "after failing to set instance info"))
+		}
+		return errors.Annotate(err, "setting instance info")
+	}
+
+	if err := task.machineService.SetMachineCloudInstance(
+		ctx,
+		machine.Id(),
+		instanceID,
+		result.Hardware,
 	); err != nil {
 		// We need to stop the instance right away here, set error status and go on.
 		if err2 := task.setErrorStatus(ctx, "cannot register instance for machine %v: %v", machine, err); err2 != nil {

@@ -31,17 +31,23 @@ type ManifoldSuite struct {
 var _ = gc.Suite(&ManifoldSuite{})
 
 func (s *ManifoldSuite) makeManifold(c *gc.C) dependency.Manifold {
-	fakeNewProvFunc := func(provisioner.ControllerAPI, provisioner.MachinesAPI, provisioner.ToolsFinder,
+	fakeNewProvFunc := func(provisioner.ControllerAPI, provisioner.MachineService, provisioner.MachinesAPI, provisioner.ToolsFinder,
 		provisioner.DistributionGroupFinder, agent.Config, logger.Logger, provisioner.Environ, common.CredentialAPI,
 	) (provisioner.Provisioner, error) {
 		s.stub.AddCall("NewProvisionerFunc")
 		return struct{ provisioner.Provisioner }{}, nil
+	}
+	fakeGetMachineServiceFunc := func(getter dependency.Getter, name string) (provisioner.MachineService, error) {
+		s.stub.AddCall("GetMachineServiceFunc")
+		return struct{ provisioner.MachineService }{}, nil
 	}
 	return provisioner.Manifold(provisioner.ManifoldConfig{
 		AgentName:                    "agent",
 		APICallerName:                "api-caller",
 		Logger:                       loggertesting.WrapCheckLog(c),
 		EnvironName:                  "environ",
+		ServiceFactoryName:           "service-factory",
+		GetMachineService:            fakeGetMachineServiceFunc,
 		NewProvisionerFunc:           fakeNewProvFunc,
 		NewCredentialValidatorFacade: func(base.APICaller) (common.CredentialAPI, error) { return nil, nil },
 	})
@@ -53,7 +59,7 @@ func (s *ManifoldSuite) SetUpTest(c *gc.C) {
 
 func (s *ManifoldSuite) TestManifold(c *gc.C) {
 	manifold := s.makeManifold(c)
-	c.Check(manifold.Inputs, jc.SameContents, []string{"agent", "api-caller", "environ"})
+	c.Check(manifold.Inputs, jc.SameContents, []string{"agent", "api-caller", "environ", "service-factory"})
 	c.Check(manifold.Output, gc.IsNil)
 	c.Check(manifold.Start, gc.NotNil)
 }
@@ -99,8 +105,8 @@ func (s *ManifoldSuite) TestStarts(c *gc.C) {
 		"environ":    struct{ environs.Environ }{},
 	}))
 	c.Check(w, gc.NotNil)
-	c.Check(err, jc.ErrorIsNil)
-	s.stub.CheckCallNames(c, "NewProvisionerFunc")
+	c.Assert(err, jc.ErrorIsNil)
+	s.stub.CheckCallNames(c, "GetMachineServiceFunc", "NewProvisionerFunc")
 }
 
 type fakeAgent struct {

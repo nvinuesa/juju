@@ -33,6 +33,7 @@ type ContainerSetup struct {
 	containerType           instance.ContainerType
 	provisioner             ContainerProvisionerAPI
 	controllerAPI           ControllerAPI
+	machineService          MachineService
 	machinesAPI             MachinesAPI
 	toolsFinder             ToolsFinder
 	distributionGroupFinder DistributionGroupFinder
@@ -188,6 +189,7 @@ func (cs *ContainerSetup) initialiseContainerProvisioner(ctx context.Context) (P
 	w, err := NewContainerProvisioner(
 		cs.containerType,
 		cs.controllerAPI,
+		cs.machineService,
 		cs.machinesAPI,
 		cs.logger,
 		cs.config,

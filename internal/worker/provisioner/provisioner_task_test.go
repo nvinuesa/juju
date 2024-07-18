@@ -51,7 +51,6 @@ import (
 	coretesting "github.com/juju/juju/internal/testing"
 	"github.com/juju/juju/internal/tools"
 	"github.com/juju/juju/internal/worker/provisioner"
-	"github.com/juju/juju/internal/worker/provisioner/mocks"
 	"github.com/juju/juju/rpc/params"
 )
 
@@ -70,8 +69,9 @@ type ProvisionerTaskSuite struct {
 	machineErrorRetryChanges chan struct{}
 	machineErrorRetryWatcher watcher.NotifyWatcher
 
-	controllerAPI *mocks.MockControllerAPI
-	machinesAPI   *mocks.MockMachinesAPI
+	controllerAPI  *MockControllerAPI
+	machineService *MockMachineService
+	machinesAPI    *MockMachinesAPI
 
 	instances      []instances.Instance
 	instanceBroker *testInstanceBroker
@@ -372,6 +372,7 @@ func (s *ProvisionerTaskSuite) TestEvenZonePlacement(c *gc.C) {
 					Instance: &testInstance{id: "instance-" + m.id},
 				}, nil
 			})
+		s.machineService.EXPECT().SetMachineCloudInstance(gomock.Any(), gomock.Any(), instance.Id("instance-"+m.id), nil)
 	}
 
 	task := s.newProvisionerTaskWithBroker(c, broker, nil, numProvisionWorkersForTesting, defaultHarvestMode)
@@ -466,6 +467,7 @@ func (s *ProvisionerTaskSuite) TestMultipleSpaceConstraints(c *gc.C) {
 	broker.EXPECT().StartInstance(s.callCtx, spaceConstraints).Return(&environs.StartInstanceResult{
 		Instance: &testInstance{id: "instance-0"},
 	}, nil)
+	s.machineService.EXPECT().SetMachineCloudInstance(gomock.Any(), m0.id, instance.Id("instance-0"), nil)
 	task := s.newProvisionerTaskWithBroker(c, broker, nil, numProvisionWorkersForTesting, defaultHarvestMode)
 
 	s.sendModelMachinesChange(c, "0")
@@ -524,6 +526,7 @@ func (s *ProvisionerTaskSuite) TestZoneConstraintsNoDistributionGroup(c *gc.C) {
 	broker.EXPECT().StartInstance(s.callCtx, azConstraints).Return(&environs.StartInstanceResult{
 		Instance: &testInstance{id: "instance-0"},
 	}, nil)
+	s.machineService.EXPECT().SetMachineCloudInstance(gomock.Any(), m0.id, instance.Id("instance-0"), nil)
 	task := s.newProvisionerTaskWithBroker(c, broker, nil, numProvisionWorkersForTesting, defaultHarvestMode)
 
 	s.sendModelMachinesChange(c, "0")
@@ -555,6 +558,7 @@ func (s *ProvisionerTaskSuite) TestZoneConstraintsNoDistributionGroupRetry(c *gc
 		broker.EXPECT().StartInstance(s.callCtx, azConstraints).Return(&environs.StartInstanceResult{
 			Instance: &testInstance{id: "instance-1"},
 		}, nil),
+		s.machineService.EXPECT().SetMachineCloudInstance(gomock.Any(), m0.id, instance.Id("instance-1"), nil),
 	)
 
 	task := s.newProvisionerTaskWithBroker(c, broker, nil, numProvisionWorkersForTesting, defaultHarvestMode)
@@ -591,6 +595,7 @@ func (s *ProvisionerTaskSuite) TestZoneConstraintsWithDistributionGroup(c *gc.C)
 	broker.EXPECT().StartInstance(s.callCtx, azConstraints).Return(&environs.StartInstanceResult{
 		Instance: &testInstance{id: "instance-0"},
 	}, nil)
+	s.machineService.EXPECT().SetMachineCloudInstance(gomock.Any(), m0.id, instance.Id("instance-0"), nil)
 
 	// Another machine from the same distribution group is already in az1,
 	// so we expect the machine to be created in az2.
@@ -627,6 +632,7 @@ func (s *ProvisionerTaskSuite) TestZoneConstraintsWithDistributionGroupRetry(c *
 		broker.EXPECT().StartInstance(s.callCtx, azConstraints).Return(&environs.StartInstanceResult{
 			Instance: &testInstance{id: "instance-1"},
 		}, nil),
+		s.machineService.EXPECT().SetMachineCloudInstance(gomock.Any(), m0.id, instance.Id("instance-1"), nil),
 	)
 
 	// Another machine from the same distribution group is already in az1,
@@ -665,6 +671,7 @@ func (s *ProvisionerTaskSuite) TestZoneRestrictiveConstraintsWithDistributionGro
 		broker.EXPECT().StartInstance(s.callCtx, azConstraints).Return(&environs.StartInstanceResult{
 			Instance: &testInstance{id: "instance-2"},
 		}, nil),
+		s.machineService.EXPECT().SetMachineCloudInstance(gomock.Any(), m0.id, instance.Id("instance-2"), nil),
 	)
 
 	// Another machine from the same distribution group is already in az1,
@@ -856,6 +863,7 @@ func (s *ProvisionerTaskSuite) TestDeferStopRequestsForMachinesStillProvisioning
 				Instance: &testInstance{id: "instance-0"},
 			}, nil
 		}),
+		s.machineService.EXPECT().SetMachineCloudInstance(gomock.Any(), m0.id, instance.Id("instance-0"), nil),
 		broker.EXPECT().StopInstances(s.callCtx, gomock.Any()).DoAndReturn(func(ctx envcontext.ProviderCallContext, ids ...instance.Id) error {
 			c.Assert(len(ids), gc.Equals, 1)
 			c.Assert(ids[0], gc.DeepEquals, instance.Id("0"))
@@ -956,6 +964,7 @@ func (s *ProvisionerTaskSuite) TestUpdatedZonesReflectedInAZMachineSlice(c *gc.C
 			c.Fatalf("timed out writing to step channel")
 		}
 	})
+	s.machineService.EXPECT().SetMachineCloudInstance(gomock.Any(), m0.id, instance.Id("instance-0"), nil).MinTimes(1)
 
 	task := s.newProvisionerTaskWithBroker(c, broker, nil, numProvisionWorkersForTesting, defaultHarvestMode)
 
@@ -1174,6 +1183,7 @@ func (s *ProvisionerTaskSuite) TestProvisioningMachinesWithRequestedRootDisk(c *
 	exp.StartInstance(s.callCtx, newDefaultStartInstanceParamsMatcher(c, startArg)).Return(&environs.StartInstanceResult{
 		Instance: &testInstance{id: "instance-0"},
 	}, nil)
+	s.machineService.EXPECT().SetMachineCloudInstance(gomock.Any(), m0.id, instance.Id("instance-0"), nil)
 
 	task := s.newProvisionerTaskWithBroker(c, broker, nil, numProvisionWorkersForTesting, config.HarvestAll)
 	defer workertest.CleanKill(c, task)
@@ -1263,6 +1273,7 @@ func (s *ProvisionerTaskSuite) TestProvisioningMachinesWithRequestedVolumes(c *g
 	exp.StartInstance(s.callCtx, newDefaultStartInstanceParamsMatcher(c, startArg)).Return(&environs.StartInstanceResult{
 		Instance: &testInstance{id: "instance-0"},
 	}, nil)
+	s.machineService.EXPECT().SetMachineCloudInstance(gomock.Any(), m0.id, instance.Id("instance-0"), nil)
 
 	task := s.newProvisionerTaskWithBroker(c, broker, nil, numProvisionWorkersForTesting, config.HarvestAll)
 	defer workertest.CleanKill(c, task)
@@ -1483,6 +1494,7 @@ func (s *ProvisionerTaskSuite) newProvisionerTaskWithBrokerAndEventCb(
 		Logger:                     loggertesting.WrapCheckLog(c),
 		HarvestMode:                harvestingMethod,
 		ControllerAPI:              s.controllerAPI,
+		MachineService:             s.machineService,
 		MachinesAPI:                s.machinesAPI,
 		DistributionGroupFinder:    &mockDistributionGroupFinder{groups: distributionGroups},
 		ToolsFinder:                mockToolsFinder{},
@@ -1501,8 +1513,9 @@ func (s *ProvisionerTaskSuite) newProvisionerTaskWithBrokerAndEventCb(
 
 func (s *ProvisionerTaskSuite) setUpMocks(c *gc.C) *gomock.Controller {
 	ctrl := gomock.NewController(c)
-	s.controllerAPI = mocks.NewMockControllerAPI(ctrl)
-	s.machinesAPI = mocks.NewMockMachinesAPI(ctrl)
+	s.controllerAPI = NewMockControllerAPI(ctrl)
+	s.machineService = NewMockMachineService(ctrl)
+	s.machinesAPI = NewMockMachinesAPI(ctrl)
 	s.expectAuth()
 	return ctrl
 }
