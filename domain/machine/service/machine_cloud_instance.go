@@ -42,3 +42,13 @@ func (s *Service) DeleteMachineCloudInstance(ctx context.Context, machineUUID st
 	)
 
 }
+
+// InstanceID returns the cloud specific instance id for this machine.
+// If the machine is not provisioned, it returns a NotProvisionedError.
+func (s *Service) InstanceID(ctx context.Context, machineUUID string) (string, error) {
+	instanceId, err := s.st.InstanceID(ctx, machineUUID)
+	if err != nil {
+		return "", errors.Annotatef(err, "retrieving cloud instance id for machine %q", machineUUID)
+	}
+	return instanceId, nil
+}

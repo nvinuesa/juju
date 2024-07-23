@@ -93,10 +93,16 @@ type machineName struct {
 	Name machine.Name `db:"name"`
 }
 
-// machineUUID represents the struct to be used for the machine_uuid column
+// machineUUID represents the struct to be used for the uuid column
 // within the sqlair statements in the machine domain.
 type machineUUID struct {
 	UUID string `db:"uuid"`
+}
+
+// machineForeignUUID represents the struct to be used for the machine_uuid
+// column within the sqlair statements in the machine domain.
+type machineForeignUUID struct {
+	UUID string `db:"machine_uuid"`
 }
 
 // machineIsController represents the struct to be used for the is_controller column within the sqlair statements in the machine domain.

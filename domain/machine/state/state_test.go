@@ -9,13 +9,11 @@ import (
 	"sort"
 
 	"github.com/canonical/sqlair"
-	"github.com/juju/collections/transform"
 	"github.com/juju/errors"
 	jc "github.com/juju/testing/checkers"
 	gc "gopkg.in/check.v1"
 
 	"github.com/juju/juju/core/blockdevice"
-	"github.com/juju/juju/core/machine"
 	"github.com/juju/juju/core/status"
 	"github.com/juju/juju/domain/life"
 	machineerrors "github.com/juju/juju/domain/machine/errors"
@@ -204,15 +202,14 @@ func (s *stateSuite) TestListAllMachines(c *gc.C) {
 	err = s.state.CreateMachine(context.Background(), "667", "4", "2")
 	c.Assert(err, jc.ErrorIsNil)
 
-	machines, err := s.state.AllMachineNames(context.Background())
+	machines, err := s.state.AllMachineUUIDs(context.Background())
 	c.Assert(err, jc.ErrorIsNil)
 
-	expectedMachines := []string{"666", "667"}
-	ms := transform.Slice[machine.Name, string](machines, func(m machine.Name) string { return m.String() })
+	expectedMachines := []string{"1", "2"}
 
-	sort.Strings(ms)
+	sort.Strings(machines)
 	sort.Strings(expectedMachines)
-	c.Assert(ms, gc.DeepEquals, expectedMachines)
+	c.Assert(machines, gc.DeepEquals, expectedMachines)
 }
 
 // TestGetMachineStatusSuccess asserts the happy path of GetMachineStatus at the
@@ -441,29 +438,27 @@ func (s *stateSuite) TestSetMachineLifeNotFoundError(c *gc.C) {
 // TestListAllMachinesEmpty asserts that AllMachineNames returns an empty list
 // if there are no machines.
 func (s *stateSuite) TestListAllMachinesEmpty(c *gc.C) {
-	machines, err := s.state.AllMachineNames(context.Background())
+	machines, err := s.state.AllMachineUUIDs(context.Background())
 	c.Check(err, jc.ErrorIsNil)
 	c.Assert(machines, gc.HasLen, 0)
 }
 
-// TestListAllMachineNamesSuccess asserts the happy path of AllMachineNames at
+// TestListAllMachineUUIDsSuccess asserts the happy path of AllMachineUUIDs at
 // the state layer.
-func (s *stateSuite) TestListAllMachineNamesSuccess(c *gc.C) {
+func (s *stateSuite) TestListAllMachineUUIDsSuccess(c *gc.C) {
 	err := s.state.CreateMachine(context.Background(), "666", "3", "1")
 	c.Assert(err, jc.ErrorIsNil)
 
 	err = s.state.CreateMachine(context.Background(), "667", "4", "2")
 	c.Assert(err, jc.ErrorIsNil)
 
-	machines, err := s.state.AllMachineNames(context.Background())
+	machines, err := s.state.AllMachineUUIDs(context.Background())
 	c.Assert(err, jc.ErrorIsNil)
 
-	expectedMachines := []string{"666", "667"}
-	ms := transform.Slice[machine.Name, string](machines, func(m machine.Name) string { return m.String() })
-
-	sort.Strings(ms)
+	expectedMachines := []string{"1", "2"}
+	sort.Strings(machines)
 	sort.Strings(expectedMachines)
-	c.Assert(ms, gc.DeepEquals, expectedMachines)
+	c.Assert(machines, gc.DeepEquals, expectedMachines)
 }
 
 // TestIsControllerSuccess asserts the happy path of IsController at the state

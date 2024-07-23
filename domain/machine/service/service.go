@@ -1,4 +1,4 @@
-// Copyright 2024 Canonical Ltd.
+// Copyright 2024 Canonical Ltd.All
 // Licensed under the AGPLv3, see LICENCE file for details.
 
 package service
@@ -37,9 +37,9 @@ type State interface {
 	// It returns a NotFound if the provided machine doesn't exist.
 	SetMachineLife(context.Context, coremachine.Name, life.Life) error
 
-	// AllMachineNames retrieves the names of all machines in the model.
+	// AllMachineUUIDs retrieves the UUIDs of all machines in the model.
 	// If there's no machine, it returns an empty slice.
-	AllMachineNames(context.Context) ([]coremachine.Name, error)
+	AllMachineUUIDs(context.Context) ([]string, error)
 
 	// InitialWatchInstanceStatement returns the table and the initial watch statement
 	// for the machine cloud instances.
@@ -47,7 +47,7 @@ type State interface {
 
 	// InstanceId returns the cloud specific instance id for this machine.
 	// If the machine is not provisioned, it returns a NotProvisionedError.
-	InstanceId(context.Context, coremachine.Name) (string, error)
+	InstanceID(context.Context, string) (string, error)
 
 	// GetInstanceStatus returns the cloud specific instance status for this
 	// machine.
@@ -156,23 +156,13 @@ func (s *Service) EnsureDeadMachine(ctx context.Context, machineName coremachine
 	return s.SetMachineLife(ctx, machineName, life.Dead)
 }
 
-// AllMachineNames returns the names of all machines in the model.
-func (s *Service) AllMachineNames(ctx context.Context) ([]coremachine.Name, error) {
-	machines, err := s.st.AllMachineNames(ctx)
+// AllMachineUUIDs returns the UUIDs of all machines in the model.
+func (s *Service) AllMachineUUIDs(ctx context.Context) ([]string, error) {
+	machineUUIDs, err := s.st.AllMachineUUIDs(ctx)
 	if err != nil {
 		return nil, errors.Annotate(err, "retrieving all machines")
 	}
-	return machines, nil
-}
-
-// InstanceId returns the cloud specific instance id for this machine.
-// If the machine is not provisioned, it returns a NotProvisionedError.
-func (s *Service) InstanceId(ctx context.Context, machineName coremachine.Name) (string, error) {
-	instanceId, err := s.st.InstanceId(ctx, machineName)
-	if err != nil {
-		return "", errors.Annotatef(err, "retrieving cloud instance id for machine %q", machineName)
-	}
-	return instanceId, nil
+	return machineUUIDs, nil
 }
 
 // GetInstanceStatus returns the cloud specific instance status for this

@@ -200,3 +200,120 @@ func NewMockExportService(ctrl *gomock.Controller) *MockExportService {
 func (m *MockExportService) EXPECT() *MockExportServiceMockRecorder {
 	return m.recorder
 }
+
+// AllMachineUUIDs mocks base method.
+func (m *MockExportService) AllMachineUUIDs(arg0 context.Context) ([]string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AllMachineUUIDs", arg0)
+	ret0, _ := ret[0].([]string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// AllMachineUUIDs indicates an expected call of AllMachineUUIDs.
+func (mr *MockExportServiceMockRecorder) AllMachineUUIDs(arg0 any) *MockExportServiceAllMachineUUIDsCall {
+	mr.mock.ctrl.T.Helper()
+	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AllMachineUUIDs", reflect.TypeOf((*MockExportService)(nil).AllMachineUUIDs), arg0)
+	return &MockExportServiceAllMachineUUIDsCall{Call: call}
+}
+
+// MockExportServiceAllMachineUUIDsCall wrap *gomock.Call
+type MockExportServiceAllMachineUUIDsCall struct {
+	*gomock.Call
+}
+
+// Return rewrite *gomock.Call.Return
+func (c *MockExportServiceAllMachineUUIDsCall) Return(arg0 []string, arg1 error) *MockExportServiceAllMachineUUIDsCall {
+	c.Call = c.Call.Return(arg0, arg1)
+	return c
+}
+
+// Do rewrite *gomock.Call.Do
+func (c *MockExportServiceAllMachineUUIDsCall) Do(f func(context.Context) ([]string, error)) *MockExportServiceAllMachineUUIDsCall {
+	c.Call = c.Call.Do(f)
+	return c
+}
+
+// DoAndReturn rewrite *gomock.Call.DoAndReturn
+func (c *MockExportServiceAllMachineUUIDsCall) DoAndReturn(f func(context.Context) ([]string, error)) *MockExportServiceAllMachineUUIDsCall {
+	c.Call = c.Call.DoAndReturn(f)
+	return c
+}
+
+// HardwareCharacteristics mocks base method.
+func (m *MockExportService) HardwareCharacteristics(arg0 context.Context, arg1 string) (*instance.HardwareCharacteristics, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "HardwareCharacteristics", arg0, arg1)
+	ret0, _ := ret[0].(*instance.HardwareCharacteristics)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// HardwareCharacteristics indicates an expected call of HardwareCharacteristics.
+func (mr *MockExportServiceMockRecorder) HardwareCharacteristics(arg0, arg1 any) *MockExportServiceHardwareCharacteristicsCall {
+	mr.mock.ctrl.T.Helper()
+	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HardwareCharacteristics", reflect.TypeOf((*MockExportService)(nil).HardwareCharacteristics), arg0, arg1)
+	return &MockExportServiceHardwareCharacteristicsCall{Call: call}
+}
+
+// MockExportServiceHardwareCharacteristicsCall wrap *gomock.Call
+type MockExportServiceHardwareCharacteristicsCall struct {
+	*gomock.Call
+}
+
+// Return rewrite *gomock.Call.Return
+func (c *MockExportServiceHardwareCharacteristicsCall) Return(arg0 *instance.HardwareCharacteristics, arg1 error) *MockExportServiceHardwareCharacteristicsCall {
+	c.Call = c.Call.Return(arg0, arg1)
+	return c
+}
+
+// Do rewrite *gomock.Call.Do
+func (c *MockExportServiceHardwareCharacteristicsCall) Do(f func(context.Context, string) (*instance.HardwareCharacteristics, error)) *MockExportServiceHardwareCharacteristicsCall {
+	c.Call = c.Call.Do(f)
+	return c
+}
+
+// DoAndReturn rewrite *gomock.Call.DoAndReturn
+func (c *MockExportServiceHardwareCharacteristicsCall) DoAndReturn(f func(context.Context, string) (*instance.HardwareCharacteristics, error)) *MockExportServiceHardwareCharacteristicsCall {
+	c.Call = c.Call.DoAndReturn(f)
+	return c
+}
+
+// InstanceID mocks base method.
+func (m *MockExportService) InstanceID(arg0 context.Context, arg1 string) (string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "InstanceID", arg0, arg1)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// InstanceID indicates an expected call of InstanceID.
+func (mr *MockExportServiceMockRecorder) InstanceID(arg0, arg1 any) *MockExportServiceInstanceIDCall {
+	mr.mock.ctrl.T.Helper()
+	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InstanceID", reflect.TypeOf((*MockExportService)(nil).InstanceID), arg0, arg1)
+	return &MockExportServiceInstanceIDCall{Call: call}
+}
+
+// MockExportServiceInstanceIDCall wrap *gomock.Call
+type MockExportServiceInstanceIDCall struct {
+	*gomock.Call
+}
+
+// Return rewrite *gomock.Call.Return
+func (c *MockExportServiceInstanceIDCall) Return(arg0 string, arg1 error) *MockExportServiceInstanceIDCall {
+	c.Call = c.Call.Return(arg0, arg1)
+	return c
+}
+
+// Do rewrite *gomock.Call.Do
+func (c *MockExportServiceInstanceIDCall) Do(f func(context.Context, string) (string, error)) *MockExportServiceInstanceIDCall {
+	c.Call = c.Call.Do(f)
+	return c
+}
+
+// DoAndReturn rewrite *gomock.Call.DoAndReturn
+func (c *MockExportServiceInstanceIDCall) DoAndReturn(f func(context.Context, string) (string, error)) *MockExportServiceInstanceIDCall {
+	c.Call = c.Call.DoAndReturn(f)
+	return c
+}

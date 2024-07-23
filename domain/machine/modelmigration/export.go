@@ -12,7 +12,6 @@ import (
 
 	"github.com/juju/juju/core/instance"
 	"github.com/juju/juju/core/logger"
-	coremachine "github.com/juju/juju/core/machine"
 	"github.com/juju/juju/core/modelmigration"
 	"github.com/juju/juju/domain/machine/service"
 	"github.com/juju/juju/domain/machine/state"
@@ -28,11 +27,11 @@ func RegisterExport(coordinator Coordinator, logger logger.Logger) {
 // ExportService defines the machine service used to export machines to
 // another controller model to this controller.
 type ExportService interface {
-	// AllMachineNames returns the names of all machines in the model.
-	AllMachineNames(ctx context.Context) ([]coremachine.Name, error)
-	// InstanceId returns the cloud specific instance id for this machine.
+	// AllMachineUUIDs returns the UUIDs of all machines in the model.
+	AllMachineUUIDs(ctx context.Context) ([]string, error)
+	// InstanceID returns the cloud specific instance id for this machine.
 	// If the machine is not provisioned, it returns a NotProvisionedError.
-	InstanceId(ctx context.Context, machineName coremachine.Name) (string, error)
+	InstanceID(ctx context.Context, machineUUID string) (string, error)
 	// HardwareCharacteristics returns the hardware characteristics of the
 	// of the specified machine.
 	HardwareCharacteristics(ctx context.Context, machineUUID string) (*instance.HardwareCharacteristics, error)
@@ -61,18 +60,18 @@ func (e *exportOperation) Execute(ctx context.Context, model description.Model) 
 	// TODO(nvinuesa): We must retrieve all the machines full struct in one
 	// transaction (i.e. GetAllMachines). Export of the full machine should
 	// be implemented then.
-	machineNames, err := e.service.AllMachineNames(ctx)
+	machineUUIDs, err := e.service.AllMachineUUIDs(ctx)
 	if err != nil {
 		return errors.Annotate(err, "retrieving all machines for export")
 	}
-	for _, machineName := range machineNames {
+	for _, machineUUID := range machineUUIDs {
 		// TODO(nvinuesa): We must add machineUUID to description.
 		machine := model.AddMachine(description.MachineArgs{
-			Id: names.NewMachineTag(string(machineName)),
+			Id: names.NewMachineTag(string(machineUUID)),
 		})
-		instanceID, err := e.service.InstanceId(ctx, machineName)
+		instanceID, err := e.service.InstanceID(ctx, machineUUID)
 		if err != nil {
-			return errors.Annotatef(err, "retrieving instance ID for machine %q", machineName)
+			return errors.Annotatef(err, "retrieving instance ID for machine %q", machineUUID)
 		}
 		instanceArgs := description.CloudInstanceArgs{
 			InstanceId: instanceID,
@@ -81,7 +80,7 @@ func (e *exportOperation) Execute(ctx context.Context, model description.Model) 
 		machineUUID := ""
 		hardwareCharacteristics, err := e.service.HardwareCharacteristics(ctx, machineUUID)
 		if err != nil {
-			return errors.Annotatef(err, "retrieving hardware characteristics for machine %q", machineName)
+			return errors.Annotatef(err, "retrieving hardware characteristics for machine %q", machineUUID)
 		}
 		if hardwareCharacteristics.Arch != nil {
 			instanceArgs.Architecture = *hardwareCharacteristics.Arch

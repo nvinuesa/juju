@@ -463,20 +463,20 @@ func (st *State) IsController(ctx context.Context, mName machine.Name) (bool, er
 	return result.IsController, nil
 }
 
-// AllMachineNames retrieves the names of all machines in the model.
-func (st *State) AllMachineNames(ctx context.Context) ([]machine.Name, error) {
+// AllMachineUUIDs retrieves the UUIDs of all machines in the model.
+func (st *State) AllMachineUUIDs(ctx context.Context) ([]string, error) {
 	db, err := st.DB()
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
-	query := `SELECT name AS &machineName.* FROM machine`
-	queryStmt, err := st.Prepare(query, machineName{})
+	query := `SELECT uuid AS &machineUUID.* FROM machine`
+	queryStmt, err := st.Prepare(query, machineUUID{})
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
-	var results []machineName
+	var results []machineUUID
 	err = db.Txn(ctx, func(ctx context.Context, tx *sqlair.TX) error {
 		err := tx.Query(ctx, queryStmt).GetAll(&results)
 		if err != nil {
@@ -491,11 +491,11 @@ func (st *State) AllMachineNames(ctx context.Context) ([]machine.Name, error) {
 		return nil, errors.Trace(err)
 	}
 
-	// Transform the results ([]machineName) into a slice of machine.Name.
-	machineNames := transform.Slice[machineName, machine.Name](
+	// Transform the results ([]machineUUID) into a slice of strings.
+	machineUUIDs := transform.Slice(
 		results,
-		func(r machineName) machine.Name { return r.Name },
+		func(r machineUUID) string { return r.UUID },
 	)
 
-	return machineNames, nil
+	return machineUUIDs, nil
 }

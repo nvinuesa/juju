@@ -180,11 +180,11 @@ func (s *serviceSuite) TestEnsureDeadMachineError(c *gc.C) {
 func (s *serviceSuite) TestListAllMachinesSuccess(c *gc.C) {
 	defer s.setupMocks(c).Finish()
 
-	s.state.EXPECT().AllMachineNames(gomock.Any()).Return([]cmachine.Name{cmachine.Name("666")}, nil)
+	s.state.EXPECT().AllMachineUUIDs(gomock.Any()).Return([]string{"deadbeef-0bad-400d-8000-4b1ddbeefbeef"}, nil)
 
-	machines, err := NewService(s.state).AllMachineNames(context.Background())
+	machines, err := NewService(s.state).AllMachineUUIDs(context.Background())
 	c.Check(err, jc.ErrorIsNil)
-	c.Assert(machines, gc.DeepEquals, []cmachine.Name{cmachine.Name("666")})
+	c.Assert(machines, gc.DeepEquals, []string{"deadbeef-0bad-400d-8000-4b1ddbeefbeef"})
 }
 
 // TestListAllMachinesError asserts that an error coming from the state layer is
@@ -193,46 +193,46 @@ func (s *serviceSuite) TestListAllMachinesError(c *gc.C) {
 	defer s.setupMocks(c).Finish()
 
 	rErr := errors.New("boom")
-	s.state.EXPECT().AllMachineNames(gomock.Any()).Return(nil, rErr)
+	s.state.EXPECT().AllMachineUUIDs(gomock.Any()).Return(nil, rErr)
 
-	machines, err := NewService(s.state).AllMachineNames(context.Background())
+	machines, err := NewService(s.state).AllMachineUUIDs(context.Background())
 	c.Check(err, jc.ErrorIs, rErr)
 	c.Check(machines, gc.IsNil)
 }
 
-func (s *serviceSuite) TestInstanceIdSuccess(c *gc.C) {
+func (s *serviceSuite) TestInstanceIDSuccess(c *gc.C) {
 	defer s.setupMocks(c).Finish()
 
-	s.state.EXPECT().InstanceId(gomock.Any(), cmachine.Name("666")).Return("123", nil)
+	s.state.EXPECT().InstanceID(gomock.Any(), "666").Return("123", nil)
 
-	instanceId, err := NewService(s.state).InstanceId(context.Background(), cmachine.Name("666"))
+	instanceId, err := NewService(s.state).InstanceID(context.Background(), "666")
 	c.Check(err, jc.ErrorIsNil)
 	c.Check(instanceId, gc.Equals, "123")
 }
 
-// TestInstanceIdError asserts that an error coming from the state layer is
+// TestInstanceIDError asserts that an error coming from the state layer is
 // preserved, passed over to the service layer to be maintained there.
-func (s *serviceSuite) TestInstanceIdError(c *gc.C) {
+func (s *serviceSuite) TestInstanceIDError(c *gc.C) {
 	defer s.setupMocks(c).Finish()
 
 	rErr := errors.New("boom")
-	s.state.EXPECT().InstanceId(gomock.Any(), cmachine.Name("666")).Return("", rErr)
+	s.state.EXPECT().InstanceID(gomock.Any(), "666").Return("", rErr)
 
-	instanceId, err := NewService(s.state).InstanceId(context.Background(), cmachine.Name("666"))
+	instanceId, err := NewService(s.state).InstanceID(context.Background(), "666")
 	c.Check(err, jc.ErrorIs, rErr)
 	c.Check(instanceId, gc.Equals, "")
 }
 
-// TestInstanceIdNotProvisionedError asserts that the state layer returns a
+// TestInstanceIDNotProvisionedError asserts that the state layer returns a
 // NotProvisioned Error if an instanceId is not found for the given machineName,
 // and that error is preserved and passed on to the service layer to be handled
 // there.
-func (s *serviceSuite) TestInstanceIdNotProvisionedError(c *gc.C) {
+func (s *serviceSuite) TestInstanceIDNotProvisionedError(c *gc.C) {
 	defer s.setupMocks(c).Finish()
 
-	s.state.EXPECT().InstanceId(gomock.Any(), cmachine.Name("666")).Return("", errors.NotProvisioned)
+	s.state.EXPECT().InstanceID(gomock.Any(), "666").Return("", errors.NotProvisioned)
 
-	instanceId, err := NewService(s.state).InstanceId(context.Background(), cmachine.Name("666"))
+	instanceId, err := NewService(s.state).InstanceID(context.Background(), "666")
 	c.Check(err, jc.ErrorIs, errors.NotProvisioned)
 	c.Check(instanceId, gc.Equals, "")
 }

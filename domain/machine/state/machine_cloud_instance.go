@@ -183,44 +183,43 @@ WHERE machine_uuid=$machineUUID.uuid
 	})
 }
 
-// InstanceId returns the cloud specific instance id for this machine.
+// InstanceID returns the cloud specific instance id for this machine.
 // If the machine is not provisioned, it returns a NotProvisionedError.
-func (st *State) InstanceId(ctx context.Context, mName machine.Name) (string, error) {
+func (st *State) InstanceID(ctx context.Context, mUUID string) (string, error) {
 	db, err := st.DB()
 	if err != nil {
 		return "", errors.Trace(err)
 	}
 
-	machineIDParam := machineName{Name: mName}
+	machineUUIDParam := machineForeignUUID{UUID: mUUID}
 	query := `
 SELECT instance_id AS &instanceID.*
-FROM machine AS m
-    JOIN machine_cloud_instance AS mci ON m.uuid = mci.machine_uuid
-WHERE m.name = $machineName.name;
+FROM   machine_cloud_instance 
+WHERE  machine_uuid = $machineForeignUUID.machine_uuid;
 `
-	queryStmt, err := st.Prepare(query, machineIDParam, instanceID{})
+	queryStmt, err := st.Prepare(query, machineUUIDParam, instanceID{})
 	if err != nil {
 		return "", errors.Trace(err)
 	}
 
-	var instanceId string
+	var res string
 	err = db.Txn(ctx, func(ctx context.Context, tx *sqlair.TX) error {
 		var result instanceID
-		err := tx.Query(ctx, queryStmt, machineIDParam).Get(&result)
+		err := tx.Query(ctx, queryStmt, machineUUIDParam).Get(&result)
 		if err != nil {
 			if errors.Is(err, sqlair.ErrNoRows) {
-				return errors.Annotatef(machineerrors.NotProvisioned, "machine: %q", mName)
+				return errors.Annotatef(machineerrors.NotProvisioned, "machine: %q", mUUID)
 			}
-			return errors.Annotatef(err, "querying instance for machine %q", mName)
+			return errors.Annotatef(err, "querying instance for machine %q", mUUID)
 		}
 
-		instanceId = result.ID
+		res = result.ID
 		return nil
 	})
 	if err != nil {
 		return "", errors.Trace(err)
 	}
-	return instanceId, nil
+	return res, nil
 }
 
 // GetInstanceStatus returns the cloud specific instance status for the given
