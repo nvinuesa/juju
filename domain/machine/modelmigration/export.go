@@ -76,8 +76,6 @@ func (e *exportOperation) Execute(ctx context.Context, model description.Model) 
 		instanceArgs := description.CloudInstanceArgs{
 			InstanceId: instanceID,
 		}
-		// TODO(nvinuesa): machineUUID???
-		machineUUID := ""
 		hardwareCharacteristics, err := e.service.HardwareCharacteristics(ctx, machineUUID)
 		if err != nil {
 			return errors.Annotatef(err, "retrieving hardware characteristics for machine %q", machineUUID)
