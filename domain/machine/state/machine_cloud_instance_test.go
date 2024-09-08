@@ -10,6 +10,7 @@ import (
 	jc "github.com/juju/testing/checkers"
 	gc "gopkg.in/check.v1"
 
+	"github.com/juju/juju/core/arch"
 	"github.com/juju/juju/core/instance"
 	"github.com/juju/juju/core/machine"
 	"github.com/juju/juju/core/status"
@@ -320,6 +321,94 @@ func (s *stateSuite) TestInstanceStatusValues(c *gc.C) {
 	c.Check(statusValues[2].Name, gc.Equals, "running")
 	c.Check(statusValues[3].ID, gc.Equals, 3)
 	c.Check(statusValues[3].Name, gc.Equals, "provisioning error")
+}
+
+func (s *stateSuite) TestGetManualArchesEmpty(c *gc.C) {
+	arches, err := s.state.GetManualMachineArches(context.Background())
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(arches, gc.HasLen, 0)
+}
+
+func (s *stateSuite) TestGetManualArchesNoManualMachines(c *gc.C) {
+	db := s.DB()
+
+	// Create a reference machine.
+	err := s.state.CreateMachine(context.Background(), "machine0", "", "")
+	c.Assert(err, jc.ErrorIsNil)
+	var machineUUID string
+	row := db.QueryRowContext(context.Background(), "SELECT uuid FROM machine WHERE name='machine0'")
+	c.Assert(row.Err(), jc.ErrorIsNil)
+	err = row.Scan(&machineUUID)
+	c.Assert(err, jc.ErrorIsNil)
+	err = s.state.SetMachineCloudInstance(
+		context.Background(),
+		machineUUID,
+		instance.Id("juju-deadbeef"),
+		&instance.HardwareCharacteristics{
+			Arch: strptr(arch.ARM64),
+		},
+	)
+	c.Assert(err, jc.ErrorIsNil)
+
+	arches, err := s.state.GetManualMachineArches(context.Background())
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(arches, gc.HasLen, 0)
+}
+
+func (s *stateSuite) TestGetManualArches(c *gc.C) {
+	// Create a manual machine risc64.
+	err := s.state.CreateMachine(context.Background(), "machine0", "net_node0", "0")
+	c.Assert(err, jc.ErrorIsNil)
+	err = s.state.SetMachineCloudInstance(
+		context.Background(),
+		"0",
+		instance.Id("manual:juju-deadbeef"),
+		&instance.HardwareCharacteristics{
+			Arch: strptr(arch.RISCV64),
+		},
+	)
+	c.Assert(err, jc.ErrorIsNil)
+	// Create a manual machine s390x.
+	err = s.state.CreateMachine(context.Background(), "machine1", "net_node1", "1")
+	c.Assert(err, jc.ErrorIsNil)
+	err = s.state.SetMachineCloudInstance(
+		context.Background(),
+		"1",
+		instance.Id("manual:juju-01234567"),
+		&instance.HardwareCharacteristics{
+			Arch: strptr(arch.S390X),
+		},
+	)
+	c.Assert(err, jc.ErrorIsNil)
+	// Create another manual machine s390x.
+	err = s.state.CreateMachine(context.Background(), "machine2", "net_node2", "2")
+	c.Assert(err, jc.ErrorIsNil)
+	err = s.state.SetMachineCloudInstance(
+		context.Background(),
+		"2",
+		instance.Id("manual:juju-12345678"),
+		&instance.HardwareCharacteristics{
+			Arch: strptr(arch.S390X),
+		},
+	)
+	c.Assert(err, jc.ErrorIsNil)
+	// Create a non-manual machine amd64.
+	err = s.state.CreateMachine(context.Background(), "machine3", "net_node3", "3")
+	c.Assert(err, jc.ErrorIsNil)
+	err = s.state.SetMachineCloudInstance(
+		context.Background(),
+		"3",
+		instance.Id("juju-01234567"),
+		&instance.HardwareCharacteristics{
+			Arch: strptr(arch.PPC64EL),
+		},
+	)
+	c.Assert(err, jc.ErrorIsNil)
+
+	arches, err := s.state.GetManualMachineArches(context.Background())
+	c.Assert(err, jc.ErrorIsNil)
+	c.Check(arches, gc.HasLen, 2)
+	c.Check(arches, jc.SameContents, []string{arch.RISCV64, arch.S390X})
 }
 
 func (s *stateSuite) ensureInstance(c *gc.C, mName machine.Name) string {

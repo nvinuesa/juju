@@ -18,6 +18,10 @@ import (
 	machineerrors "github.com/juju/juju/domain/machine/errors"
 )
 
+// manualMachinePrefix signals as prefix of Nonce that a machine is
+// manually provisioned.
+const manualMachinePrefix = "manual:"
+
 // HardwareCharacteristics returns the hardware characteristics struct with
 // data retrieved from the machine cloud instance table.
 func (st *State) HardwareCharacteristics(
@@ -392,4 +396,34 @@ VALUES ($machineUUID.uuid, $machineStatusWithData.key, $machineStatusWithData.da
 // for the machine cloud instances.
 func (st *State) InitialWatchInstanceStatement() (string, string) {
 	return "machine_cloud_instance", "SELECT machine_uuid FROM machine_cloud_instance"
+}
+
+// GetInstanceStatus returns the list of unique architectures of manually
+// provisioned machines.
+func (st *State) GetManualMachineArches(ctx context.Context) ([]string, error) {
+	db, err := st.DB()
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	retrieveUniqueArches := `
+SELECT DISTINCT arch AS &architecture.arch
+FROM   machine_cloud_instance
+WHERE  instance_id LIKE '` + manualMachinePrefix + `%'`
+	retrieveUniqueArchesStmt, err := st.Prepare(retrieveUniqueArches, architecture{})
+	if err != nil {
+		return nil, errors.Annotate(err, "preparing retrieve arches statement")
+	}
+
+	var rows []architecture
+	if err := db.Txn(ctx, func(ctx context.Context, tx *sqlair.TX) error {
+		return errors.Trace(tx.Query(ctx, retrieveUniqueArchesStmt).GetAll(&rows))
+	}); err != nil && errors.Is(err, sql.ErrNoRows) {
+		return nil, errors.Annotatef(err, "retrieving list of architectures for manual machines")
+	}
+	res := []string{}
+	for _, r := range rows {
+		res = append(res, r.Arch)
+	}
+	return res, nil
 }

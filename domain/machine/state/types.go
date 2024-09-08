@@ -74,6 +74,12 @@ type instanceID struct {
 	ID string `db:"instance_id"`
 }
 
+// architecture represents the struct to be used when listing architectures
+// from the machine_cloud_instance table.
+type architecture struct {
+	Arch string `db:"arch"`
+}
+
 // machineStatusData represents the struct to be used for the status and status
 // data columns of status and status_data tables for both machine and machine
 // cloud instances within the sqlair statements in the machine domain.

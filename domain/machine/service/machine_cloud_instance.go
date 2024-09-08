@@ -6,6 +6,7 @@ package service
 import (
 	"context"
 
+	"github.com/juju/collections/set"
 	"github.com/juju/errors"
 
 	"github.com/juju/juju/core/instance"
@@ -41,4 +42,10 @@ func (s *Service) DeleteMachineCloudInstance(ctx context.Context, machineUUID st
 		"deleting machine cloud instance for machine %q", machineUUID,
 	)
 
+}
+
+// GetManualMachineArches retrieves the architecture of manually provisioned
+// machines.
+func (s *Service) GetManualMachineArches(ctx context.Context, machineUUID string) (set.Strings, error) {
+	return nil, nil
 }
