@@ -77,6 +77,9 @@ type MachineService interface {
 	// lxd_profile table for the given machine. This method will overwrite the list
 	// of profiles for the given machine without any checks.
 	SetAppliedLXDProfileNames(ctx context.Context, mUUID string, profileNames []string) error
+
+	// InstanceID returns the cloud specific instance id for this machine.
+	InstanceID(ctx context.Context, mUUID string) (string, error)
 }
 
 // StoragePoolGetter instances get a storage pool by name.
