@@ -61,6 +61,7 @@ func (st *State) SetMachineCloudInstance(
 	ctx context.Context,
 	machineUUID string,
 	instanceID instance.Id,
+	displayName string,
 	hardwareCharacteristics *instance.HardwareCharacteristics,
 ) error {
 	db, err := st.DB()
@@ -105,6 +106,7 @@ WHERE  availability_zone.name = $availabilityZoneName.name
 		instanceData := instanceData{
 			MachineUUID: machineUUID,
 			InstanceID:  string(instanceID),
+			DisplayName: displayName,
 		}
 		if hardwareCharacteristics != nil {
 			instanceData.Arch = hardwareCharacteristics.Arch
@@ -252,6 +254,45 @@ WHERE  machine_uuid = $machineUUID.uuid;`
 		return "", errors.Trace(err)
 	}
 	return instanceId, nil
+}
+
+// InstanceName returns the cloud specific instance display name for this
+// machine.
+// [machineerrors.NotProvisionedError].
+func (st *State) InstanceName(ctx context.Context, mUUID string) (string, error) {
+	db, err := st.DB()
+	if err != nil {
+		return "", errors.Trace(err)
+	}
+
+	mUUIDParam := machineUUID{UUID: mUUID}
+	query := `
+SELECT &instanceData.display_name
+FROM   machine_cloud_instance
+WHERE  machine_uuid = $machineUUID.uuid;`
+	queryStmt, err := st.Prepare(query, mUUIDParam, instanceData{})
+	if err != nil {
+		return "", errors.Trace(err)
+	}
+
+	var instanceName string
+	err = db.Txn(ctx, func(ctx context.Context, tx *sqlair.TX) error {
+		var result instanceData
+		err := tx.Query(ctx, queryStmt, mUUIDParam).Get(&result)
+		if err != nil {
+			if errors.Is(err, sqlair.ErrNoRows) {
+				return errors.Annotatef(machineerrors.NotProvisioned, "machine: %q", mUUID)
+			}
+			return errors.Annotatef(err, "querying display name for machine %q", mUUID)
+		}
+
+		instanceName = result.DisplayName
+		return nil
+	})
+	if err != nil {
+		return "", errors.Trace(err)
+	}
+	return instanceName, nil
 }
 
 // GetInstanceStatus returns the cloud specific instance status for the given

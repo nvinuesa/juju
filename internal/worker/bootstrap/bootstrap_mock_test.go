@@ -1570,18 +1570,57 @@ func (c *MockMachineServiceGetMachineUUIDCall) DoAndReturn(f func(context.Contex
 	return c
 }
 
-// SetMachineCloudInstance mocks base method.
-func (m *MockMachineService) SetMachineCloudInstance(arg0 context.Context, arg1 string, arg2 instance.Id, arg3 *instance.HardwareCharacteristics) error {
+// InstanceName mocks base method.
+func (m *MockMachineService) InstanceName(arg0 context.Context, arg1 string) (string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SetMachineCloudInstance", arg0, arg1, arg2, arg3)
+	ret := m.ctrl.Call(m, "InstanceName", arg0, arg1)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// InstanceName indicates an expected call of InstanceName.
+func (mr *MockMachineServiceMockRecorder) InstanceName(arg0, arg1 any) *MockMachineServiceInstanceNameCall {
+	mr.mock.ctrl.T.Helper()
+	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InstanceName", reflect.TypeOf((*MockMachineService)(nil).InstanceName), arg0, arg1)
+	return &MockMachineServiceInstanceNameCall{Call: call}
+}
+
+// MockMachineServiceInstanceNameCall wrap *gomock.Call
+type MockMachineServiceInstanceNameCall struct {
+	*gomock.Call
+}
+
+// Return rewrite *gomock.Call.Return
+func (c *MockMachineServiceInstanceNameCall) Return(arg0 string, arg1 error) *MockMachineServiceInstanceNameCall {
+	c.Call = c.Call.Return(arg0, arg1)
+	return c
+}
+
+// Do rewrite *gomock.Call.Do
+func (c *MockMachineServiceInstanceNameCall) Do(f func(context.Context, string) (string, error)) *MockMachineServiceInstanceNameCall {
+	c.Call = c.Call.Do(f)
+	return c
+}
+
+// DoAndReturn rewrite *gomock.Call.DoAndReturn
+func (c *MockMachineServiceInstanceNameCall) DoAndReturn(f func(context.Context, string) (string, error)) *MockMachineServiceInstanceNameCall {
+	c.Call = c.Call.DoAndReturn(f)
+	return c
+}
+
+// SetMachineCloudInstance mocks base method.
+func (m *MockMachineService) SetMachineCloudInstance(arg0 context.Context, arg1 string, arg2 instance.Id, arg3 string, arg4 *instance.HardwareCharacteristics) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SetMachineCloudInstance", arg0, arg1, arg2, arg3, arg4)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // SetMachineCloudInstance indicates an expected call of SetMachineCloudInstance.
-func (mr *MockMachineServiceMockRecorder) SetMachineCloudInstance(arg0, arg1, arg2, arg3 any) *MockMachineServiceSetMachineCloudInstanceCall {
+func (mr *MockMachineServiceMockRecorder) SetMachineCloudInstance(arg0, arg1, arg2, arg3, arg4 any) *MockMachineServiceSetMachineCloudInstanceCall {
 	mr.mock.ctrl.T.Helper()
-	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetMachineCloudInstance", reflect.TypeOf((*MockMachineService)(nil).SetMachineCloudInstance), arg0, arg1, arg2, arg3)
+	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetMachineCloudInstance", reflect.TypeOf((*MockMachineService)(nil).SetMachineCloudInstance), arg0, arg1, arg2, arg3, arg4)
 	return &MockMachineServiceSetMachineCloudInstanceCall{Call: call}
 }
 
@@ -1597,13 +1636,13 @@ func (c *MockMachineServiceSetMachineCloudInstanceCall) Return(arg0 error) *Mock
 }
 
 // Do rewrite *gomock.Call.Do
-func (c *MockMachineServiceSetMachineCloudInstanceCall) Do(f func(context.Context, string, instance.Id, *instance.HardwareCharacteristics) error) *MockMachineServiceSetMachineCloudInstanceCall {
+func (c *MockMachineServiceSetMachineCloudInstanceCall) Do(f func(context.Context, string, instance.Id, string, *instance.HardwareCharacteristics) error) *MockMachineServiceSetMachineCloudInstanceCall {
 	c.Call = c.Call.Do(f)
 	return c
 }
 
 // DoAndReturn rewrite *gomock.Call.DoAndReturn
-func (c *MockMachineServiceSetMachineCloudInstanceCall) DoAndReturn(f func(context.Context, string, instance.Id, *instance.HardwareCharacteristics) error) *MockMachineServiceSetMachineCloudInstanceCall {
+func (c *MockMachineServiceSetMachineCloudInstanceCall) DoAndReturn(f func(context.Context, string, instance.Id, string, *instance.HardwareCharacteristics) error) *MockMachineServiceSetMachineCloudInstanceCall {
 	c.Call = c.Call.DoAndReturn(f)
 	return c
 }

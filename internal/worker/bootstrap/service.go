@@ -72,8 +72,11 @@ type MachineService interface {
 		ctx context.Context,
 		machineUUID string,
 		instanceID instance.Id,
+		displayName string,
 		hardwareCharacteristics *instance.HardwareCharacteristics,
 	) error
+	// InstanceName returns the cloud specific display name for this machine.
+	InstanceName(ctx context.Context, mUUID string) (string, error)
 }
 
 // ModelService provides a means for interacting with the underlying models of

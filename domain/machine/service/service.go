@@ -62,6 +62,11 @@ type State interface {
 	// [machineerrors.NotProvisionedError]
 	InstanceID(context.Context, string) (string, error)
 
+	// InstanceName returns the cloud specific display name for this machine.
+	// If the machine is not provisioned, it returns a
+	// [machineerrors.NotProvisionedError]
+	InstanceName(context.Context, string) (string, error)
+
 	// GetInstanceStatus returns the cloud specific instance status for this
 	// machine.
 	// It returns MachineNotFound if the machine does not exist.
@@ -88,7 +93,7 @@ type State interface {
 
 	// SetMachineCloudInstance sets an entry in the machine cloud instance table
 	// along with the instance tags and the link to a lxd profile if any.
-	SetMachineCloudInstance(context.Context, string, instance.Id, *instance.HardwareCharacteristics) error
+	SetMachineCloudInstance(context.Context, string, instance.Id, string, *instance.HardwareCharacteristics) error
 
 	// DeleteMachineCloudInstance removes an entry in the machine cloud instance
 	// table along with the instance tags and the link to a lxd profile if any.
@@ -246,17 +251,6 @@ func (s *Service) AllMachineNames(ctx context.Context) ([]coremachine.Name, erro
 		return nil, errors.Annotate(err, "retrieving all machines")
 	}
 	return machines, nil
-}
-
-// InstanceID returns the cloud specific instance id for this machine.
-// If the machine is not provisioned, it returns a
-// [machineerrors.NotProvisionedError]
-func (s *Service) InstanceID(ctx context.Context, machineUUID string) (string, error) {
-	instanceId, err := s.st.InstanceID(ctx, machineUUID)
-	if err != nil {
-		return "", errors.Annotatef(err, "retrieving cloud instance id for machine %q", machineUUID)
-	}
-	return instanceId, nil
 }
 
 // GetInstanceStatus returns the cloud specific instance status for this

@@ -1102,7 +1102,9 @@ func (c *statusContext) makeMachineStatus(
 	sModInfo, err := c.status.MachineModification(machineID)
 	populateStatusFromStatusInfoAndErr(&status.ModificationStatus, sModInfo, err)
 
-	var instid string
+	var (
+		instid, displayName string
+	)
 	machineUUID, err := machineService.GetMachineUUID(ctx, coremachine.Name(machineID))
 	if err != nil {
 		logger.Debugf("error retrieving uuid for machine: %q, %w", machineID, err)
@@ -1111,9 +1113,14 @@ func (c *statusContext) makeMachineStatus(
 		if err != nil && !errors.Is(err, machineerrors.NotProvisioned) {
 			logger.Debugf("error retrieving instance ID for machine: %q, %w", machineID, err)
 		}
+		displayName, err = machineService.InstanceName(ctx, machineUUID)
+		if err != nil && !errors.Is(err, machineerrors.NotProvisioned) {
+			logger.Debugf("error retrieving display name for machine: %q, %w", machineID, err)
+		}
 	}
 	if instid != "" {
 		status.InstanceId = instance.Id(instid)
+		status.DisplayName = displayName
 		addr, err := machine.PublicAddress()
 		if err != nil {
 			// Usually this indicates that no addresses have been set on the

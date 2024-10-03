@@ -182,6 +182,8 @@ type MachineService interface {
 	GetMachineUUID(ctx context.Context, name machine.Name) (string, error)
 	// InstanceID returns the cloud specific instance id for this machine.
 	InstanceID(ctx context.Context, mUUID string) (string, error)
+	// InstanceName returns the cloud specific display name for this machine.
+	InstanceName(ctx context.Context, mUUID string) (string, error)
 }
 
 // SecretBackendService is an interface for interacting with secret backend service.

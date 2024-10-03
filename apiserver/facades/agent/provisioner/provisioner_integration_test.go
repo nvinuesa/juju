@@ -588,7 +588,7 @@ func (s *withoutControllerSuite) TestMachinesWithTransientErrors(c *gc.C) {
 	hwChars := instance.MustParseHardware("arch=arm64", "mem=4G")
 	machine4UUID, err := machineService.GetMachineUUID(context.Background(), coremachine.Name(s.machines[4].Id()))
 	c.Assert(err, jc.ErrorIsNil)
-	err = machineService.SetMachineCloudInstance(context.Background(), machine4UUID, "i-am", &hwChars)
+	err = machineService.SetMachineCloudInstance(context.Background(), machine4UUID, "i-am", "", &hwChars)
 	c.Assert(err, jc.ErrorIsNil)
 
 	result, err := s.provisioner.MachinesWithTransientErrors(context.Background())
@@ -1027,7 +1027,7 @@ func (s *withoutControllerSuite) TestDistributionGroup(c *gc.C) {
 		machineUUID, err := machineService.GetMachineUUID(context.Background(), coremachine.Name(m.Id()))
 		c.Assert(err, jc.ErrorIsNil)
 		fmt.Printf("*** machine %q uuid %q\n", m.Id(), machineUUID)
-		err = machineService.SetMachineCloudInstance(context.Background(), machineUUID, instance.Id("machine-"+id+"-inst"), nil)
+		err = machineService.SetMachineCloudInstance(context.Background(), machineUUID, instance.Id("machine-"+id+"-inst"), "", nil)
 		c.Assert(err, jc.ErrorIsNil)
 	}
 
@@ -1441,12 +1441,12 @@ func (s *withoutControllerSuite) TestInstanceId(c *gc.C) {
 	// Provision 2 machines first.
 	machine0UUID, err := machineService.GetMachineUUID(context.Background(), coremachine.Name(s.machines[0].Id()))
 	c.Assert(err, jc.ErrorIsNil)
-	err = machineService.SetMachineCloudInstance(context.Background(), machine0UUID, "i-am", nil)
+	err = machineService.SetMachineCloudInstance(context.Background(), machine0UUID, "i-am", "", nil)
 	c.Assert(err, jc.ErrorIsNil)
 	machine1UUID, err := machineService.GetMachineUUID(context.Background(), coremachine.Name(s.machines[1].Id()))
 	c.Assert(err, jc.ErrorIsNil)
 	hwChars := instance.MustParseHardware("arch=arm64", "mem=4G")
-	err = machineService.SetMachineCloudInstance(context.Background(), machine1UUID, "i-am-not", &hwChars)
+	err = machineService.SetMachineCloudInstance(context.Background(), machine1UUID, "i-am-not", "", &hwChars)
 	c.Assert(err, jc.ErrorIsNil)
 
 	args := params.Entities{Entities: []params.Entity{

@@ -701,6 +701,45 @@ func (c *MockStateInstanceIDCall) DoAndReturn(f func(context.Context, string) (s
 	return c
 }
 
+// InstanceName mocks base method.
+func (m *MockState) InstanceName(arg0 context.Context, arg1 string) (string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "InstanceName", arg0, arg1)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// InstanceName indicates an expected call of InstanceName.
+func (mr *MockStateMockRecorder) InstanceName(arg0, arg1 any) *MockStateInstanceNameCall {
+	mr.mock.ctrl.T.Helper()
+	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InstanceName", reflect.TypeOf((*MockState)(nil).InstanceName), arg0, arg1)
+	return &MockStateInstanceNameCall{Call: call}
+}
+
+// MockStateInstanceNameCall wrap *gomock.Call
+type MockStateInstanceNameCall struct {
+	*gomock.Call
+}
+
+// Return rewrite *gomock.Call.Return
+func (c *MockStateInstanceNameCall) Return(arg0 string, arg1 error) *MockStateInstanceNameCall {
+	c.Call = c.Call.Return(arg0, arg1)
+	return c
+}
+
+// Do rewrite *gomock.Call.Do
+func (c *MockStateInstanceNameCall) Do(f func(context.Context, string) (string, error)) *MockStateInstanceNameCall {
+	c.Call = c.Call.Do(f)
+	return c
+}
+
+// DoAndReturn rewrite *gomock.Call.DoAndReturn
+func (c *MockStateInstanceNameCall) DoAndReturn(f func(context.Context, string) (string, error)) *MockStateInstanceNameCall {
+	c.Call = c.Call.DoAndReturn(f)
+	return c
+}
+
 // IsMachineController mocks base method.
 func (m *MockState) IsMachineController(arg0 context.Context, arg1 machine.Name) (bool, error) {
 	m.ctrl.T.Helper()
@@ -970,17 +1009,17 @@ func (c *MockStateSetKeepInstanceCall) DoAndReturn(f func(context.Context, machi
 }
 
 // SetMachineCloudInstance mocks base method.
-func (m *MockState) SetMachineCloudInstance(arg0 context.Context, arg1 string, arg2 instance.Id, arg3 *instance.HardwareCharacteristics) error {
+func (m *MockState) SetMachineCloudInstance(arg0 context.Context, arg1 string, arg2 instance.Id, arg3 string, arg4 *instance.HardwareCharacteristics) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SetMachineCloudInstance", arg0, arg1, arg2, arg3)
+	ret := m.ctrl.Call(m, "SetMachineCloudInstance", arg0, arg1, arg2, arg3, arg4)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // SetMachineCloudInstance indicates an expected call of SetMachineCloudInstance.
-func (mr *MockStateMockRecorder) SetMachineCloudInstance(arg0, arg1, arg2, arg3 any) *MockStateSetMachineCloudInstanceCall {
+func (mr *MockStateMockRecorder) SetMachineCloudInstance(arg0, arg1, arg2, arg3, arg4 any) *MockStateSetMachineCloudInstanceCall {
 	mr.mock.ctrl.T.Helper()
-	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetMachineCloudInstance", reflect.TypeOf((*MockState)(nil).SetMachineCloudInstance), arg0, arg1, arg2, arg3)
+	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetMachineCloudInstance", reflect.TypeOf((*MockState)(nil).SetMachineCloudInstance), arg0, arg1, arg2, arg3, arg4)
 	return &MockStateSetMachineCloudInstanceCall{Call: call}
 }
 
@@ -996,13 +1035,13 @@ func (c *MockStateSetMachineCloudInstanceCall) Return(arg0 error) *MockStateSetM
 }
 
 // Do rewrite *gomock.Call.Do
-func (c *MockStateSetMachineCloudInstanceCall) Do(f func(context.Context, string, instance.Id, *instance.HardwareCharacteristics) error) *MockStateSetMachineCloudInstanceCall {
+func (c *MockStateSetMachineCloudInstanceCall) Do(f func(context.Context, string, instance.Id, string, *instance.HardwareCharacteristics) error) *MockStateSetMachineCloudInstanceCall {
 	c.Call = c.Call.Do(f)
 	return c
 }
 
 // DoAndReturn rewrite *gomock.Call.DoAndReturn
-func (c *MockStateSetMachineCloudInstanceCall) DoAndReturn(f func(context.Context, string, instance.Id, *instance.HardwareCharacteristics) error) *MockStateSetMachineCloudInstanceCall {
+func (c *MockStateSetMachineCloudInstanceCall) DoAndReturn(f func(context.Context, string, instance.Id, string, *instance.HardwareCharacteristics) error) *MockStateSetMachineCloudInstanceCall {
 	c.Call = c.Call.DoAndReturn(f)
 	return c
 }

@@ -17,6 +17,7 @@ import (
 type instanceData struct {
 	MachineUUID          string  `db:"machine_uuid"`
 	InstanceID           string  `db:"instance_id"`
+	DisplayName          string  `db:"display_name"`
 	Arch                 *string `db:"arch"`
 	Mem                  *uint64 `db:"mem"`
 	RootDisk             *uint64 `db:"root_disk"`
