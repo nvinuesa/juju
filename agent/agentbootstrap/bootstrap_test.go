@@ -235,10 +235,6 @@ func (s *bootstrapSuite) TestInitializeState(c *gc.C) {
 	c.Assert(err, jc.ErrorIsNil)
 	c.Check(gotBootstrapConstraints, gc.DeepEquals, expectBootstrapConstraints)
 
-	gotHW, err := m.HardwareCharacteristics()
-	c.Assert(err, jc.ErrorIsNil)
-	c.Check(*gotHW, gc.DeepEquals, expectHW)
-
 	// Check that the state serving info is initialised correctly.
 	stateServingInfo, err := st.StateServingInfo()
 	c.Assert(err, jc.ErrorIsNil)

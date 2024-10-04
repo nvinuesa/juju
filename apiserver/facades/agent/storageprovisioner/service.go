@@ -8,6 +8,7 @@ import (
 
 	"github.com/juju/juju/controller"
 	"github.com/juju/juju/core/blockdevice"
+	"github.com/juju/juju/core/instance"
 	"github.com/juju/juju/core/machine"
 	"github.com/juju/juju/core/watcher"
 	"github.com/juju/juju/environs/config"
@@ -41,6 +42,9 @@ type MachineService interface {
 	InstanceID(ctx context.Context, mUUID string) (string, error)
 	// InstanceName returns the cloud specific display name for this machine.
 	InstanceName(ctx context.Context, mUUID string) (string, error)
+	// HardwareCharacteristics returns the hardware characteristics of the
+	// of the specified machine.
+	HardwareCharacteristics(ctx context.Context, machineUUID string) (*instance.HardwareCharacteristics, error)
 }
 
 // BlockDeviceService instances can fetch and watch block devices on a machine.

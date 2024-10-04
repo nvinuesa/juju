@@ -12,6 +12,7 @@ import (
 	"gopkg.in/macaroon.v2"
 
 	"github.com/juju/juju/apiserver/common/firewall"
+	"github.com/juju/juju/core/instance"
 	"github.com/juju/juju/core/life"
 	"github.com/juju/juju/core/machine"
 	"github.com/juju/juju/core/network"
@@ -58,6 +59,9 @@ type MachineService interface {
 	InstanceID(ctx context.Context, mUUID string) (string, error)
 	// InstanceName returns the cloud specific display name for this machine.
 	InstanceName(ctx context.Context, mUUID string) (string, error)
+	// HardwareCharacteristics returns the hardware characteristics of the
+	// of the specified machine.
+	HardwareCharacteristics(ctx context.Context, machineUUID string) (*instance.HardwareCharacteristics, error)
 }
 
 // ApplicationService provides access to the application service.

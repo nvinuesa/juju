@@ -27,6 +27,7 @@ import (
 	apiservererrors "github.com/juju/juju/apiserver/errors"
 	"github.com/juju/juju/apiserver/facade"
 	corecontroller "github.com/juju/juju/controller"
+	"github.com/juju/juju/core/instance"
 	"github.com/juju/juju/core/leadership"
 	"github.com/juju/juju/core/life"
 	corelogger "github.com/juju/juju/core/logger"
@@ -91,6 +92,9 @@ type MachineService interface {
 	InstanceID(ctx context.Context, mUUID string) (string, error)
 	// InstanceName returns the cloud specific display name for this machine.
 	InstanceName(ctx context.Context, mUUID string) (string, error)
+	// HardwareCharacteristics returns the hardware characteristics of the
+	// of the specified machine.
+	HardwareCharacteristics(ctx context.Context, machineUUID string) (*instance.HardwareCharacteristics, error)
 }
 
 // ModelService provides access to information about running Juju agents.

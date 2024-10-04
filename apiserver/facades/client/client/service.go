@@ -7,6 +7,7 @@ import (
 	"context"
 
 	"github.com/juju/juju/core/blockdevice"
+	"github.com/juju/juju/core/instance"
 	"github.com/juju/juju/core/machine"
 	"github.com/juju/juju/core/model"
 	"github.com/juju/juju/core/network"
@@ -42,4 +43,7 @@ type MachineService interface {
 	InstanceID(ctx context.Context, mUUID string) (string, error)
 	// InstanceName returns the cloud specific display name for this machine.
 	InstanceName(ctx context.Context, mUUID string) (string, error)
+	// HardwareCharacteristics returns the hardware characteristics of the
+	// of the specified machine.
+	HardwareCharacteristics(ctx context.Context, machineUUID string) (*instance.HardwareCharacteristics, error)
 }

@@ -202,6 +202,15 @@ func (s *modelStatusSuite) TestModelStatus(c *gc.C) {
 	s.machineService.EXPECT().GetMachineUUID(gomock.Any(), machine.Name("1")).Return("deadbeef1", nil)
 	s.machineService.EXPECT().InstanceID(gomock.Any(), "deadbeef1").Return("id-9", nil)
 	s.machineService.EXPECT().InstanceName(gomock.Any(), "deadbeef1").Return("", nil)
+	s.machineService.EXPECT().HardwareCharacteristics(gomock.Any(), "deadbeef0").Return(&instance.HardwareCharacteristics{CpuCores: &eight}, nil)
+	arch := arch.DefaultArchitecture
+	mem := uint64(64 * 1024 * 1024 * 1024)
+	stdHw := &params.MachineHardware{
+		Arch: &arch,
+		Mem:  &mem,
+	}
+	s.machineService.EXPECT().HardwareCharacteristics(gomock.Any(), "deadbeef0").Return(&instance.HardwareCharacteristics{Arch: &arch, Mem: &mem}, nil)
+	s.machineService.EXPECT().HardwareCharacteristics(gomock.Any(), "deadbeef1").Return(&instance.HardwareCharacteristics{Arch: &arch, Mem: &mem}, nil).Times(2)
 
 	req := params.Entities{
 		Entities: []params.Entity{{Tag: controllerModelTag}, {Tag: hostedModelTag}},
@@ -209,12 +218,6 @@ func (s *modelStatusSuite) TestModelStatus(c *gc.C) {
 	results, err := modelStatusAPI.ModelStatus(context.Background(), req)
 	c.Assert(err, jc.ErrorIsNil)
 
-	arch := arch.DefaultArchitecture
-	mem := uint64(64 * 1024 * 1024 * 1024)
-	stdHw := &params.MachineHardware{
-		Arch: &arch,
-		Mem:  &mem,
-	}
 	c.Assert(results.Results, jc.DeepEquals, []params.ModelStatus{
 		{
 			ModelTag:           controllerModelTag,

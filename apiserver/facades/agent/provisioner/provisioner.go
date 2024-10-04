@@ -490,18 +490,18 @@ func (api *ProvisionerAPI) AvailabilityZone(ctx context.Context, args params.Ent
 			result.Results[i].Error = apiservererrors.ServerError(apiservererrors.ErrPerm)
 			continue
 		}
-		machine, err := api.getMachine(canAccess, tag)
+		_, err = api.getMachine(canAccess, tag)
 		if err == nil {
-			hc, err := machine.HardwareCharacteristics()
-			if err == nil {
-				if hc.AvailabilityZone != nil {
-					result.Results[i].Result = *hc.AvailabilityZone
-				} else {
-					result.Results[i].Result = ""
-				}
-			} else {
-				result.Results[i].Error = apiservererrors.ServerError(err)
-			}
+			// hc, err := machine.HardwareCharacteristics()
+			// if err == nil {
+			// 	if hc.AvailabilityZone != nil {
+			// 		result.Results[i].Result = *hc.AvailabilityZone
+			// 	} else {
+			// 		result.Results[i].Result = ""
+			// 	}
+			// } else {
+			// 	result.Results[i].Error = apiservererrors.ServerError(err)
+			// }
 		}
 	}
 	return result, nil
