@@ -1196,14 +1196,17 @@ func (c *statusContext) makeMachineStatus(
 
 	hc, err := machineService.HardwareCharacteristics(ctx, machineUUID)
 	if err != nil {
-		logger.Debugf("error fetching hardware characteristics: %v", err)
+		logger.Debugf("error fetching hardware characteristics: %w", err)
 	} else if hc != nil {
 		status.Hardware = hc.String()
 	}
 	status.Containers = make(map[string]params.MachineStatus)
 
 	lxdProfiles := make(map[string]params.LXDProfile)
-	charmProfiles := c.allInstances.CharmProfiles(machineID)
+	charmProfiles, err := machineService.AppliedLXDProfileNames(ctx, machineUUID)
+	if err != nil {
+		logger.Debugf("error fetching lxd profiles: %w", err)
+	}
 	if charmProfiles != nil {
 		for _, v := range charmProfiles {
 			if profile, ok := appStatusInfo.lxdProfiles[v]; ok {
