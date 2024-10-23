@@ -102,6 +102,8 @@ type Config struct {
 	NewSocketListener func(socketlistener.Config) (SocketListener, error)
 	// Logger is the logger used by the worker.
 	Logger logger.Logger
+	// ControllerUUID is the uuid of the controller.
+	ControllerUUID string
 	// ControllerModelUUID is the uuid of the controller model.
 	ControllerModelUUID model.UUID
 }
@@ -110,6 +112,9 @@ type Config struct {
 func (config Config) Validate() error {
 	if config.AccessService == nil {
 		return errors.NotValidf("nil AccessService")
+	}
+	if config.ControllerUUID == "" {
+		return errors.NotValidf("empty ControllerUUID")
 	}
 	if config.ControllerModelUUID == "" {
 		return errors.NotValidf("empty ControllerModelUUID")
@@ -133,6 +138,7 @@ type Worker struct {
 	accessService AccessService
 	logger        logger.Logger
 
+	controllerUUID      string
 	controllerModelUUID model.UUID
 	userCreatorName     user.Name
 }
@@ -151,6 +157,7 @@ func NewWorker(config Config) (worker.Worker, error) {
 	w := &Worker{
 		accessService:       config.AccessService,
 		logger:              config.Logger,
+		controllerUUID:      config.ControllerUUID,
 		controllerModelUUID: config.ControllerModelUUID,
 		userCreatorName:     userCreatorName,
 	}
@@ -235,8 +242,8 @@ func (w *Worker) addMetricsUser(ctx context.Context, username string, password a
 	}
 
 	controllerModelID := permission.ID{
-		ObjectType: permission.Model,
-		Key:        w.controllerModelUUID.String(),
+		ObjectType: permission.Controller,
+		Key:        w.controllerUUID,
 	}
 
 	_, _, err = w.accessService.AddUser(ctx, service.AddUserArg{
@@ -246,7 +253,7 @@ func (w *Worker) addMetricsUser(ctx context.Context, username string, password a
 		CreatorUUID: creatorUser.UUID,
 		Permission: permission.AccessSpec{
 			Target: controllerModelID,
-			Access: permission.ReadAccess,
+			Access: permission.SuperuserAccess,
 		},
 	})
 	if errors.Is(err, usererrors.UserAlreadyExists) {

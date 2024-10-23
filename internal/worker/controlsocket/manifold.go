@@ -66,7 +66,7 @@ func (cfg ManifoldConfig) start(ctx context.Context, getter dependency.Getter) (
 	}
 
 	controllerSerivce := domainServices.Controller()
-	controllerModelUUID, err := controllerSerivce.ControllerModelUUID(ctx)
+	controllerUUID, controllerModelUUID, err := controllerSerivce.Controller(ctx)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -77,6 +77,7 @@ func (cfg ManifoldConfig) start(ctx context.Context, getter dependency.Getter) (
 		Logger:              cfg.Logger,
 		SocketName:          cfg.SocketName,
 		NewSocketListener:   cfg.NewSocketListener,
+		ControllerUUID:      controllerUUID,
 		ControllerModelUUID: controllerModelUUID,
 	})
 	if err != nil {

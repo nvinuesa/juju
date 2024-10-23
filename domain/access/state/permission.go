@@ -200,7 +200,7 @@ SELECT  (u.uuid, u.name, u.display_name, u.external, u.created_at, u.disabled) A
         (p.*) AS (&dbPermission.*)
 FROM    v_user_auth u
         JOIN user AS creator ON u.created_by_uuid = creator.uuid
-        LEFT JOIN v_permission p ON u.uuid = p.grant_to AND p.grant_on = $dbPermission.grant_on 
+        LEFT JOIN v_permission p ON u.uuid = p.grant_to AND p.grant_on = $dbPermission.grant_on
 WHERE   u.name = $dbPermissionUser.name
 AND     u.disabled = false
 AND     u.removed = false
@@ -455,7 +455,7 @@ SELECT  (u.uuid, u.name, u.display_name, u.external, u.created_at, u.disabled) A
         (ee.*) AS (&dbEveryoneExternal.*)
 FROM    v_user_auth u
         JOIN user AS creator ON u.created_by_uuid = creator.uuid
-        LEFT JOIN v_permission p ON u.uuid = p.grant_to AND p.grant_on = $dbPermission.grant_on 
+        LEFT JOIN v_permission p ON u.uuid = p.grant_to AND p.grant_on = $dbPermission.grant_on
         LEFT JOIN v_everyone_external ee ON ee.grant_on = $dbPermission.grant_on
 WHERE   u.disabled = false
 AND     u.removed = false
@@ -605,11 +605,11 @@ func (st *PermissionState) AllModelAccessForCloudCredential(ctx context.Context,
 	}
 
 	query := `
-SELECT m.name AS &CredentialOwnerModelAccess.model_name, 
+SELECT m.name AS &CredentialOwnerModelAccess.model_name,
        p.access_type AS &CredentialOwnerModelAccess.access_type
 FROM   v_model m
        JOIN v_permission AS p ON m.uuid = p.grant_on
-WHERE  m.cloud_credential_owner_name = $input.owner_name 
+WHERE  m.cloud_credential_owner_name = $input.owner_name
 AND    m.cloud_credential_cloud_name = $input.cloud_name
 AND    m.cloud_credential_name = $input.cred_name
 `
@@ -887,7 +887,7 @@ func (st *PermissionState) baseExternalAccessForTarget(ctx context.Context, tx *
 	readQuery := `
 SELECT  (p.*) AS (&dbPermission.*)
 FROM    v_user_auth u
-        JOIN v_permission p ON u.uuid = p.grant_to AND p.grant_on = $dbPermission.grant_on 
+        JOIN v_permission p ON u.uuid = p.grant_to AND p.grant_on = $dbPermission.grant_on
 WHERE   u.name = $dbPermissionUser.name
 AND     u.disabled = false
 AND     u.removed = false
@@ -912,7 +912,7 @@ func (st *PermissionState) baseExternalAccess(ctx context.Context, tx *sqlair.TX
 	readQuery := `
 SELECT  (p.*) AS (&dbPermission.*)
 FROM    v_user_auth u
-        JOIN v_permission p ON u.uuid = p.grant_to 
+        JOIN v_permission p ON u.uuid = p.grant_to
 WHERE   u.name = $dbPermissionUser.name
 AND     u.disabled = false
 AND     u.removed = false

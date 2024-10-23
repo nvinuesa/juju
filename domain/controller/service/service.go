@@ -11,7 +11,7 @@ import (
 
 // State defines an interface for interacting with the underlying state.
 type State interface {
-	ControllerModelUUID(ctx context.Context) (model.UUID, error)
+	Controller(ctx context.Context) (string, model.UUID, error)
 }
 
 // Service defines a service for interacting with the underlying state.
@@ -26,7 +26,7 @@ func NewService(st State) *Service {
 	}
 }
 
-// ControllerModelUUID returns the model UUID of the controller model.
-func (s *Service) ControllerModelUUID(ctx context.Context) (model.UUID, error) {
-	return s.st.ControllerModelUUID(ctx)
+// Controller returns the controller UUID and the controller model UUID.
+func (s *Service) Controller(ctx context.Context) (string, model.UUID, error) {
+	return s.st.Controller(ctx)
 }

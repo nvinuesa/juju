@@ -3,7 +3,8 @@
 
 package state
 
-// controllerModelUUID is used to fetch the controllerModelUUID from the database.
-type controllerModelUUID struct {
-	UUID string `db:"model_uuid"`
+// controller is used to fetch the controller from the database.
+type controller struct {
+	UUID      string `db:"uuid"`
+	ModelUUID string `db:"model_uuid"`
 }

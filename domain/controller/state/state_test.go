@@ -16,6 +16,7 @@ import (
 
 type stateSuite struct {
 	schematesting.ControllerSuite
+	controllerUUID      string
 	controllerModelUUID coremodel.UUID
 }
 
@@ -24,12 +25,13 @@ var _ = gc.Suite(&stateSuite{})
 func (s *stateSuite) SetUpTest(c *gc.C) {
 	s.controllerModelUUID = coremodel.UUID(jujutesting.ModelTag.Id())
 	s.ControllerSuite.SetUpTest(c)
-	_ = s.ControllerSuite.SeedControllerTable(c, s.controllerModelUUID)
+	s.controllerUUID = s.ControllerSuite.SeedControllerTable(c, s.controllerModelUUID)
 }
 
-func (s *stateSuite) TestControllerModelUUID(c *gc.C) {
+func (s *stateSuite) TestControllerRetrieve(c *gc.C) {
 	st := NewState(s.TxnRunnerFactory())
-	uuid, err := st.ControllerModelUUID(context.Background())
+	uuid, modelUUID, err := st.Controller(context.Background())
 	c.Assert(err, jc.ErrorIsNil)
-	c.Assert(uuid, gc.Equals, s.controllerModelUUID)
+	c.Assert(uuid, gc.Equals, s.controllerUUID)
+	c.Assert(modelUUID, gc.Equals, s.controllerModelUUID)
 }

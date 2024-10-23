@@ -27,23 +27,23 @@ func NewState(factory database.TxnRunnerFactory) *State {
 	}
 }
 
-// ControllerModelUUID returns the model UUID of the controller model.
-func (st *State) ControllerModelUUID(ctx context.Context) (model.UUID, error) {
+// Controller returns the controller UUID and the controller model UUID.
+func (st *State) Controller(ctx context.Context) (string, model.UUID, error) {
 	db, err := st.DB()
 	if err != nil {
-		return "", errors.Trace(err)
+		return "", "", errors.Trace(err)
 	}
 
-	var uuid controllerModelUUID
+	var controller controller
 	stmt, err := st.Prepare(`
-SELECT &controllerModelUUID.model_uuid
+SELECT &controller.*
 FROM   controller
-`, uuid)
+`, controller)
 	if err != nil {
-		return "", errors.Annotate(err, "preparing select controller model uuid statement")
+		return "", "", errors.Annotate(err, "preparing select controller model uuid statement")
 	}
 	err = db.Txn(ctx, func(ctx context.Context, tx *sqlair.TX) error {
-		err := tx.Query(ctx, stmt).Get(&uuid)
+		err := tx.Query(ctx, stmt).Get(&controller)
 		if errors.Is(err, sqlair.ErrNoRows) {
 			// This should never reasonably happen.
 			return fmt.Errorf("internal error: controller model uuid not found")
@@ -51,8 +51,8 @@ FROM   controller
 		return err
 	})
 	if err != nil {
-		return "", errors.Annotate(err, "getting controller model uuid")
+		return "", "", errors.Annotate(err, "getting controller model uuid")
 	}
 
-	return model.UUID(uuid.UUID), nil
+	return controller.UUID, model.UUID(controller.ModelUUID), nil
 }
