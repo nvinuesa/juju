@@ -21,7 +21,6 @@ import (
 	"github.com/juju/juju/core/status"
 	"github.com/juju/juju/internal/charm"
 	"github.com/juju/juju/internal/charm/resource"
-	"github.com/juju/juju/internal/charm/services"
 	"github.com/juju/juju/internal/tools"
 	"github.com/juju/juju/state"
 )
@@ -46,7 +45,6 @@ type Backend interface {
 	Resources(objectstore.ObjectStore) Resources
 	OfferConnectionForRelation(string) (OfferConnection, error)
 	SaveEgressNetworks(relationKey string, cidrs []string) (state.RelationNetworks, error)
-	services.StateBackend
 
 	// ReadSequence is a stop gap to allow the next unit number to be read from mongo
 	// so that correctly matching units can be written to dqlite.
@@ -294,14 +292,6 @@ func (s stateShim) RemovePendingResources(applicationID string, pendingIDs map[s
 
 func (s stateShim) AddCharmMetadata(info state.CharmInfo) (Charm, error) {
 	c, err := s.State.AddCharmMetadata(info)
-	if err != nil {
-		return nil, err
-	}
-	return stateCharmShim{CharmRefFull: c}, nil
-}
-
-func (s stateShim) PrepareCharmUpload(curl string) (services.UploadedCharm, error) {
-	c, err := s.State.PrepareCharmUpload(curl)
 	if err != nil {
 		return nil, err
 	}

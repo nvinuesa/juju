@@ -61,8 +61,6 @@ type DeployFromRepositoryState interface {
 	Machine(string) (Machine, error)
 	ModelConstraints() (constraints.Value, error)
 
-	services.StateBackend
-
 	ReadSequence(name string) (int, error)
 }
 
