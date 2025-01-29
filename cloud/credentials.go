@@ -420,6 +420,18 @@ type CredentialAttr struct {
 
 	// Options, if set, define the allowed values for this field.
 	Options []interface{}
+
+	// IsLastInteractive is true if this CredentialAttr is the last one to
+	// be prompted for in an interactive session. This means that the value
+	// of this particular attribute renders the following attributes
+	// irrelevant.
+	IsLastInteractive bool
+
+	// ShortSuffix is a human-readable suffix that we add to the name of
+	// the attribute when prompting. This is only used in the case of last
+	// interactive attributes, and it is useful to explain the user what
+	// to insert.
+	ShortSuffix string
 }
 
 type cloudCredentialChecker struct{}

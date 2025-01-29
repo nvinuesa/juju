@@ -28,9 +28,11 @@ import (
 )
 
 const (
-	credAttrServerCert    = "server-cert"
-	credAttrClientCert    = "client-cert"
-	credAttrClientKey     = "client-key"
+	credAttrServerCert = "server-cert"
+	credAttrClientCert = "client-cert"
+	credAttrClientKey  = "client-key"
+	// Deprecated: In LXD 6.1, and only trust-token should
+	// be used. See https://documentation.ubuntu.com/lxd/en/stable-5.0/authentication/#adding-client-certificates-using-tokens
 	credAttrTrustPassword = "trust-password"
 	credAttrTrustToken    = "trust-token"
 )
@@ -90,19 +92,22 @@ func (environProviderCredentials) CredentialSchemas() map[cloud.AuthType]cloud.C
 			},
 		},
 		cloud.InteractiveAuthType: {
-			// deprecated in LXD 6.1, and only trust-token should
+			{
+				Name: credAttrTrustToken,
+				CredentialAttr: cloud.CredentialAttr{
+					Description:       "the LXD server trust token",
+					Hidden:            false,
+					IsLastInteractive: true,
+					Optional:          true,
+					ShortSuffix:       "(leave blank to provide a trust password instead)",
+				},
+			},
+			// Deprecated: In LXD 6.1, and only trust-token should
 			// be used. See https://documentation.ubuntu.com/lxd/en/stable-5.0/authentication/#adding-client-certificates-using-tokens
 			{
 				Name: credAttrTrustPassword,
 				CredentialAttr: cloud.CredentialAttr{
 					Description: "the LXD server trust password",
-					Hidden:      true,
-				},
-			},
-			{
-				Name: credAttrTrustToken,
-				CredentialAttr: cloud.CredentialAttr{
-					Description: "the LXD server trust token",
 					Hidden:      true,
 				},
 			},

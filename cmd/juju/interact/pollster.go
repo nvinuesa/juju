@@ -190,8 +190,14 @@ func (p *Pollster) EnterVerify(valueName string, verify VerifyFunc) (string, err
 
 // EnterOptional requests that the user enter a value.  It accepts any value,
 // even an empty string.
+func (p *Pollster) EnterWithSuffix(valueName string, suffix string) (string, error) {
+	return QueryVerify("Enter "+valueName+" "+suffix+": ", p.scanner, p.out, p.errOut, nil)
+}
+
+// EnterOptional requests that the user enter a value.  It accepts any value,
+// even an empty string.
 func (p *Pollster) EnterOptional(valueName string) (string, error) {
-	return QueryVerify("Enter "+valueName+" (optional): ", p.scanner, p.out, p.errOut, nil)
+	return p.EnterWithSuffix(valueName, "(optional)")
 }
 
 // EnterVerifyDefault requests that the user enter a value.  Values failing to
