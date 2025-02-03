@@ -17,19 +17,16 @@ import (
 	"github.com/juju/mgo/v3/bson"
 	"github.com/juju/mgo/v3/txn"
 	"github.com/juju/names/v6"
-	"github.com/juju/schema"
 	jujutxn "github.com/juju/txn/v3"
 	"github.com/juju/version/v2"
 
 	"github.com/juju/juju/core/arch"
-	"github.com/juju/juju/core/config"
 	"github.com/juju/juju/core/constraints"
 	"github.com/juju/juju/core/network"
 	"github.com/juju/juju/core/network/firewall"
 	"github.com/juju/juju/core/objectstore"
 	"github.com/juju/juju/core/status"
 	"github.com/juju/juju/internal/charm"
-	"github.com/juju/juju/internal/configschema"
 	mgoutils "github.com/juju/juju/internal/mongo/utils"
 	internalpassword "github.com/juju/juju/internal/password"
 	"github.com/juju/juju/internal/relation"
@@ -2669,61 +2666,61 @@ func (a *Application) updateMasterConfig(current *Settings, validChanges charm.S
 	return errors.Trace(err)
 }
 
-// ApplicationConfig returns the configuration for the application itself.
-func (a *Application) ApplicationConfig() (config.ConfigAttributes, error) {
-	cfg, err := readSettings(a.st.db(), settingsC, a.applicationConfigKey())
-	if err != nil {
-		if errors.Is(err, errors.NotFound) {
-			return config.ConfigAttributes{}, nil
-		}
-		return nil, errors.Annotatef(err, "application config for application %q", a.doc.Name)
-	}
+// // ApplicationConfig returns the configuration for the application itself.
+// func (a *Application) ApplicationConfig() (config.ConfigAttributes, error) {
+// 	cfg, err := readSettings(a.st.db(), settingsC, a.applicationConfigKey())
+// 	if err != nil {
+// 		if errors.Is(err, errors.NotFound) {
+// 			return config.ConfigAttributes{}, nil
+// 		}
+// 		return nil, errors.Annotatef(err, "application config for application %q", a.doc.Name)
+// 	}
 
-	if len(cfg.Keys()) == 0 {
-		return config.ConfigAttributes{}, nil
-	}
-	return cfg.Map(), nil
-}
+// 	if len(cfg.Keys()) == 0 {
+// 		return config.ConfigAttributes{}, nil
+// 	}
+// 	return cfg.Map(), nil
+// }
 
-// UpdateApplicationConfig changes an application's config settings.
-// Unknown and invalid values will return an error.
-func (a *Application) UpdateApplicationConfig(
-	changes config.ConfigAttributes,
-	reset []string,
-	schema configschema.Fields,
-	defaults schema.Defaults,
-) error {
-	node, err := readSettings(a.st.db(), settingsC, a.applicationConfigKey())
-	if errors.Is(err, errors.NotFound) {
-		return errors.Errorf("cannot update application config since no config exists for application %v", a.doc.Name)
-	} else if err != nil {
-		return errors.Annotatef(err, "application config for application %q", a.doc.Name)
-	}
-	resetKeys := set.NewStrings(reset...)
-	for name, value := range changes {
-		if resetKeys.Contains(name) {
-			continue
-		}
-		node.Set(name, value)
-	}
-	for _, name := range reset {
-		node.Delete(name)
-	}
-	newConfig, err := config.NewConfig(node.Map(), schema, defaults)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	if err := newConfig.Validate(); err != nil {
-		return errors.Trace(err)
-	}
-	// Update node so it gets coerced values with correct types.
-	coerced := newConfig.Attributes()
-	for _, key := range node.Keys() {
-		node.Set(key, coerced[key])
-	}
-	_, err = node.Write()
-	return err
-}
+// // UpdateApplicationConfig changes an application's config settings.
+// // Unknown and invalid values will return an error.
+// func (a *Application) UpdateApplicationConfig(
+// 	changes config.ConfigAttributes,
+// 	reset []string,
+// 	schema configschema.Fields,
+// 	defaults schema.Defaults,
+// ) error {
+// 	node, err := readSettings(a.st.db(), settingsC, a.applicationConfigKey())
+// 	if errors.Is(err, errors.NotFound) {
+// 		return errors.Errorf("cannot update application config since no config exists for application %v", a.doc.Name)
+// 	} else if err != nil {
+// 		return errors.Annotatef(err, "application config for application %q", a.doc.Name)
+// 	}
+// 	resetKeys := set.NewStrings(reset...)
+// 	for name, value := range changes {
+// 		if resetKeys.Contains(name) {
+// 			continue
+// 		}
+// 		node.Set(name, value)
+// 	}
+// 	for _, name := range reset {
+// 		node.Delete(name)
+// 	}
+// 	newConfig, err := config.NewConfig(node.Map(), schema, defaults)
+// 	if err != nil {
+// 		return errors.Trace(err)
+// 	}
+// 	if err := newConfig.Validate(); err != nil {
+// 		return errors.Trace(err)
+// 	}
+// 	// Update node so it gets coerced values with correct types.
+// 	coerced := newConfig.Attributes()
+// 	for _, key := range node.Keys() {
+// 		node.Set(key, coerced[key])
+// 	}
+// 	_, err = node.Write()
+// 	return err
+// }
 
 var ErrSubordinateConstraints = stderrors.New("constraints do not apply to subordinate applications")
 

@@ -4,12 +4,15 @@
 package uniter
 
 import (
+	"context"
+
 	"github.com/juju/errors"
 	"github.com/juju/names/v6"
 
 	"github.com/juju/juju/apiserver/common"
 	"github.com/juju/juju/apiserver/facade"
 	coreapplication "github.com/juju/juju/core/application"
+	applicationerrors "github.com/juju/juju/domain/application/errors"
 	"github.com/juju/juju/state"
 )
 
@@ -63,8 +66,8 @@ func machineAccessor(authorizer facade.Authorizer, st *state.State) common.GetAu
 	}
 }
 
-func cloudSpecAccessor(authorizer facade.Authorizer, st *state.State) func() (func() bool, error) {
-	return func() (func() bool, error) {
+func cloudSpecAccessor(authorizer facade.Authorizer, st *state.State, applicationService ApplicationService) func(ctx context.Context) (func() bool, error) {
+	return func(ctx context.Context) (func() bool, error) {
 		var appName string
 		var err error
 
@@ -81,11 +84,14 @@ func cloudSpecAccessor(authorizer facade.Authorizer, st *state.State) func() (fu
 			return nil, errors.Errorf("expected names.UnitTag or names.ApplicationTag, got %T", tag)
 		}
 
-		app, err := st.Application(appName)
+		appID, err := applicationService.GetApplicationIDByName(ctx, appName)
+		if errors.Is(err, applicationerrors.ApplicationNotFound) {
+			return nil, errors.NotFoundf("application %s", appName)
+		}
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
-		config, err := app.ApplicationConfig()
+		config, err := applicationService.GetApplicationConfig(ctx, appID)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}

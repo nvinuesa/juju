@@ -84,7 +84,7 @@ type UniterAPI struct {
 	// A cloud spec can only be accessed for the model of the unit or
 	// application that is authorised for this API facade.
 	// We do not need to use an AuthFunc, because we do not need to pass a tag.
-	accessCloudSpec func() (func() bool, error)
+	accessCloudSpec func(ctx context.Context) (func() bool, error)
 	cloudSpecer     cloudspec.CloudSpecer
 
 	logger corelogger.Logger
@@ -2187,7 +2187,7 @@ func makeAppAuthChecker(authTag names.Tag) common.AuthFunc {
 // A check is made beforehand to ensure that the request is made by an entity
 // that has been granted the appropriate trust.
 func (u *UniterAPI) CloudSpec(ctx context.Context) (params.CloudSpecResult, error) {
-	canAccess, err := u.accessCloudSpec()
+	canAccess, err := u.accessCloudSpec(ctx)
 	if err != nil {
 		return params.CloudSpecResult{}, err
 	}

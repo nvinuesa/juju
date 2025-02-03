@@ -9,9 +9,11 @@ import (
 	"github.com/juju/errors"
 
 	"github.com/juju/juju/cloud"
+	"github.com/juju/juju/core/application"
 	coreapplication "github.com/juju/juju/core/application"
 	"github.com/juju/juju/core/assumes"
 	corecharm "github.com/juju/juju/core/charm"
+	coreconfig "github.com/juju/juju/core/config"
 	"github.com/juju/juju/core/credential"
 	"github.com/juju/juju/core/crossmodel"
 	"github.com/juju/juju/core/instance"
@@ -185,6 +187,29 @@ type ApplicationService interface {
 	// indicates if the charm has been uploaded to the controller.
 	// This will return true if the charm is available, and false otherwise.
 	IsCharmAvailable(ctx context.Context, locator applicationcharm.CharmLocator) (bool, error)
+
+	// GetApplicationConfig returns the application config attributes for the
+	// configuration.
+	// If no application is found, an error satisfying
+	// [applicationerrors.ApplicationNotFound] is returned.
+	GetApplicationConfig(ctx context.Context, appID application.ID) (coreconfig.ConfigAttributes, error)
+
+	// GetApplicationIDByName returns a application ID by application name. It
+	// returns an error if the application can not be found by the name.
+	GetApplicationIDByName(ctx context.Context, name string) (application.ID, error)
+
+	// SetApplicationConfig updates the application config with the specified
+	// values. If the key does not exist, it is created. If the key already exists,
+	// it is updated, if there is no value it is removed. With the caveat that
+	// application trust will be set to false.
+	// If no application is found, an error satisfying
+	// [applicationerrors.ApplicationNotFound] is returned.
+	// If the charm does not exist, an error satisfying
+	// [applicationerrors.CharmNotFound] is returned, if this is the case, then
+	// the application is in a bad state and should be removed.
+	// If the charm config is not valid, an error satisfying
+	// [applicationerrors.CharmConfigNotValid] is returned.
+	SetApplicationConfig(ctx context.Context, appID coreapplication.ID, newConfig map[string]string) error
 }
 
 // ModelConfigService provides access to the model configuration.

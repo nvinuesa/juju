@@ -8,7 +8,9 @@ import (
 
 	"github.com/juju/juju/cloud"
 	"github.com/juju/juju/controller"
+	"github.com/juju/juju/core/application"
 	coreapplication "github.com/juju/juju/core/application"
+	coreconfig "github.com/juju/juju/core/config"
 	"github.com/juju/juju/core/credential"
 	"github.com/juju/juju/core/leadership"
 	"github.com/juju/juju/core/life"
@@ -105,6 +107,12 @@ type ApplicationService interface {
 	// GetCharmLXDProfile returns the LXD profile along with the revision of the
 	// charm using the charm name, source and revision.
 	GetCharmLXDProfile(ctx context.Context, locator charm.CharmLocator) (internalcharm.LXDProfile, charm.Revision, error)
+
+	// GetApplicationConfig returns the application config attributes for the
+	// configuration.
+	// If no application is found, an error satisfying
+	// [applicationerrors.ApplicationNotFound] is returned.
+	GetApplicationConfig(ctx context.Context, appID application.ID) (coreconfig.ConfigAttributes, error)
 }
 
 // UnitStateService describes the ability to retrieve and persist

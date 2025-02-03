@@ -520,7 +520,14 @@ func (a *API) provisioningInfo(ctx context.Context, appTag names.ApplicationTag)
 		}
 	}
 	caCert, _ := cfg.CACert()
-	appConfig, err := app.ApplicationConfig()
+	appID, err := a.applicationService.GetApplicationIDByName(ctx, appName)
+	if errors.Is(err, applicationerrors.ApplicationNotFound) {
+		return nil, errors.NotFoundf("application %s", appName)
+	}
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	appConfig, err := a.applicationService.GetApplicationConfig(ctx, appID)
 	if err != nil {
 		return nil, errors.Annotatef(err, "getting application config")
 	}

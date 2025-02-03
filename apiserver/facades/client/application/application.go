@@ -824,7 +824,7 @@ func (api *APIBase) setConfig(
 	// parseCharmSettings is passed false for useDefaults because setConfig
 	// should not care about defaults.
 	// If defaults are wanted, one should call unsetApplicationConfig.
-	appConfig, appConfigSchema, charmSettings, defaults, err := parseCharmSettings(charmConfig, app.Name(), settingsStrings, settingsYAML, environsconfig.NoDefaults)
+	appConfig, _, charmSettings, _, err := parseCharmSettings(charmConfig, app.Name(), settingsStrings, settingsYAML, environsconfig.NoDefaults)
 	if err != nil {
 		return errors.Annotate(err, "parsing settings for application")
 	}
@@ -835,7 +835,14 @@ func (api *APIBase) setConfig(
 		}
 	}
 	if cfgAttrs := appConfig.Attributes(); len(cfgAttrs) > 0 {
-		if err = app.UpdateApplicationConfig(cfgAttrs, nil, appConfigSchema, defaults); err != nil {
+		appID, err := api.applicationService.GetApplicationIDByName(ctx, app.Name())
+		if errors.Is(err, applicationerrors.ApplicationNotFound) {
+			return errors.NotFoundf("application %s", args.ApplicationName)
+		}
+		if err != nil {
+			return errors.Trace(err)
+		}
+		if err = api.applicationService.SetApplicationConfig(ctx, appID, cfgAttrs); err != nil {
 			return errors.Annotate(err, "updating application config settings")
 		}
 	}

@@ -13,7 +13,9 @@ import (
 	apiservererrors "github.com/juju/juju/apiserver/errors"
 	"github.com/juju/juju/apiserver/facade"
 	"github.com/juju/juju/apiserver/internal"
+	"github.com/juju/juju/core/application"
 	coreapplication "github.com/juju/juju/core/application"
+	"github.com/juju/juju/core/config"
 	corelogger "github.com/juju/juju/core/logger"
 	"github.com/juju/juju/core/network"
 	"github.com/juju/juju/core/watcher"
@@ -31,10 +33,27 @@ type NetworkService interface {
 
 // ApplicationService is used to interact with the application service.
 type ApplicationService interface {
+	// GetApplicationScale returns the desired scale of an application, returning an error
+	// satisfying [applicationerrors.ApplicationNotFoundError] if the application doesn't exist.
+	// This is used on CAAS models.
 	GetApplicationScale(ctx context.Context, appName string) (int, error)
+	// SetApplicationScale sets the application's desired scale value, returning an error
+	// satisfying [applicationerrors.ApplicationNotFound] if the application is not found.
+	// This is used on CAAS models.
 	SetApplicationScale(ctx context.Context, appName string, scale int) error
+	// UpdateCloudService updates the cloud service for the specified application, returning an error
+	// satisfying [applicationerrors.ApplicationNotFoundError] if the application doesn't exist.
 	UpdateCloudService(ctx context.Context, appName, providerID string, sAddrs network.SpaceAddresses) error
+	// WatchApplicationScale returns a watcher that observes changes to an application's scale.
 	WatchApplicationScale(ctx context.Context, appName string) (watcher.NotifyWatcher, error)
+	// GetApplicationConfig returns the application config attributes for the
+	// configuration.
+	// If no application is found, an error satisfying
+	// [applicationerrors.ApplicationNotFound] is returned.
+	GetApplicationConfig(ctx context.Context, appID application.ID) (config.ConfigAttributes, error)
+	// GetApplicationIDByName returns a application ID by application name. It
+	// returns an error if the application can not be found by the name.
+	GetApplicationIDByName(ctx context.Context, name string) (application.ID, error)
 }
 
 type Facade struct {
@@ -137,7 +156,7 @@ func (f *Facade) ApplicationsTrust(ctx context.Context, args params.Entities) (p
 		Results: make([]params.BoolResult, len(args.Entities)),
 	}
 	for i, arg := range args.Entities {
-		trust, err := f.applicationTrust(arg.Tag)
+		trust, err := f.applicationTrust(ctx, arg.Tag)
 		if err != nil {
 			results.Results[i].Error = apiservererrors.ServerError(err)
 			continue
@@ -148,16 +167,19 @@ func (f *Facade) ApplicationsTrust(ctx context.Context, args params.Entities) (p
 	return results, nil
 }
 
-func (f *Facade) applicationTrust(tagString string) (bool, error) {
+func (f *Facade) applicationTrust(ctx context.Context, tagString string) (bool, error) {
 	appTag, err := names.ParseApplicationTag(tagString)
 	if err != nil {
 		return false, errors.Trace(err)
 	}
-	app, err := f.state.Application(appTag.Id())
+	appID, err := f.applicationService.GetApplicationIDByName(ctx, appTag.Id())
+	if errors.Is(err, applicationerrors.ApplicationNotFound) {
+		return false, errors.NotFoundf("application %s", appTag.Id())
+	}
 	if err != nil {
 		return false, errors.Trace(err)
 	}
-	cfg, err := app.ApplicationConfig()
+	cfg, err := f.applicationService.GetApplicationConfig(ctx, appID)
 	if err != nil {
 		return false, errors.Trace(err)
 	}

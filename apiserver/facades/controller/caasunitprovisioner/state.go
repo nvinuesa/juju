@@ -4,7 +4,6 @@
 package caasunitprovisioner
 
 import (
-	coreconfig "github.com/juju/juju/core/config"
 	"github.com/juju/juju/state"
 )
 
@@ -18,7 +17,6 @@ type CAASUnitProvisionerState interface {
 // required by the CAAS unit provisioner facade.
 type Application interface {
 	WatchConfigSettingsHash() state.StringsWatcher
-	ApplicationConfig() (coreconfig.ConfigAttributes, error)
 }
 
 type stateShim struct {

@@ -1502,8 +1502,8 @@ func (s *Service) UnsetApplicationConfigKeys(ctx context.Context, appID coreappl
 }
 
 // SetApplicationConfig updates the application config with the specified
-// values. If the key does not exist, it is created. If the key already exists,
 // it is updated, if there is no value it is removed. With the caveat that
+// values. If the key does not exist, it is created. If the key already exists,
 // application trust will be set to false.
 // If no application is found, an error satisfying
 // [applicationerrors.ApplicationNotFound] is returned.

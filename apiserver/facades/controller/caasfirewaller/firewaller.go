@@ -14,6 +14,7 @@ import (
 	"github.com/juju/juju/apiserver/facade"
 	charmscommon "github.com/juju/juju/apiserver/internal/charms"
 	"github.com/juju/juju/core/application"
+	"github.com/juju/juju/core/config"
 	"github.com/juju/juju/core/life"
 	"github.com/juju/juju/core/unit"
 	applicationerrors "github.com/juju/juju/domain/application/errors"
@@ -32,6 +33,12 @@ type ApplicationService interface {
 	// GetApplicationIDByName returns a application ID by application name. It
 	// returns an error if the application can not be found by the name.
 	GetApplicationIDByName(ctx context.Context, name string) (application.ID, error)
+
+	// GetApplicationConfig returns the application config attributes for the
+	// configuration.
+	// If no application is found, an error satisfying
+	// [applicationerrors.ApplicationNotFound] is returned.
+	GetApplicationConfig(ctx context.Context, appID application.ID) (config.ConfigAttributes, error)
 }
 
 type Facade struct {
@@ -91,23 +98,27 @@ func (f *Facade) ApplicationsConfig(ctx context.Context, args params.Entities) (
 		Results: make([]params.ConfigResult, len(args.Entities)),
 	}
 	for i, arg := range args.Entities {
-		result, err := f.getApplicationConfig(arg.Tag)
+		result, err := f.getApplicationConfig(ctx, arg.Tag)
 		results.Results[i].Config = result
 		results.Results[i].Error = apiservererrors.ServerError(err)
 	}
 	return results, nil
 }
 
-func (f *Facade) getApplicationConfig(tagString string) (map[string]interface{}, error) {
+func (f *Facade) getApplicationConfig(ctx context.Context, tagString string) (map[string]interface{}, error) {
 	tag, err := names.ParseApplicationTag(tagString)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	app, err := f.state.Application(tag.Id())
+	appID, err := f.applicationService.GetApplicationIDByName(ctx, tag.Id())
+	if errors.Is(err, applicationerrors.ApplicationNotFound) {
+		return nil, errors.NotFoundf("application %s", tag.Id())
+	}
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	return app.ApplicationConfig()
+	config, err := f.applicationService.GetApplicationConfig(ctx, appID)
+	return config, errors.Trace(err)
 }
 
 // WatchApplications starts a StringsWatcher to watch applications

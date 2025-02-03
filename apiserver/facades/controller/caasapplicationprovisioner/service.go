@@ -7,6 +7,8 @@ import (
 	"context"
 
 	"github.com/juju/juju/controller"
+	"github.com/juju/juju/core/application"
+	coreconfig "github.com/juju/juju/core/config"
 	"github.com/juju/juju/core/leadership"
 	"github.com/juju/juju/core/life"
 	"github.com/juju/juju/core/model"
@@ -47,9 +49,21 @@ type ModelInfoService interface {
 
 // ApplicationService describes the service for accessing application scaling info.
 type ApplicationService interface {
+	// GetApplicationScale returns the desired scale of an application, returning an error
+	// satisfying [applicationerrors.ApplicationNotFoundError] if the application doesn't exist.
+	// This is used on CAAS models.
+	GetApplicationScale(ctx context.Context, appName string) (int, error)
+	// GetApplicationConfig returns the application config attributes for the
+	// configuration.
+	// If no application is found, an error satisfying
+	// [applicationerrors.ApplicationNotFound] is returned.
+	GetApplicationConfig(ctx context.Context, appID application.ID) (coreconfig.ConfigAttributes, error)
+	// GetApplicationIDByName returns a application ID by application name. It
+	// returns an error if the application can not be found by the name.
+	GetApplicationIDByName(ctx context.Context, name string) (application.ID, error)
+
 	SetApplicationScalingState(ctx context.Context, name string, scaleTarget int, scaling bool) error
 	GetApplicationScalingState(ctx context.Context, name string) (service.ScalingState, error)
-	GetApplicationScale(ctx context.Context, name string) (int, error)
 	GetApplicationLife(ctx context.Context, name string) (life.Value, error)
 	GetUnitLife(context.Context, unit.Name) (life.Value, error)
 	// GetCharmLocatorByApplicationName returns a CharmLocator by application name.

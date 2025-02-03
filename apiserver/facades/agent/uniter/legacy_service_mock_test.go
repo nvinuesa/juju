@@ -14,6 +14,7 @@ import (
 	reflect "reflect"
 
 	application "github.com/juju/juju/core/application"
+	config "github.com/juju/juju/core/config"
 	leadership "github.com/juju/juju/core/leadership"
 	life "github.com/juju/juju/core/life"
 	machine "github.com/juju/juju/core/machine"
@@ -22,7 +23,7 @@ import (
 	unit "github.com/juju/juju/core/unit"
 	watcher "github.com/juju/juju/core/watcher"
 	charm "github.com/juju/juju/domain/application/charm"
-	config "github.com/juju/juju/environs/config"
+	config0 "github.com/juju/juju/environs/config"
 	charm0 "github.com/juju/juju/internal/charm"
 	gomock "go.uber.org/mock/gomock"
 )
@@ -51,10 +52,10 @@ func (m *MockModelConfigService) EXPECT() *MockModelConfigServiceMockRecorder {
 }
 
 // ModelConfig mocks base method.
-func (m *MockModelConfigService) ModelConfig(arg0 context.Context) (*config.Config, error) {
+func (m *MockModelConfigService) ModelConfig(arg0 context.Context) (*config0.Config, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ModelConfig", arg0)
-	ret0, _ := ret[0].(*config.Config)
+	ret0, _ := ret[0].(*config0.Config)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -72,19 +73,19 @@ type MockModelConfigServiceModelConfigCall struct {
 }
 
 // Return rewrite *gomock.Call.Return
-func (c *MockModelConfigServiceModelConfigCall) Return(arg0 *config.Config, arg1 error) *MockModelConfigServiceModelConfigCall {
+func (c *MockModelConfigServiceModelConfigCall) Return(arg0 *config0.Config, arg1 error) *MockModelConfigServiceModelConfigCall {
 	c.Call = c.Call.Return(arg0, arg1)
 	return c
 }
 
 // Do rewrite *gomock.Call.Do
-func (c *MockModelConfigServiceModelConfigCall) Do(f func(context.Context) (*config.Config, error)) *MockModelConfigServiceModelConfigCall {
+func (c *MockModelConfigServiceModelConfigCall) Do(f func(context.Context) (*config0.Config, error)) *MockModelConfigServiceModelConfigCall {
 	c.Call = c.Call.Do(f)
 	return c
 }
 
 // DoAndReturn rewrite *gomock.Call.DoAndReturn
-func (c *MockModelConfigServiceModelConfigCall) DoAndReturn(f func(context.Context) (*config.Config, error)) *MockModelConfigServiceModelConfigCall {
+func (c *MockModelConfigServiceModelConfigCall) DoAndReturn(f func(context.Context) (*config0.Config, error)) *MockModelConfigServiceModelConfigCall {
 	c.Call = c.Call.DoAndReturn(f)
 	return c
 }
@@ -757,6 +758,45 @@ func (c *MockApplicationServiceEnsureUnitDeadCall) Do(f func(context.Context, un
 
 // DoAndReturn rewrite *gomock.Call.DoAndReturn
 func (c *MockApplicationServiceEnsureUnitDeadCall) DoAndReturn(f func(context.Context, unit.Name, leadership.Revoker) error) *MockApplicationServiceEnsureUnitDeadCall {
+	c.Call = c.Call.DoAndReturn(f)
+	return c
+}
+
+// GetApplicationConfig mocks base method.
+func (m *MockApplicationService) GetApplicationConfig(arg0 context.Context, arg1 application.ID) (config.ConfigAttributes, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetApplicationConfig", arg0, arg1)
+	ret0, _ := ret[0].(config.ConfigAttributes)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetApplicationConfig indicates an expected call of GetApplicationConfig.
+func (mr *MockApplicationServiceMockRecorder) GetApplicationConfig(arg0, arg1 any) *MockApplicationServiceGetApplicationConfigCall {
+	mr.mock.ctrl.T.Helper()
+	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetApplicationConfig", reflect.TypeOf((*MockApplicationService)(nil).GetApplicationConfig), arg0, arg1)
+	return &MockApplicationServiceGetApplicationConfigCall{Call: call}
+}
+
+// MockApplicationServiceGetApplicationConfigCall wrap *gomock.Call
+type MockApplicationServiceGetApplicationConfigCall struct {
+	*gomock.Call
+}
+
+// Return rewrite *gomock.Call.Return
+func (c *MockApplicationServiceGetApplicationConfigCall) Return(arg0 config.ConfigAttributes, arg1 error) *MockApplicationServiceGetApplicationConfigCall {
+	c.Call = c.Call.Return(arg0, arg1)
+	return c
+}
+
+// Do rewrite *gomock.Call.Do
+func (c *MockApplicationServiceGetApplicationConfigCall) Do(f func(context.Context, application.ID) (config.ConfigAttributes, error)) *MockApplicationServiceGetApplicationConfigCall {
+	c.Call = c.Call.Do(f)
+	return c
+}
+
+// DoAndReturn rewrite *gomock.Call.DoAndReturn
+func (c *MockApplicationServiceGetApplicationConfigCall) DoAndReturn(f func(context.Context, application.ID) (config.ConfigAttributes, error)) *MockApplicationServiceGetApplicationConfigCall {
 	c.Call = c.Call.DoAndReturn(f)
 	return c
 }

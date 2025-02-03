@@ -8,10 +8,8 @@ import (
 
 	"github.com/juju/errors"
 	"github.com/juju/names/v6"
-	"github.com/juju/schema"
 
 	"github.com/juju/juju/apiserver/common/storagecommon"
-	coreconfig "github.com/juju/juju/core/config"
 	"github.com/juju/juju/core/constraints"
 	"github.com/juju/juju/core/crossmodel"
 	"github.com/juju/juju/core/instance"
@@ -19,7 +17,6 @@ import (
 	"github.com/juju/juju/core/objectstore"
 	"github.com/juju/juju/core/status"
 	"github.com/juju/juju/internal/charm"
-	"github.com/juju/juju/internal/configschema"
 	"github.com/juju/juju/internal/relation"
 	"github.com/juju/juju/internal/tools"
 	"github.com/juju/juju/state"
@@ -58,7 +55,6 @@ type Application interface {
 	Name() string
 	AddUnit(state.AddUnitParams) (Unit, error)
 	AllUnits() ([]Unit, error)
-	ApplicationConfig() (coreconfig.ConfigAttributes, error)
 	ApplicationTag() names.ApplicationTag
 	CharmURL() (*string, bool)
 	CharmOrigin() *state.CharmOrigin
@@ -77,7 +73,6 @@ type Application interface {
 	MergeExposeSettings(map[string]state.ExposedEndpoint) error
 	UnsetExposeSettings([]string) error
 	UpdateCharmConfig(charm.Settings) error
-	UpdateApplicationConfig(coreconfig.ConfigAttributes, []string, configschema.Fields, schema.Defaults) error
 	MergeBindings(*state.Bindings, bool) error
 	Relations() ([]Relation, error)
 }

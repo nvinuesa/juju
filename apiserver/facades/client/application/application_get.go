@@ -61,9 +61,16 @@ func (api *APIBase) getConfig(
 
 	mergedCharmConfig := describe(settings, charmConfig)
 
-	appConfig, err := app.ApplicationConfig()
+	appID, err := api.applicationService.GetApplicationIDByName(ctx, args.ApplicationName)
+	if errors.Is(err, applicationerrors.ApplicationNotFound) {
+		return params.ApplicationGetResults{}, errors.NotFoundf("application %s", args.ApplicationName)
+	}
 	if err != nil {
-		return params.ApplicationGetResults{}, err
+		return params.ApplicationGetResults{}, errors.Trace(err)
+	}
+	appConfig, err := api.applicationService.GetApplicationConfig(ctx, appID)
+	if err != nil {
+		return params.ApplicationGetResults{}, errors.Trace(err)
 	}
 
 	providerSchema, providerDefaults, err := ConfigSchema()

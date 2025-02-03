@@ -11,7 +11,6 @@ import (
 	"github.com/juju/names/v6"
 
 	"github.com/juju/juju/controller"
-	coreconfig "github.com/juju/juju/core/config"
 	"github.com/juju/juju/core/constraints"
 	"github.com/juju/juju/core/network"
 	"github.com/juju/juju/core/objectstore"
@@ -57,7 +56,6 @@ type Application interface {
 	SetStatus(statusInfo status.StatusInfo) error
 	CharmModifiedVersion() int
 	CharmURL() (curl *string, force bool)
-	ApplicationConfig() (coreconfig.ConfigAttributes, error)
 	ClearResources() error
 	Watch() state.NotifyWatcher
 	WatchUnits() state.StringsWatcher
