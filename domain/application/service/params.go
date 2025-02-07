@@ -6,6 +6,7 @@ package service
 import (
 	corecharm "github.com/juju/juju/core/charm"
 	"github.com/juju/juju/core/config"
+	"github.com/juju/juju/core/constraints"
 	"github.com/juju/juju/core/objectstore"
 	"github.com/juju/juju/core/status"
 	coreunit "github.com/juju/juju/core/unit"
@@ -190,6 +191,9 @@ type ImportApplicationArgs struct {
 
 	// ApplicationSettings contains the application settings.
 	ApplicationSettings application.ApplicationSettings
+
+	// ApplicationConstraints contains the application constraints.
+	ApplicationConstraints constraints.Value
 
 	// ResolvedResources contains a list of ResolvedResource instances,
 	// TODO (stickupkid): This isn't currently wired up.
