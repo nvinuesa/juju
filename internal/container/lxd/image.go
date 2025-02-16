@@ -135,12 +135,6 @@ func (s *Server) FindImage(
 		imageRef := *image
 		imageRef.AutoUpdate = true
 
-		// If dealing with an alias, set the img fingerprint to match
-		// the provided targetAlias (needed for auto-update)
-		if imageRef.Public && !strings.HasPrefix(imageRef.Fingerprint, alias) {
-			imageRef.Fingerprint = alias
-		}
-
 		// Set the image copy reference to the original image.
 		logger.Debugf(context.TODO(), "found image remotely - %q %q %q", remote.Name, image.Filename, target)
 		sourced.Image = &imageRef
@@ -157,7 +151,7 @@ func (s *Server) FindImage(
 
 	// If requested, copy the image to the local cache, adding the local alias.
 	if copyLocal {
-		if err := s.CopyRemoteImage(ctx, sourced, []string{alias, localAlias}, callback); err != nil {
+		if err := s.CopyRemoteImage(ctx, sourced, []string{localAlias}, virtType, callback); err != nil {
 			return sourced, errors.Trace(err)
 		}
 
@@ -166,17 +160,16 @@ func (s *Server) FindImage(
 		sourced.LXDServer = s.InstanceServer
 	}
 
-	// If we had to override Fingerprint to track an upstream alias, restore
-	// the Fingerprint attribute to ensure the alias is correctly recorded.
-	sourced.Image.Fingerprint = sourced.Fingerprint
-
 	return sourced, nil
 }
 
 // CopyRemoteImage accepts an image sourced from a remote server and copies it
 // to the local cache
 func (s *Server) CopyRemoteImage(
-	ctx context.Context, sourced SourcedImage, aliases []string,
+	ctx context.Context,
+	sourced SourcedImage,
+	aliases []string,
+	virtType instance.VirtType,
 	callback environs.StatusCallbackFunc,
 ) error {
 	logger.Debugf(context.TODO(), "Copying image from remote server")
@@ -195,7 +188,7 @@ func (s *Server) CopyRemoteImage(
 		}
 		for _, key := range []string{"fs_progress", "download_progress"} {
 			if value, ok := op.Metadata[key]; ok {
-				_ = callback(ctx, status.Provisioning, fmt.Sprintf("Retrieving image: %s", value.(string)), nil)
+				_ = callback(ctx, status.Provisioning, fmt.Sprintf("Retrieving image %s", value.(string)), nil)
 				return
 			}
 		}
@@ -263,14 +256,18 @@ func (s *Server) CopyRemoteImage(
 	if opInfo.StatusCode != api.Success {
 		return fmt.Errorf("image copy failed: %s", opInfo.Err)
 	}
-	if err := ensureImageAliases(s.InstanceServer, newAliases, sourced.Fingerprint); err != nil {
+	if err := ensureImageAliases(s.InstanceServer, newAliases, virtType, sourced.Fingerprint); err != nil {
 		return errors.Trace(err)
 	}
 	return nil
 }
 
 // Create the specified image aliases, updating those that already exist.
-func ensureImageAliases(client lxd.InstanceServer, aliases []api.ImageAlias, fingerprint string) error {
+func ensureImageAliases(
+	client lxd.InstanceServer,
+	aliases []api.ImageAlias,
+	virtType instance.VirtType,
+	fingerprint string) error {
 	if len(aliases) == 0 {
 		return nil
 	}
@@ -298,9 +295,10 @@ func ensureImageAliases(client lxd.InstanceServer, aliases []api.ImageAlias, fin
 		var aliasPost api.ImageAliasesPost
 		aliasPost.Name = alias.Name
 		aliasPost.Target = fingerprint
+		aliasPost.Type = virtType.String()
 		err := client.CreateImageAlias(aliasPost)
 		if err != nil {
-			return fmt.Errorf("failed to create alias %s: %w", alias.Name, err)
+			return fmt.Errorf("failed to create alias %s for virt type %s and fingerprint %s: %w", alias.Name, virtType.String(), fingerprint, err)
 		}
 	}
 

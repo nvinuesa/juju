@@ -57,7 +57,7 @@ func (s *imageSuite) TestCopyImageUsesPassedCallback(c *gc.C) {
 		LXDServer:   iSvr,
 		Fingerprint: image.Fingerprint,
 	}
-	err = jujuSvr.CopyRemoteImage(context.Background(), sourced, []string{"local/image/alias"}, lxdtesting.NoOpCallback)
+	err = jujuSvr.CopyRemoteImage(context.Background(), sourced, []string{"local/image/alias"}, instance.InstanceTypeContainer, lxdtesting.NoOpCallback)
 	c.Assert(err, jc.ErrorIsNil)
 }
 
@@ -97,7 +97,7 @@ func (s *imageSuite) TestCopyImageRetries(c *gc.C) {
 		LXDServer:   iSvr,
 		Fingerprint: image.Fingerprint,
 	}
-	err = jujuSvr.CopyRemoteImage(context.Background(), sourced, []string{"local/image/alias"}, lxdtesting.NoOpCallback)
+	err = jujuSvr.CopyRemoteImage(context.Background(), sourced, []string{"local/image/alias"}, instance.InstanceTypeContainer, lxdtesting.NoOpCallback)
 	c.Assert(err, jc.ErrorIsNil)
 }
 
@@ -194,13 +194,13 @@ func (s *imageSuite) TestFindImageRemoteServersCopyLocalNoCallback(c *gc.C) {
 		AutoUpdate:  true,
 		Filename:    "this-is-our-image",
 		Fingerprint: "fingerprint",
+		Type:        "container",
 	}
 
 	localAlias := "juju/ubuntu@16.04/" + s.Arch()
 	copyReq := &lxdclient.ImageCopyArgs{
 		AutoUpdate: true,
 		Aliases: []lxdapi.ImageAlias{
-			{Name: "16.04/" + s.Arch()},
 			{Name: localAlias},
 		},
 	}
@@ -215,7 +215,6 @@ func (s *imageSuite) TestFindImageRemoteServersCopyLocalNoCallback(c *gc.C) {
 		iSvr.EXPECT().GetImageAliases().Return(nil, nil),
 	)
 
-	s.expectAlias(iSvr, "16.04/"+s.Arch(), "fingerprint")
 	s.expectAlias(iSvr, "juju/ubuntu@16.04/"+s.Arch(), "fingerprint")
 
 	jujuSvr, err := lxd.NewServer(iSvr)
@@ -271,5 +270,6 @@ func (s *imageSuite) expectAlias(iSvr *lxdtesting.MockInstanceServer, name, targ
 	var aliasPost lxdapi.ImageAliasesPost
 	aliasPost.Name = name
 	aliasPost.Target = target
+	aliasPost.Type = "container"
 	iSvr.EXPECT().CreateImageAlias(aliasPost).Return(nil)
 }
