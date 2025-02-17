@@ -16,6 +16,7 @@ import (
 	corecharm "github.com/juju/juju/core/charm"
 	charmtesting "github.com/juju/juju/core/charm/testing"
 	"github.com/juju/juju/core/config"
+	"github.com/juju/juju/core/constraints"
 	corestatus "github.com/juju/juju/core/status"
 	"github.com/juju/juju/domain/application"
 	"github.com/juju/juju/domain/application/architecture"
@@ -456,6 +457,16 @@ func (s *migrationServiceSuite) TestImportApplication(c *gc.C) {
 		CloudContainer: nil,
 	}
 
+	cons := constraints.Value{
+		Mem:      ptr(uint64(1024)),
+		CpuPower: ptr(uint64(1000)),
+		CpuCores: ptr(uint64(2)),
+		Arch:     ptr("arm64"),
+		Tags:     ptr([]string{"foo", "bar"}),
+	}
+
+	s.state.EXPECT().SetApplicationConstraints(gomock.Any(), id, cons).Return(nil)
+
 	err := s.service.ImportApplication(context.Background(), "ubuntu", ImportApplicationArgs{
 		Charm: s.charm,
 		CharmOrigin: corecharm.Origin{
@@ -463,8 +474,9 @@ func (s *migrationServiceSuite) TestImportApplication(c *gc.C) {
 			Platform: corecharm.MustParsePlatform("arm64/ubuntu/24.04"),
 			Revision: ptr(42),
 		},
-		ReferenceName: "ubuntu",
-		DownloadInfo:  downloadInfo,
+		ApplicationConstraints: cons,
+		ReferenceName:          "ubuntu",
+		DownloadInfo:           downloadInfo,
 		ApplicationConfig: map[string]any{
 			"foo": "bar",
 		},
