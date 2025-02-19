@@ -657,6 +657,7 @@ func (w *pgWorker) updateReplicaSet() (map[string]*replicaset.Member, error) {
 			m := desired.members[id]
 			ms = append(ms, *m)
 		}
+		w.config.MongoSession.Refresh()
 		if err := w.config.MongoSession.Set(ms); err != nil {
 			return nil, errors.WithType(err, replicaSetError)
 		}
