@@ -16,16 +16,21 @@ import (
 	"github.com/juju/naturalsort"
 	"github.com/juju/version/v2"
 
+	"github.com/juju/juju/cloud"
 	"github.com/juju/juju/controller"
+	"github.com/juju/juju/core/credential"
 	corelogger "github.com/juju/juju/core/logger"
 	coremodel "github.com/juju/juju/core/model"
 	"github.com/juju/juju/core/modelmigration"
 	"github.com/juju/juju/core/objectstore"
+	"github.com/juju/juju/core/providertracker"
 	"github.com/juju/juju/core/resource"
 	corestorage "github.com/juju/juju/core/storage"
 	domaincharm "github.com/juju/juju/domain/application/charm"
+	applicationservice "github.com/juju/juju/domain/application/service"
 	migrations "github.com/juju/juju/domain/modelmigration"
 	"github.com/juju/juju/environs"
+	environscloudspec "github.com/juju/juju/environs/cloudspec"
 	"github.com/juju/juju/environs/config"
 	"github.com/juju/juju/internal/charm"
 	"github.com/juju/juju/internal/services"
@@ -161,6 +166,7 @@ type ModelImporter struct {
 	domainServices          services.DomainServicesGetter
 	storageRegistryGetter   corestorage.ModelStorageRegistryGetter
 	objectStoreGetter       objectstore.ModelObjectStoreGetter
+	providerFactory         providertracker.ProviderFactory
 
 	scope  modelmigration.ScopeForModel
 	logger corelogger.Logger
@@ -177,6 +183,7 @@ func NewModelImporter(
 	domainServices services.DomainServicesGetter,
 	storageRegistryGetter corestorage.ModelStorageRegistryGetter,
 	objectStoreGetter objectstore.ModelObjectStoreGetter,
+	providerFactory providertracker.ProviderFactory,
 	logger corelogger.Logger,
 	clock clock.Clock,
 ) *ModelImporter {
@@ -187,6 +194,7 @@ func NewModelImporter(
 		domainServices:          domainServices,
 		storageRegistryGetter:   storageRegistryGetter,
 		objectStoreGetter:       objectStoreGetter,
+		providerFactory:         providerFactory,
 		logger:                  logger,
 		clock:                   clock,
 	}
@@ -217,13 +225,71 @@ func (i *ModelImporter) ImportModel(ctx context.Context, bytes []byte) (*state.M
 	modelDefaults := domainServices.ModelDefaults()
 	modelDefaultsProvider := modelDefaults.ModelDefaultsProvider(modelUUID)
 
+	// Necessary fields for the ephemeral provider.
+	modelType, err := domainServices.Model().ModelType(ctx, modelUUID)
+	if err != nil {
+		return nil, nil, errors.Trace(err)
+	}
+	modelConfig, err := domainServices.Config().ModelConfig(ctx)
+	if err != nil {
+		return nil, nil, errors.Trace(err)
+	}
+	modelInfo, err := domainServices.ModelInfo().GetModelInfo(ctx)
+	if err != nil {
+		return nil, nil, errors.Trace(err)
+	}
+	cloudSpec, err := i.getCloudSpec(ctx, modelUUID, modelInfo)
+	if err != nil {
+		return nil, nil, errors.Trace(err)
+	}
+	controllerUUID := modelInfo.ControllerUUID
+
+	providerGetter := providertracker.EphemeralProviderRunnerFromConfig[applicationservice.Provider](i.providerFactory, providertracker.EphemeralProviderConfig{
+		ModelType:      modelType,
+		ModelConfig:    modelConfig,
+		CloudSpec:      cloudSpec,
+		ControllerUUID: controllerUUID,
+	})
+
 	coordinator := modelmigration.NewCoordinator(i.logger)
-	migrations.ImportOperations(coordinator, modelDefaultsProvider, i.storageRegistryGetter, i.objectStoreGetter, i.clock, i.logger)
+	migrations.ImportOperations(coordinator, modelDefaultsProvider, i.storageRegistryGetter, i.objectStoreGetter, providerGetter, i.clock, i.logger)
 	if err := coordinator.Perform(ctx, i.scope(modelUUID), model); err != nil {
 		return nil, nil, errors.Trace(err)
 	}
 
 	return dbModel, dbState, nil
+}
+
+func (i *ModelImporter) getCloudSpec(ctx context.Context, modelUUID coremodel.UUID, modelInfo coremodel.ModelInfo) (environscloudspec.CloudSpec, error) {
+	domainServices := i.domainServices.ServicesForModel(modelUUID)
+
+	if modelInfo.CredentialName == "" {
+		return environscloudspec.CloudSpec{}, nil
+	}
+
+	credentialValue, err := domainServices.Credential().CloudCredential(ctx, credential.Key{
+		Cloud: modelInfo.Cloud,
+		Owner: modelInfo.CredentialOwner,
+		Name:  modelInfo.CredentialName,
+	})
+	if err != nil {
+		return environscloudspec.CloudSpec{}, errors.Trace(err)
+	}
+
+	cloudCredential := cloud.NewNamedCredential(
+		credentialValue.Label,
+		credentialValue.AuthType(),
+		credentialValue.Attributes(),
+		credentialValue.Revoked,
+	)
+	modelCredentials := &cloudCredential
+
+	modelCloud, err := domainServices.Cloud().Cloud(ctx, modelInfo.Cloud)
+	if err != nil {
+		return environscloudspec.CloudSpec{}, errors.Trace(err)
+	}
+
+	return environscloudspec.MakeCloudSpec(*modelCloud, modelInfo.CloudRegion, modelCredentials)
 }
 
 type CharmService interface {

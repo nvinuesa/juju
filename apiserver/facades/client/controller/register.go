@@ -85,8 +85,8 @@ func makeControllerAPI(stdCtx context.Context, ctx facade.MultiModelContext) (*C
 		modelConfigServiceGetter,
 		blockCommandServiceGetter,
 		domainServices.Proxy(),
-		func(modelUUID model.UUID, legacyState facade.LegacyStateExporter) ModelExporter {
-			return ctx.ModelExporter(modelUUID, legacyState)
+		func(stdCtx context.Context, modelUUID model.UUID, legacyState facade.LegacyStateExporter) (ModelExporter, error) {
+			return ctx.ModelExporter(stdCtx, modelUUID, legacyState)
 		},
 		ctx.ObjectStore(),
 		leadership,

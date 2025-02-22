@@ -190,15 +190,17 @@ func (s *ProviderService) SetApplicationConstraints(ctx context.Context, appID c
 	if err := appID.Validate(); err != nil {
 		return internalerrors.Errorf("application ID: %w", err)
 	}
-	if err := s.validateConstraints(ctx, appID, cons); err != nil {
+	if err := ValidateConstraints(ctx, s.logger, s.provider, appID, cons); err != nil {
 		return err
 	}
 
 	return s.st.SetApplicationConstraints(ctx, appID, constraints.DecodeConstraints(cons))
 }
 
-func (s *ProviderService) validateConstraints(ctx context.Context, appID coreapplication.ID, cons coreconstraints.Value) error {
-	provider, err := s.provider(ctx)
+// ValidateConstraints validates the constraints for the specified application
+// using the ephemeral provider.
+func ValidateConstraints(ctx context.Context, logger logger.Logger, providerGetter providertracker.ProviderGetter[Provider], appID coreapplication.ID, cons coreconstraints.Value) error {
+	provider, err := providerGetter(ctx)
 	if errors.Is(err, errors.NotSupported) {
 		// Not validating constraints, as the provider doesn't support it.
 		return nil
@@ -215,7 +217,7 @@ func (s *ProviderService) validateConstraints(ctx context.Context, appID coreapp
 
 	unsupported, err := validator.Validate(cons)
 	if len(unsupported) > 0 {
-		s.logger.Warningf(ctx,
+		logger.Warningf(ctx,
 			"setting constraints on application %q: unsupported constraints: %v", appID.String(), strings.Join(unsupported, ","))
 	} else if err != nil {
 		return internalerrors.Capture(err)

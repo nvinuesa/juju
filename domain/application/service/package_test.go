@@ -52,7 +52,7 @@ type baseSuite struct {
 	service *ProviderService
 }
 
-func (s *baseSuite) setupMocksWithProvider(c *gc.C, fn func(ctx context.Context) (Provider, error)) *gomock.Controller {
+func (s *baseSuite) setupMocksWithProvider(c *gc.C, providerGetter func(ctx context.Context, provider Provider) error) *gomock.Controller {
 	ctrl := gomock.NewController(c)
 
 	s.modelID = modeltesting.GenModelUUID(c)
@@ -79,7 +79,7 @@ func (s *baseSuite) setupMocksWithProvider(c *gc.C, fn func(ctx context.Context)
 		s.storageRegistryGetter,
 		s.modelID,
 		s.agentVersionGetter,
-		fn,
+		func(ctx context.Context, fn),
 		s.charmStore,
 		s.clock,
 		loggertesting.WrapCheckLog(c),
@@ -117,8 +117,8 @@ func (s *baseSuite) setupMocks(c *gc.C) *gomock.Controller {
 		s.storageRegistryGetter,
 		s.modelID,
 		s.agentVersionGetter,
-		func(ctx context.Context) (Provider, error) {
-			return s.provider, nil
+		func(ctx context.Context, fn func(ctx context.Context, p Provider) error) error {
+			return fn(ctx, s.provider)
 		},
 		s.charmStore,
 		s.clock,

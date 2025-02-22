@@ -413,5 +413,6 @@ func (s *ModelServices) Removal() *removalservice.WatchableService {
 func (s *ModelServices) Stub() *stubservice.StubService {
 	return stubservice.NewStubService(
 		changestream.NewTxnRunnerFactory(s.modelDB),
+		s.providerFactory,
 	)
 }

@@ -10,6 +10,7 @@ import (
 	jujuerrors "github.com/juju/errors"
 
 	"github.com/juju/juju/core/database"
+	"github.com/juju/juju/core/providertracker"
 	"github.com/juju/juju/core/unit"
 	"github.com/juju/juju/domain"
 	applicationerrors "github.com/juju/juju/domain/application/errors"
@@ -28,15 +29,26 @@ import (
 // then.
 type StubService struct {
 	*domain.StateBase
+	providerFactory providertracker.ProviderFactory
 }
 
 // NewStubService returns a new StubService.
 func NewStubService(
 	factory database.TxnRunnerFactory,
+	providerFactory providertracker.ProviderFactory,
 ) *StubService {
 	return &StubService{
-		StateBase: domain.NewStateBase(factory),
+		StateBase:       domain.NewStateBase(factory),
+		providerFactory: providerFactory,
 	}
+}
+
+// ProviderFactory returns the provider factory defined by the model services.
+//
+// Deprecated: This is a temporary method that will be removed once the	model
+// and application domains have been fully implemented.
+func (s *StubService) ProviderFactory() providertracker.ProviderFactory {
+	return s.providerFactory
 }
 
 // AssignUnitsToMachines assigns the given units to the given machines but setting

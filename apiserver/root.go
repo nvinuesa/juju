@@ -18,20 +18,26 @@ import (
 	"github.com/juju/juju/apiserver/authentication"
 	"github.com/juju/juju/apiserver/common"
 	"github.com/juju/juju/apiserver/facade"
+	"github.com/juju/juju/cloud"
 	"github.com/juju/juju/core/changestream"
+	"github.com/juju/juju/core/credential"
 	coredatabase "github.com/juju/juju/core/database"
 	corehttp "github.com/juju/juju/core/http"
 	"github.com/juju/juju/core/leadership"
 	"github.com/juju/juju/core/lease"
 	corelogger "github.com/juju/juju/core/logger"
 	"github.com/juju/juju/core/model"
+	coremodel "github.com/juju/juju/core/model"
 	"github.com/juju/juju/core/modelmigration"
 	"github.com/juju/juju/core/objectstore"
 	"github.com/juju/juju/core/permission"
+	"github.com/juju/juju/core/providertracker"
 	"github.com/juju/juju/core/trace"
 	"github.com/juju/juju/core/user"
 	"github.com/juju/juju/core/watcher/registry"
+	applicationservice "github.com/juju/juju/domain/application/service"
 	domainmodelmigration "github.com/juju/juju/domain/modelmigration"
+	environscloudspec "github.com/juju/juju/environs/cloudspec"
 	"github.com/juju/juju/internal/migration"
 	"github.com/juju/juju/internal/rpcreflect"
 	"github.com/juju/juju/internal/services"
@@ -929,15 +935,42 @@ func (c modelObjectStore) GetObjectStore(ctx context.Context) (objectstore.Objec
 }
 
 // ModelExporter returns a model exporter for the current model.
-func (ctx *facadeContext) ModelExporter(modelUUID model.UUID, backend facade.LegacyStateExporter) facade.ModelExporter {
+func (ctx *facadeContext) ModelExporter(stdCtx context.Context, modelUUID model.UUID, backend facade.LegacyStateExporter) (facade.ModelExporter, error) {
 	logger := ctx.Logger()
 	clock := ctx.r.clock
 
 	domainServices := ctx.DomainServicesForModel(modelUUID)
 	coordinator := modelmigration.NewCoordinator(logger)
+	providerFactory := ctx.r.domainServices.Stub().ProviderFactory()
 
 	objectStoreGetter := modelObjectStore(func(stdCtx context.Context) (objectstore.ObjectStore, error) {
 		return ctx.r.objectStoreGetter.GetObjectStore(stdCtx, ctx.ModelUUID().String())
+	})
+
+	// Necessary fields for the ephemeral provider.
+	modelType, err := domainServices.Model().ModelType(stdCtx, modelUUID)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	modelConfig, err := domainServices.Config().ModelConfig(stdCtx)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	modelInfo, err := domainServices.ModelInfo().GetModelInfo(stdCtx)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	cloudSpec, err := getCloudSpec(stdCtx, domainServices, modelInfo)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	controllerUUID := modelInfo.ControllerUUID
+
+	providerGetter := providertracker.EphemeralProviderRunnerFromConfig[applicationservice.Provider](providerFactory, providertracker.EphemeralProviderConfig{
+		ModelType:      modelType,
+		ModelConfig:    modelConfig,
+		CloudSpec:      cloudSpec,
+		ControllerUUID: controllerUUID,
 	})
 
 	exporter := domainmodelmigration.NewExporter(
@@ -947,6 +980,7 @@ func (ctx *facadeContext) ModelExporter(modelUUID model.UUID, backend facade.Leg
 			return storageService.GetStorageRegistry(ctx)
 		}),
 		objectStoreGetter,
+		providerGetter,
 		clock,
 		logger,
 	)
@@ -961,12 +995,43 @@ func (ctx *facadeContext) ModelExporter(modelUUID model.UUID, backend facade.Leg
 		coordinator,
 		logger,
 		clock,
+	), nil
+}
+
+func getCloudSpec(ctx context.Context, domainServices services.DomainServices, modelInfo coremodel.ModelInfo) (environscloudspec.CloudSpec, error) {
+	if modelInfo.CredentialName == "" {
+		return environscloudspec.CloudSpec{}, nil
+	}
+
+	credentialValue, err := domainServices.Credential().CloudCredential(ctx, credential.Key{
+		Cloud: modelInfo.Cloud,
+		Owner: modelInfo.CredentialOwner,
+		Name:  modelInfo.CredentialName,
+	})
+	if err != nil {
+		return environscloudspec.CloudSpec{}, errors.Trace(err)
+	}
+
+	cloudCredential := cloud.NewNamedCredential(
+		credentialValue.Label,
+		credentialValue.AuthType(),
+		credentialValue.Attributes(),
+		credentialValue.Revoked,
 	)
+	modelCredentials := &cloudCredential
+
+	modelCloud, err := domainServices.Cloud().Cloud(ctx, modelInfo.Cloud)
+	if err != nil {
+		return environscloudspec.CloudSpec{}, errors.Trace(err)
+	}
+
+	return environscloudspec.MakeCloudSpec(*modelCloud, modelInfo.CloudRegion, modelCredentials)
 }
 
 // ModelImporter returns a model importer.
 func (ctx *facadeContext) ModelImporter() facade.ModelImporter {
 	domainServices := ctx.DomainServices()
+	providerFactory := ctx.r.domainServices.Stub().ProviderFactory()
 
 	pool := ctx.r.shared.statePool
 	return migration.NewModelImporter(
@@ -981,6 +1046,7 @@ func (ctx *facadeContext) ModelImporter() facade.ModelImporter {
 		modelObjectStore(func(stdCtx context.Context) (objectstore.ObjectStore, error) {
 			return ctx.r.objectStoreGetter.GetObjectStore(stdCtx, ctx.ModelUUID().String())
 		}),
+		providerFactory,
 		ctx.Logger(),
 		ctx.r.clock,
 	)

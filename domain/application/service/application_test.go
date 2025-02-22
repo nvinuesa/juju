@@ -2719,8 +2719,10 @@ func (s *providerServiceSuite) TestGetSupportedFeatures(c *gc.C) {
 }
 
 func (s *providerServiceSuite) TestGetSupportedFeaturesNotSupported(c *gc.C) {
-	ctrl := s.setupMocksWithProvider(c, func(ctx context.Context) (Provider, error) {
-		return s.provider, jujuerrors.NotSupported
+	ctrl := s.setupMocksWithProvider(c, func(ctx context.Context, fn func(ctx context.Context, p Provider) error) error {
+		return func(ctx context.Context, fn func() error) error {
+			return jujuerrors.NotSupported
+		}
 	})
 	defer ctrl.Finish()
 

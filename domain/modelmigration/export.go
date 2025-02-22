@@ -8,9 +8,11 @@ import (
 
 	"github.com/juju/juju/core/logger"
 	"github.com/juju/juju/core/objectstore"
+	"github.com/juju/juju/core/providertracker"
 	corestorage "github.com/juju/juju/core/storage"
 	access "github.com/juju/juju/domain/access/modelmigration"
 	application "github.com/juju/juju/domain/application/modelmigration"
+	applicationservice "github.com/juju/juju/domain/application/service"
 	blockcommand "github.com/juju/juju/domain/blockcommand/modelmigration"
 	blockdevice "github.com/juju/juju/domain/blockdevice/modelmigration"
 	cloudimagemetadata "github.com/juju/juju/domain/cloudimagemetadata/modelmigration"
@@ -32,6 +34,7 @@ type Exporter struct {
 	coordinator           Coordinator
 	storageRegistryGetter corestorage.ModelStorageRegistryGetter
 	objectStoreGetter     objectstore.ModelObjectStoreGetter
+	providerGetter        providertracker.ProviderGetter[applicationservice.Provider]
 	clock                 clock.Clock
 	logger                logger.Logger
 }
@@ -43,12 +46,14 @@ func NewExporter(
 	coordinator Coordinator,
 	storageRegistryGetter corestorage.ModelStorageRegistryGetter,
 	objectStoreGetter objectstore.ModelObjectStoreGetter,
+	providerGetter providertracker.ProviderGetter[applicationservice.Provider],
 	clock clock.Clock,
 	logger logger.Logger,
 ) *Exporter {
 	return &Exporter{
 		coordinator:       coordinator,
 		objectStoreGetter: objectStoreGetter,
+		providerGetter:    providerGetter,
 		clock:             clock,
 		logger:            logger,
 	}
@@ -69,7 +74,7 @@ func (e *Exporter) ExportOperations(registry corestorage.ModelStorageRegistryGet
 	blockdevice.RegisterExport(e.coordinator, e.logger.Child("blockdevice"))
 	storage.RegisterExport(e.coordinator, registry, e.logger.Child("storage"))
 	secret.RegisterExport(e.coordinator, e.logger.Child("secret"))
-	application.RegisterExport(e.coordinator, e.storageRegistryGetter, e.clock, e.logger.Child("application"))
+	application.RegisterExport(e.coordinator, e.storageRegistryGetter, e.providerGetter, e.clock, e.logger.Child("application"))
 	cloudimagemetadata.RegisterExport(e.coordinator, e.logger.Child("cloudimagemetadata"), e.clock)
 	model.RegisterExport(e.coordinator, e.logger.Child("model"))
 }

@@ -9,9 +9,11 @@ import (
 	"github.com/juju/juju/core/logger"
 	"github.com/juju/juju/core/modelmigration"
 	"github.com/juju/juju/core/objectstore"
+	"github.com/juju/juju/core/providertracker"
 	corestorage "github.com/juju/juju/core/storage"
 	access "github.com/juju/juju/domain/access/modelmigration"
 	application "github.com/juju/juju/domain/application/modelmigration"
+	applicationservice "github.com/juju/juju/domain/application/service"
 	blockcommand "github.com/juju/juju/domain/blockcommand/modelmigration"
 	blockdevice "github.com/juju/juju/domain/blockdevice/modelmigration"
 	cloudimagemetadata "github.com/juju/juju/domain/cloudimagemetadata/modelmigration"
@@ -44,6 +46,7 @@ func ImportOperations(
 	modelDefaultsProvider modelconfigservice.ModelDefaultsProvider,
 	storageRegistryGetter corestorage.ModelStorageRegistryGetter,
 	objectStoreGetter objectstore.ModelObjectStoreGetter,
+	providerGetter providertracker.ProviderGetter[applicationservice.Provider],
 	clock clock.Clock,
 	logger logger.Logger,
 ) {
@@ -58,7 +61,7 @@ func ImportOperations(
 	access.RegisterImport(coordinator, logger.Child("access"))
 	network.RegisterImport(coordinator, logger.Child("network"))
 	machine.RegisterImport(coordinator, clock, logger.Child("machine"))
-	application.RegisterImport(coordinator, storageRegistryGetter, clock, logger.Child("application"))
+	application.RegisterImport(coordinator, storageRegistryGetter, providerGetter, clock, logger.Child("application"))
 	resource.RegisterImport(coordinator, clock, logger.Child("resource"))
 	port.RegisterImport(coordinator, logger.Child("port"))
 	blockdevice.RegisterImport(coordinator, logger.Child("blockdevice"))

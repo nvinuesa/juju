@@ -81,7 +81,7 @@ type ModelManagerAPI struct {
 	networkService       NetworkService
 	secretBackendService SecretBackendService
 
-	modelExporter func(coremodel.UUID, facade.LegacyStateExporter) ModelExporter
+	modelExporter func(context.Context, coremodel.UUID, facade.LegacyStateExporter) (ModelExporter, error)
 	store         objectstore.ObjectStore
 
 	// ToolsFinder is used to find tools for a given version.
@@ -97,7 +97,7 @@ type ModelManagerAPI struct {
 func NewModelManagerAPI(
 	ctx context.Context,
 	st StateBackend,
-	modelExporter func(coremodel.UUID, facade.LegacyStateExporter) ModelExporter,
+	modelExporter func(context.Context, coremodel.UUID, facade.LegacyStateExporter) (ModelExporter, error),
 	ctlrSt commonmodel.ModelManagerBackend,
 	controllerUUID uuid.UUID,
 	services Services,
@@ -653,7 +653,11 @@ func (m *ModelManagerAPI) dumpModel(ctx context.Context, args params.Entity, sim
 		exportConfig.SkipLinkLayerDevices = true
 	}
 
-	model, err := m.modelExporter(coremodel.UUID(modelTag.Id()), modelState).ExportModelPartial(ctx, exportConfig, m.store)
+	modelExporter, err := m.modelExporter(ctx, coremodel.UUID(modelTag.Id()), modelState)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	model, err := modelExporter.ExportModelPartial(ctx, exportConfig, m.store)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}

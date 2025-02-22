@@ -18,6 +18,7 @@ import (
 	"github.com/juju/juju/core/constraints"
 	"github.com/juju/juju/core/logger"
 	"github.com/juju/juju/core/modelmigration"
+	"github.com/juju/juju/core/providertracker"
 	corestatus "github.com/juju/juju/core/status"
 	corestorage "github.com/juju/juju/core/storage"
 	"github.com/juju/juju/domain/application"
@@ -32,13 +33,15 @@ import (
 func RegisterExport(
 	coordinator Coordinator,
 	registry corestorage.ModelStorageRegistryGetter,
+	providerGetter providertracker.ProviderGetter[service.Provider],
 	clock clock.Clock,
 	logger logger.Logger,
 ) {
 	coordinator.Add(&exportOperation{
-		registry: registry,
-		clock:    clock,
-		logger:   logger,
+		registry:       registry,
+		providerGetter: providerGetter,
+		clock:          clock,
+		logger:         logger,
 	})
 }
 
@@ -86,9 +89,10 @@ type exportOperation struct {
 
 	service ExportService
 
-	registry corestorage.ModelStorageRegistryGetter
-	clock    clock.Clock
-	logger   logger.Logger
+	registry       corestorage.ModelStorageRegistryGetter
+	providerGetter providertracker.ProviderGetter[service.Provider]
+	clock          clock.Clock
+	logger         logger.Logger
 }
 
 // Name returns the name of this operation.
@@ -102,6 +106,7 @@ func (e *exportOperation) Setup(scope modelmigration.Scope) error {
 	e.service = service.NewMigrationService(
 		state.NewState(scope.ModelDB(), e.clock, e.logger),
 		e.registry,
+		e.providerGetter,
 		e.clock,
 		e.logger,
 	)

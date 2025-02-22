@@ -12,15 +12,17 @@ import (
 
 	corecharm "github.com/juju/juju/core/charm"
 	"github.com/juju/juju/core/config"
-	"github.com/juju/juju/core/constraints"
+	coreconstraints "github.com/juju/juju/core/constraints"
 	"github.com/juju/juju/core/logger"
 	"github.com/juju/juju/core/network"
+	"github.com/juju/juju/core/providertracker"
 	corestatus "github.com/juju/juju/core/status"
 	corestorage "github.com/juju/juju/core/storage"
 	coreunit "github.com/juju/juju/core/unit"
 	"github.com/juju/juju/domain/application"
 	"github.com/juju/juju/domain/application/charm"
 	applicationerrors "github.com/juju/juju/domain/application/errors"
+	"github.com/juju/juju/domain/constraints"
 	"github.com/juju/juju/domain/ipaddress"
 	"github.com/juju/juju/domain/linklayerdevice"
 	internalcharm "github.com/juju/juju/internal/charm"
@@ -31,6 +33,7 @@ import (
 type MigrationService struct {
 	st                    State
 	storageRegistryGetter corestorage.ModelStorageRegistryGetter
+	providerGetter        providertracker.ProviderGetter[Provider]
 	clock                 clock.Clock
 	logger                logger.Logger
 }
@@ -39,12 +42,14 @@ type MigrationService struct {
 func NewMigrationService(
 	st State,
 	storageRegistryGetter corestorage.ModelStorageRegistryGetter,
+	providerGetter providertracker.ProviderGetter[Provider],
 	clock clock.Clock,
 	logger logger.Logger,
 ) *MigrationService {
 	return &MigrationService{
 		st:                    st,
 		storageRegistryGetter: storageRegistryGetter,
+		providerGetter:        providerGetter,
 		clock:                 clock,
 		logger:                logger,
 	}
@@ -200,18 +205,18 @@ func (s *MigrationService) GetApplicationStatus(ctx context.Context, name string
 // application ID.
 // If no application is found, an error satisfying
 // [applicationerrors.ApplicationNotFound] is returned.
-func (s *MigrationService) GetApplicationConstraints(ctx context.Context, name string) (constraints.Value, error) {
+func (s *MigrationService) GetApplicationConstraints(ctx context.Context, name string) (coreconstraints.Value, error) {
 	if !isValidApplicationName(name) {
-		return constraints.Value{}, applicationerrors.ApplicationNameNotValid
+		return coreconstraints.Value{}, applicationerrors.ApplicationNameNotValid
 	}
 
 	appID, err := s.st.GetApplicationIDByName(ctx, name)
 	if err != nil {
-		return constraints.Value{}, errors.Trace(err)
+		return coreconstraints.Value{}, errors.Trace(err)
 	}
 
 	cons, err := s.st.GetApplicationConstraints(ctx, appID)
-	return cons, internalerrors.Capture(err)
+	return constraints.EncodeConstraints(cons), internalerrors.Capture(err)
 }
 
 // ImportApplication imports the specified application and units if required,
@@ -280,10 +285,11 @@ func (s *MigrationService) ImportApplication(ctx context.Context, name string, a
 			return errors.Annotatef(err, "inserting unit %q", arg.UnitName)
 		}
 	}
-	// TODO(nvinuesa): We should use the service method to set the
-	// constraints because we need validation. For the moment it's not
-	// possible because we need a provider during migration.
-	err = s.st.SetApplicationConstraints(ctx, appID, args.ApplicationConstraints)
+
+	if err := ValidateConstraints(ctx, s.logger, s.providerGetter, appID, args.ApplicationConstraints); err != nil {
+		return err
+	}
+	err = s.st.SetApplicationConstraints(ctx, appID, constraints.DecodeConstraints(args.ApplicationConstraints))
 	if err != nil {
 		return errors.Annotatef(err, "setting application constraints for application %q", name)
 	}

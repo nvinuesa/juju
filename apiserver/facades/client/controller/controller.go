@@ -81,7 +81,7 @@ type ControllerAPI struct {
 	modelConfigServiceGetter  func(coremodel.UUID) cloudspec.ModelConfigService
 	blockCommandServiceGetter func(coremodel.UUID) BlockCommandService
 	proxyService              ProxyService
-	modelExporter             func(coremodel.UUID, facade.LegacyStateExporter) ModelExporter
+	modelExporter             func(context.Context, coremodel.UUID, facade.LegacyStateExporter) (ModelExporter, error)
 	store                     objectstore.ObjectStore
 	leadership                leadership.Reader
 	logger                    corelogger.Logger
@@ -118,7 +118,7 @@ func NewControllerAPI(
 	modelConfigServiceGetter func(coremodel.UUID) cloudspec.ModelConfigService,
 	blockCommandServiceGetter func(coremodel.UUID) BlockCommandService,
 	proxyService ProxyService,
-	modelExporter func(coremodel.UUID, facade.LegacyStateExporter) ModelExporter,
+	modelExporter func(context.Context, coremodel.UUID, facade.LegacyStateExporter) (ModelExporter, error),
 	store objectstore.ObjectStore,
 	leadership leadership.Reader,
 ) (*ControllerAPI, error) {
@@ -773,7 +773,7 @@ var runMigrationPrechecks = func(
 	upgradeService UpgradeService,
 	modelService ModelService,
 	applicationService ApplicationService,
-	modelExporter func(coremodel.UUID, facade.LegacyStateExporter) ModelExporter,
+	modelExporter func(context.Context, coremodel.UUID, facade.LegacyStateExporter) (ModelExporter, error),
 	store objectstore.ObjectStore,
 	leaders map[string]string,
 ) error {
@@ -903,7 +903,7 @@ func makeModelInfo(ctx context.Context, st *state.State,
 	controllerConfigService ControllerConfigService,
 	modelService ModelService,
 	modelAgentService ModelAgentService,
-	modelExporter func(coremodel.UUID, facade.LegacyStateExporter) ModelExporter,
+	modelExporter func(context.Context, coremodel.UUID, facade.LegacyStateExporter) (ModelExporter, error),
 	store objectstore.ObjectStore,
 	leaders map[string]string,
 ) (coremigration.ModelInfo, userList, error) {
@@ -915,7 +915,11 @@ func makeModelInfo(ctx context.Context, st *state.State,
 		return empty, ul, errors.Trace(err)
 	}
 
-	desc, err := modelExporter(coremodel.UUID(model.UUID()), st).ExportModel(ctx, leaders, store)
+	exporter, err := modelExporter(ctx, coremodel.UUID(model.UUID()), st)
+	if err != nil {
+		return empty, ul, errors.Trace(err)
+	}
+	desc, err := exporter.ExportModel(ctx, leaders, store)
 	if err != nil {
 		return empty, ul, errors.Trace(err)
 	}

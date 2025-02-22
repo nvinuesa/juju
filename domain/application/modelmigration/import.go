@@ -22,6 +22,7 @@ import (
 	"github.com/juju/juju/core/logger"
 	"github.com/juju/juju/core/modelmigration"
 	"github.com/juju/juju/core/network"
+	"github.com/juju/juju/core/providertracker"
 	corestatus "github.com/juju/juju/core/status"
 	corestorage "github.com/juju/juju/core/storage"
 	coreunit "github.com/juju/juju/core/unit"
@@ -45,13 +46,15 @@ type Coordinator interface {
 func RegisterImport(
 	coordinator Coordinator,
 	registry corestorage.ModelStorageRegistryGetter,
+	providerGetter providertracker.ProviderGetter[service.Provider],
 	clock clock.Clock,
 	logger logger.Logger,
 ) {
 	coordinator.Add(&importOperation{
-		registry: registry,
-		clock:    clock,
-		logger:   logger,
+		registry:       registry,
+		providerGetter: providerGetter,
+		clock:          clock,
+		logger:         logger,
 	})
 }
 
@@ -60,9 +63,10 @@ type importOperation struct {
 
 	service ImportService
 
-	registry corestorage.ModelStorageRegistryGetter
-	clock    clock.Clock
-	logger   logger.Logger
+	registry       corestorage.ModelStorageRegistryGetter
+	providerGetter providertracker.ProviderGetter[service.Provider]
+	clock          clock.Clock
+	logger         logger.Logger
 }
 
 // ImportService defines the application service used to import applications
@@ -87,6 +91,7 @@ func (i *importOperation) Setup(scope modelmigration.Scope) error {
 	i.service = service.NewMigrationService(
 		state.NewState(scope.ModelDB(), i.clock, i.logger),
 		i.registry,
+		i.providerGetter,
 		i.clock,
 		i.logger,
 	)
