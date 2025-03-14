@@ -709,7 +709,7 @@ func (s *watcherSuite) setupService(c *gc.C, factory domain.WatchableDBFactory) 
 	notSupportedProviderGetter := func(ctx context.Context) (service.Provider, error) {
 		return nil, errors.NotSupported
 	}
-	notSupportedFeatureProviderGetter := func(ctx context.Context) (service.SupportedFeatureProvider, error) {
+	notSupportedFeatureProviderGetter := func(ctx context.Context) (service.K8sProvider, error) {
 		return nil, errors.NotSupported
 	}
 

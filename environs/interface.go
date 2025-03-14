@@ -16,6 +16,7 @@ import (
 	corebase "github.com/juju/juju/core/base"
 	"github.com/juju/juju/core/constraints"
 	"github.com/juju/juju/core/instance"
+	"github.com/juju/juju/core/k8s"
 	"github.com/juju/juju/core/network/firewall"
 	environscloudspec "github.com/juju/juju/environs/cloudspec"
 	"github.com/juju/juju/environs/config"
@@ -663,4 +664,10 @@ type CloudEndpointChecker interface {
 	// ValidateCloudEndpoint validates connectivity with the cloud's
 	// endpoint and returns nil if no problems.
 	ValidateCloudEndpoint(ctx envcontext.ProviderCallContext) error
+}
+
+// DesiredReplicasGetter defines a method for getting the desired
+// replicas for a given application.
+type DesiredReplicasGetter interface {
+	DesiredReplicas(name string, deploymentType k8s.WorkloadType) (int, error)
 }

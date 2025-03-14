@@ -1625,7 +1625,7 @@ func (c *controllerStack) buildContainerSpecForCommands(setupCmd, machineCmd str
 		c.broker.modelUUID,
 		environsbootstrap.ControllerModelName,
 		false,
-		corek8s.K8sDeploymentStateful,
+		corek8s.WorkloadTypeStatefulSet,
 		c.broker.client(),
 		c.broker.newWatcher,
 		c.broker.clock,

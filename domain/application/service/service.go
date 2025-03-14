@@ -105,10 +105,11 @@ type Provider interface {
 	environs.ConstraintsChecker
 }
 
-// SupportedFeatureProvider defines the interface for interacting with the
-// a model provider that satisfies the SupportedFeatureEnumerator interface.
-type SupportedFeatureProvider interface {
+// K8sProvider defines the interface for interacting with underlying k8s model
+// provider.
+type K8sProvider interface {
 	environs.SupportedFeatureEnumerator
+	environs.DesiredReplicasGetter
 }
 
 // WatchableService provides the API for working with applications and the
@@ -127,7 +128,7 @@ func NewWatchableService(
 	watcherFactory WatcherFactory,
 	agentVersionGetter AgentVersionGetter,
 	provider providertracker.ProviderGetter[Provider],
-	supportedFeatureProvider providertracker.ProviderGetter[SupportedFeatureProvider],
+	supportedFeatureProvider providertracker.ProviderGetter[K8sProvider],
 	charmStore CharmStore,
 	statusHistory StatusHistory,
 	clock clock.Clock,

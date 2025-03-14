@@ -15,6 +15,7 @@ import (
 	"github.com/juju/juju/core/assumes"
 	corecharm "github.com/juju/juju/core/charm"
 	coreconstraints "github.com/juju/juju/core/constraints"
+	"github.com/juju/juju/core/k8s"
 	"github.com/juju/juju/core/leadership"
 	"github.com/juju/juju/core/logger"
 	coremodel "github.com/juju/juju/core/model"
@@ -40,9 +41,9 @@ type ProviderService struct {
 	agentVersionGetter AgentVersionGetter
 	provider           providertracker.ProviderGetter[Provider]
 	// This provider is separated from [provider] because the
-	// [SupportedFeatureProvider] interface is only satisfied by the
-	// k8s provider.
-	supportedFeatureProvider providertracker.ProviderGetter[SupportedFeatureProvider]
+	// [SupportedFeatureProvider] and [DesiredReplicasGetter] interfaces are
+	// only satisfied by the k8s provider.
+	k8sProvider providertracker.ProviderGetter[K8sProvider]
 }
 
 // NewProviderService returns a new Service for interacting with a models state.
@@ -53,7 +54,7 @@ func NewProviderService(
 	modelID coremodel.UUID,
 	agentVersionGetter AgentVersionGetter,
 	provider providertracker.ProviderGetter[Provider],
-	supportedFeatureProvider providertracker.ProviderGetter[SupportedFeatureProvider],
+	supportedFeatureProvider providertracker.ProviderGetter[K8sProvider],
 	charmStore CharmStore,
 	statusHistory StatusHistory,
 	clock clock.Clock,
@@ -69,10 +70,10 @@ func NewProviderService(
 			clock,
 			logger,
 		),
-		modelID:                  modelID,
-		agentVersionGetter:       agentVersionGetter,
-		provider:                 provider,
-		supportedFeatureProvider: supportedFeatureProvider,
+		modelID:            modelID,
+		agentVersionGetter: agentVersionGetter,
+		provider:           provider,
+		k8sProvider:        supportedFeatureProvider,
 	}
 }
 
@@ -90,16 +91,16 @@ func (s *Service) poolStorageProvider(
 		if registryErr != nil {
 			// The name can't be resolved as a storage provider type,
 			// so return the original "pool not found" error.
-			return nil, errors.Trace(err)
+			return nil, internalerrors.Capture(err)
 		}
 		return aProvider, nil
 	} else if err != nil {
-		return nil, errors.Trace(err)
+		return nil, internalerrors.Capture(err)
 	}
 	providerType := storage.ProviderType(pool.Provider)
 	aProvider, err := registry.StorageProvider(providerType)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, internalerrors.Capture(err)
 	}
 	return aProvider, nil
 }
@@ -215,14 +216,14 @@ func (s *ProviderService) GetSupportedFeatures(ctx context.Context) (assumes.Fea
 		Version:     &agentVersion,
 	})
 
-	supportedFeatureProvider, err := s.supportedFeatureProvider(ctx)
+	k8sProvider, err := s.k8sProvider(ctx)
 	if errors.Is(err, errors.NotSupported) {
 		return fs, nil
 	} else if err != nil {
 		return fs, err
 	}
 
-	envFs, err := supportedFeatureProvider.SupportedFeatures()
+	envFs, err := k8sProvider.SupportedFeatures()
 	if err != nil {
 		return fs, fmt.Errorf("enumerating features supported by environment: %w", err)
 	}
@@ -230,6 +231,49 @@ func (s *ProviderService) GetSupportedFeatures(ctx context.Context) (assumes.Fea
 	fs.Merge(envFs)
 
 	return fs, nil
+}
+
+// CAASUnitTerminating should be called by the CAASUnitTerminationWorker when
+// the agent receives a signal to exit. UnitTerminating will return how the
+// agent should shutdown.
+//
+// We pass in a CAAS broker to get app details from the k8s cluster - we will
+// probably make it a service attribute once more use cases emerge.
+func (s *ProviderService) CAASUnitTerminating(ctx context.Context, appName string, unitNum int) (bool, error) {
+	// TODO(sidecar): handle deployment other than statefulset
+	deploymentType := k8s.WorkloadTypeStatefulSet
+	restart := true
+
+	switch deploymentType {
+	case k8s.WorkloadTypeStatefulSet:
+		k8sProvider, err := s.k8sProvider(ctx)
+		if errors.Is(err, errors.NotSupported) {
+			return false, nil
+		} else if err != nil {
+			return false, internalerrors.Capture(err)
+		}
+		desiredReplicas, err := k8sProvider.DesiredReplicas(appName, deploymentType)
+		if err != nil {
+			return false, err
+		}
+		appID, err := s.st.GetApplicationIDByName(ctx, appName)
+		if err != nil {
+			return false, internalerrors.Capture(err)
+		}
+		scaleInfo, err := s.st.GetApplicationScaleState(ctx, appID)
+		if err != nil {
+			return false, internalerrors.Capture(err)
+		}
+		if unitNum >= scaleInfo.Scale || unitNum >= desiredReplicas {
+			restart = false
+		}
+	case k8s.WorkloadTypeDeployment, k8s.WorkloadTypeDaemonSet:
+		// Both handled the same way.
+		restart = true
+	default:
+		return false, errors.NotSupportedf("unknown deployment type")
+	}
+	return restart, nil
 }
 
 // SetApplicationConstraints sets the application constraints for the
