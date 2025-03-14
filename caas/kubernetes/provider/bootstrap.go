@@ -38,6 +38,7 @@ import (
 	"github.com/juju/juju/cloud"
 	"github.com/juju/juju/controller"
 	k8sannotations "github.com/juju/juju/core/annotations"
+	corek8s "github.com/juju/juju/core/k8s"
 	"github.com/juju/juju/core/paths"
 	"github.com/juju/juju/core/version"
 	"github.com/juju/juju/core/watcher"
@@ -1624,7 +1625,7 @@ func (c *controllerStack) buildContainerSpecForCommands(setupCmd, machineCmd str
 		c.broker.modelUUID,
 		environsbootstrap.ControllerModelName,
 		false,
-		caas.DeploymentStateful,
+		corek8s.K8sDeploymentStateful,
 		c.broker.client(),
 		c.broker.newWatcher,
 		c.broker.clock,

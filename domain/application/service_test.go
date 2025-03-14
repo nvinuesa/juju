@@ -16,6 +16,7 @@ import (
 	coreapplication "github.com/juju/juju/core/application"
 	corecharm "github.com/juju/juju/core/charm"
 	"github.com/juju/juju/core/database"
+	"github.com/juju/juju/core/k8s"
 	"github.com/juju/juju/core/life"
 	"github.com/juju/juju/core/model"
 	coresecrets "github.com/juju/juju/core/secrets"
@@ -753,7 +754,7 @@ func (s *serviceSuite) TestCAASUnitTerminatingUnitNumLessThanScale(c *gc.C) {
 		DesiredReplicas: 6,
 	}, nil)
 	broker := application.NewMockBroker(ctrl)
-	broker.EXPECT().Application("foo", caas.DeploymentStateful).Return(app)
+	broker.EXPECT().Application("foo", k8s.K8sDeploymentStateful).Return(app)
 	willRestart, err := s.svc.CAASUnitTerminating(context.Background(), "foo", 1, broker)
 	c.Assert(err, jc.ErrorIsNil)
 	c.Assert(willRestart, jc.IsTrue)
@@ -773,7 +774,7 @@ func (s *serviceSuite) TestCAASUnitTerminatingUnitNumGreaterThanScale(c *gc.C) {
 		DesiredReplicas: 6,
 	}, nil)
 	broker := application.NewMockBroker(ctrl)
-	broker.EXPECT().Application("foo", caas.DeploymentStateful).Return(app)
+	broker.EXPECT().Application("foo", k8s.K8sDeploymentStateful).Return(app)
 	willRestart, err := s.svc.CAASUnitTerminating(context.Background(), "foo", 666, broker)
 	c.Assert(err, jc.ErrorIsNil)
 	c.Assert(willRestart, jc.IsFalse)
@@ -799,7 +800,7 @@ func (s *serviceSuite) TestCAASUnitTerminatingUnitNumLessThanDesired(c *gc.C) {
 		DesiredReplicas: 6,
 	}, nil)
 	broker := application.NewMockBroker(ctrl)
-	broker.EXPECT().Application("foo", caas.DeploymentStateful).Return(app)
+	broker.EXPECT().Application("foo", k8s.K8sDeploymentStateful).Return(app)
 	err := s.svc.SetApplicationScalingState(context.Background(), "foo", 6, false)
 	c.Assert(err, jc.ErrorIsNil)
 
@@ -828,7 +829,7 @@ func (s *serviceSuite) TestCAASUnitTerminatingUnitNumGreaterThanDesired(c *gc.C)
 		DesiredReplicas: 1,
 	}, nil)
 	broker := application.NewMockBroker(ctrl)
-	broker.EXPECT().Application("foo", caas.DeploymentStateful).Return(app)
+	broker.EXPECT().Application("foo", k8s.K8sDeploymentStateful).Return(app)
 	err := s.svc.SetApplicationScalingState(context.Background(), "foo", 6, false)
 	c.Assert(err, jc.ErrorIsNil)
 

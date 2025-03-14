@@ -9,8 +9,8 @@ import (
 
 	"github.com/juju/errors"
 
-	"github.com/juju/juju/caas"
 	coreapplication "github.com/juju/juju/core/application"
+	"github.com/juju/juju/core/k8s"
 	"github.com/juju/juju/core/leadership"
 	corelife "github.com/juju/juju/core/life"
 	coremodel "github.com/juju/juju/core/model"
@@ -575,12 +575,12 @@ func (s *Service) DeleteUnit(ctx context.Context, unitName coreunit.Name) error 
 // probably make it a service attribute once more use cases emerge.
 func (s *Service) CAASUnitTerminating(ctx context.Context, appName string, unitNum int, broker Broker) (bool, error) {
 	// TODO(sidecar): handle deployment other than statefulset
-	deploymentType := caas.DeploymentStateful
+	deploymentType := k8s.K8sDeploymentStateful
 	restart := true
 
 	switch deploymentType {
-	case caas.DeploymentStateful:
-		caasApp := broker.Application(appName, caas.DeploymentStateful)
+	case k8s.K8sDeploymentStateful:
+		caasApp := broker.Application(appName, k8s.K8sDeploymentStateful)
 		appState, err := caasApp.State()
 		if err != nil {
 			return false, errors.Trace(err)
@@ -596,7 +596,7 @@ func (s *Service) CAASUnitTerminating(ctx context.Context, appName string, unitN
 		if unitNum >= scaleInfo.Scale || unitNum >= appState.DesiredReplicas {
 			restart = false
 		}
-	case caas.DeploymentStateless, caas.DeploymentDaemon:
+	case k8s.K8sDeploymentStateless, k8s.K8sDeploymentDaemon:
 		// Both handled the same way.
 		restart = true
 	default:
