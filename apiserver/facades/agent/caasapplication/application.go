@@ -27,7 +27,6 @@ import (
 	"github.com/juju/juju/core/unit"
 	"github.com/juju/juju/domain/application"
 	applicationerrors "github.com/juju/juju/domain/application/errors"
-	applicationservice "github.com/juju/juju/domain/application/service"
 	"github.com/juju/juju/internal/password"
 	"github.com/juju/juju/rpc/params"
 	"github.com/juju/juju/state"
@@ -41,7 +40,7 @@ type ControllerConfigService interface {
 // ApplicationService instances implement an application service.
 type ApplicationService interface {
 	RegisterCAASUnit(ctx context.Context, appName string, unit application.RegisterCAASUnitArg) error
-	CAASUnitTerminating(ctx context.Context, appName string, unitNum int, broker applicationservice.Broker) (bool, error)
+	CAASUnitTerminating(ctx context.Context, appName string, unitNum int) (bool, error)
 	GetApplicationLife(ctx context.Context, appName string) (life.Value, error)
 	GetUnitLife(ctx context.Context, unitName unit.Name) (life.Value, error)
 }
@@ -325,7 +324,7 @@ func (f *Facade) UnitTerminating(ctx context.Context, args params.Entity) (param
 	if err != nil {
 		return errResp(err)
 	}
-	willRestart, err := f.applicationService.CAASUnitTerminating(ctx, appName, unitTag.Number(), f.broker)
+	willRestart, err := f.applicationService.CAASUnitTerminating(ctx, appName, unitTag.Number())
 	if err != nil {
 		return errResp(err)
 	}

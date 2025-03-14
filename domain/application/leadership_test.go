@@ -171,7 +171,7 @@ func (s *leadershipSuite) setupService(c *gc.C, factory domain.WatchableDBFactor
 		func(ctx context.Context) (service.Provider, error) {
 			return serviceProvider{}, nil
 		},
-		func(ctx context.Context) (service.SupportedFeatureProvider, error) {
+		func(ctx context.Context) (service.K8sProvider, error) {
 			return serviceProvider{}, nil
 		},
 		nil,
@@ -229,7 +229,7 @@ func (l leaseToken) Check() error {
 
 type serviceProvider struct {
 	service.Provider
-	service.SupportedFeatureProvider
+	service.K8sProvider
 }
 
 func (serviceProvider) ConstraintsValidator(ctx envcontext.ProviderCallContext) (constraints.Validator, error) {

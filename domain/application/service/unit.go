@@ -10,7 +10,6 @@ import (
 	"github.com/juju/errors"
 
 	coreapplication "github.com/juju/juju/core/application"
-	"github.com/juju/juju/core/k8s"
 	"github.com/juju/juju/core/leadership"
 	corelife "github.com/juju/juju/core/life"
 	coremodel "github.com/juju/juju/core/model"
@@ -565,44 +564,6 @@ func (s *Service) DeleteUnit(ctx context.Context, unitName coreunit.Name) error 
 		_ = isLast
 	}
 	return nil
-}
-
-// CAASUnitTerminating should be called by the CAASUnitTerminationWorker when
-// the agent receives a signal to exit. UnitTerminating will return how the
-// agent should shutdown.
-//
-// We pass in a CAAS broker to get app details from the k8s cluster - we will
-// probably make it a service attribute once more use cases emerge.
-func (s *Service) CAASUnitTerminating(ctx context.Context, appName string, unitNum int, broker Broker) (bool, error) {
-	// TODO(sidecar): handle deployment other than statefulset
-	deploymentType := k8s.K8sDeploymentStateful
-	restart := true
-
-	switch deploymentType {
-	case k8s.K8sDeploymentStateful:
-		caasApp := broker.Application(appName, k8s.K8sDeploymentStateful)
-		appState, err := caasApp.State()
-		if err != nil {
-			return false, errors.Trace(err)
-		}
-		appID, err := s.st.GetApplicationIDByName(ctx, appName)
-		if err != nil {
-			return false, errors.Trace(err)
-		}
-		scaleInfo, err := s.st.GetApplicationScaleState(ctx, appID)
-		if err != nil {
-			return false, errors.Trace(err)
-		}
-		if unitNum >= scaleInfo.Scale || unitNum >= appState.DesiredReplicas {
-			restart = false
-		}
-	case k8s.K8sDeploymentStateless, k8s.K8sDeploymentDaemon:
-		// Both handled the same way.
-		restart = true
-	default:
-		return false, errors.NotSupportedf("unknown deployment type")
-	}
-	return restart, nil
 }
 
 // SetUnitPresence marks the presence of the unit in the model. It is called by
