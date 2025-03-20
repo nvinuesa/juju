@@ -80,7 +80,7 @@ func (s *bundleSuite) assertGetSpaces(c *gc.C, spaces ...network.SpaceInfo) {
 			Name: network.AlphaSpaceName,
 		},
 		{
-			ID:   "1",
+			ID:   "deadbeef",
 			Name: "vlan2",
 		},
 	}
@@ -467,7 +467,7 @@ func (s *bundleSuite) minimalApplicationArgsWithCharmConfig(modelType string, ch
 			"leader": true,
 		},
 		MetricsCredentials: []byte("sekrit"),
-		EndpointBindings:   map[string]string{"juju-info": "1", "another": "0"},
+		EndpointBindings:   map[string]string{"juju-info": "deadbeef", "another": network.AlphaSpaceId},
 	}
 	if modelType == description.CAAS {
 		result.PasswordHash = "some-hash"
@@ -1344,7 +1344,7 @@ func (s *bundleSuite) TestExportBundleSubordinateApplication(c *gc.C) {
 		Exposed:              true,
 		EndpointBindings: map[string]string{
 			"rel-name": "2",
-			"magic":    "0",
+			"magic":    network.AlphaSpaceId,
 		},
 		ApplicationConfig: map[string]interface{}{
 			"config key": "config value",
@@ -1450,7 +1450,7 @@ func (s *bundleSuite) TestExportBundleEndpointBindingsPrinted(c *gc.C) {
 	defer s.setUpMocks(c).Finish()
 	s.facade = s.makeAPI(c)
 
-	s.setupExportBundleEndpointBindingsPrinted("0", "1")
+	s.setupExportBundleEndpointBindingsPrinted(network.AlphaSpaceId, "deadbeef")
 
 	s.assertGetSpaces(c)
 	result, err := s.facade.ExportBundle(context.Background(), params.ExportBundleParams{})
@@ -2111,7 +2111,7 @@ applications:
 			ExposedEndpoints:     spec.exposedEndpoints,
 			EndpointBindings: map[string]string{
 				"hat":    "2",
-				"rabbit": "0",
+				"rabbit": network.AlphaSpaceId,
 			},
 		})
 		application.SetCharmOrigin(description.CharmOriginArgs{Platform: "amd64/ubuntu/20.04/stable"})

@@ -14,6 +14,7 @@ import (
 	coreapplication "github.com/juju/juju/core/application"
 	"github.com/juju/juju/core/changestream"
 	"github.com/juju/juju/core/database"
+	"github.com/juju/juju/core/network"
 	"github.com/juju/juju/core/relation"
 	"github.com/juju/juju/core/watcher/watchertest"
 	"github.com/juju/juju/domain"
@@ -130,8 +131,8 @@ VALUES (?, ?, ?, ?)
 func (s *watcherSuite) addApplicationEndpoint(c *gc.C, applicationEndpointUUID string, applicationUUID, charmRelationUUID string) {
 	s.arrange(c, `
 INSERT INTO application_endpoint (uuid, application_uuid, charm_relation_uuid,space_uuid)
-VALUES (?,?,?,0)
-`, applicationEndpointUUID, applicationUUID, charmRelationUUID)
+VALUES (?, ?, ?, ?)
+`, applicationEndpointUUID, applicationUUID, charmRelationUUID, network.AlphaSpaceId)
 }
 
 // addCharm inserts a new charm into the database with a predefined UUID, reference name, and architecture ID.

@@ -12,6 +12,7 @@ import (
 	gc "gopkg.in/check.v1"
 
 	coreapplication "github.com/juju/juju/core/application"
+	"github.com/juju/juju/core/network"
 	corerelation "github.com/juju/juju/core/relation"
 	"github.com/juju/juju/domain/relation"
 	relationerrors "github.com/juju/juju/domain/relation/errors"
@@ -137,8 +138,8 @@ VALUES (?, ?, ?, ?)
 func (s *relationSuite) addApplicationEndpoint(c *gc.C, applicationEndpointUUID string, applicationUUID, charmRelationUUID string) {
 	s.query(c, `
 INSERT INTO application_endpoint (uuid, application_uuid, charm_relation_uuid,space_uuid)
-VALUES (?,?,?,0)
-`, applicationEndpointUUID, applicationUUID, charmRelationUUID)
+VALUES (?, ?, ?, ?)
+`, applicationEndpointUUID, applicationUUID, charmRelationUUID, network.AlphaSpaceId)
 }
 
 // addCharm inserts a new charm into the database with a predefined UUID, reference name, and architecture ID.

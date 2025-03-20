@@ -191,14 +191,14 @@ func NewStubAPI() *StubAPI {
 		VLANTag:    42,
 	}}
 	spaces := []params.Space{{
-		Id:   "0",
+		Id:   network.AlphaSpaceId,
 		Name: network.AlphaSpaceName,
 	}, {
-		Id:      "1",
+		Id:      "deadbeef1",
 		Name:    "space1",
 		Subnets: append([]params.Subnet{}, subnets[:2]...),
 	}, {
-		Id:      "2",
+		Id:      "deadbeef2",
 		Name:    "space2",
 		Subnets: append([]params.Subnet{}, subnets[2:]...),
 	}}
@@ -215,7 +215,7 @@ func NewStubAPI() *StubAPI {
 	}
 	moveSubnets := params.MoveSubnetsResult{
 		MovedSubnets: []params.MovedSubnet{{
-			SubnetTag:   "1",
+			SubnetTag:   "0195b2ed-f4ee-7367-8669-940e47b4f191",
 			OldSpaceTag: "space-internal",
 			CIDR:        subnets[0].CIDR,
 		}},
@@ -223,10 +223,10 @@ func NewStubAPI() *StubAPI {
 	}
 	subnetsByCIDR := []params.SubnetsResult{{
 		Subnets: []params.SubnetV2{{
-			ID:     "1",
+			ID:     "0195b2ed-f4ee-7367-8669-940e47b4f191",
 			Subnet: subnets[0],
 		}, {
-			ID:     "2",
+			ID:     "0195b2ee-29e5-7930-a2c8-f34d588bb0c2",
 			Subnet: subnets[2],
 		}},
 	}}
