@@ -42,6 +42,45 @@ func (m *MockApplicationService) EXPECT() *MockApplicationServiceMockRecorder {
 	return m.recorder
 }
 
+// ApplicationExposed mocks base method.
+func (m *MockApplicationService) ApplicationExposed(arg0 context.Context, arg1 string) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ApplicationExposed", arg0, arg1)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ApplicationExposed indicates an expected call of ApplicationExposed.
+func (mr *MockApplicationServiceMockRecorder) ApplicationExposed(arg0, arg1 any) *MockApplicationServiceApplicationExposedCall {
+	mr.mock.ctrl.T.Helper()
+	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplicationExposed", reflect.TypeOf((*MockApplicationService)(nil).ApplicationExposed), arg0, arg1)
+	return &MockApplicationServiceApplicationExposedCall{Call: call}
+}
+
+// MockApplicationServiceApplicationExposedCall wrap *gomock.Call
+type MockApplicationServiceApplicationExposedCall struct {
+	*gomock.Call
+}
+
+// Return rewrite *gomock.Call.Return
+func (c *MockApplicationServiceApplicationExposedCall) Return(arg0 bool, arg1 error) *MockApplicationServiceApplicationExposedCall {
+	c.Call = c.Call.Return(arg0, arg1)
+	return c
+}
+
+// Do rewrite *gomock.Call.Do
+func (c *MockApplicationServiceApplicationExposedCall) Do(f func(context.Context, string) (bool, error)) *MockApplicationServiceApplicationExposedCall {
+	c.Call = c.Call.Do(f)
+	return c
+}
+
+// DoAndReturn rewrite *gomock.Call.DoAndReturn
+func (c *MockApplicationServiceApplicationExposedCall) DoAndReturn(f func(context.Context, string) (bool, error)) *MockApplicationServiceApplicationExposedCall {
+	c.Call = c.Call.DoAndReturn(f)
+	return c
+}
+
 // GetApplicationIDByName mocks base method.
 func (m *MockApplicationService) GetApplicationIDByName(arg0 context.Context, arg1 string) (application.ID, error) {
 	m.ctrl.T.Helper()

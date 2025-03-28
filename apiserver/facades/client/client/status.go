@@ -1125,7 +1125,16 @@ func (context *statusContext) processApplication(ctx context.Context, applicatio
 		return params.ApplicationStatus{Err: apiservererrors.ServerError(err)}
 	}
 
-	mappedExposedEndpoints, err := context.mapExposedEndpointsFromState(application.ExposedEndpoints())
+	isExposed, err := context.applicationService.ApplicationExposed(ctx, application.Name())
+	if err != nil {
+		return params.ApplicationStatus{Err: apiservererrors.ServerError(err)}
+	}
+
+	exposedEndpoints, err := context.applicationService.GetExposedEndpoints(ctx, application.Name())
+	if err != nil {
+		return params.ApplicationStatus{Err: apiservererrors.ServerError(err)}
+	}
+	mappedExposedEndpoints, err := context.mapExposedEndpointsFromDomain(exposedEndpoints)
 	if err != nil {
 		return params.ApplicationStatus{Err: apiservererrors.ServerError(err)}
 	}
@@ -1154,7 +1163,7 @@ func (context *statusContext) processApplication(ctx context.Context, applicatio
 			Name:    base.OS,
 			Channel: base.Channel.String(),
 		},
-		Exposed:          application.IsExposed(),
+		Exposed:          isExposed,
 		ExposedEndpoints: mappedExposedEndpoints,
 		Life:             processLife(application),
 	}
@@ -1228,7 +1237,7 @@ func (context *statusContext) processApplication(ctx context.Context, applicatio
 	return processedStatus
 }
 
-func (context *statusContext) mapExposedEndpointsFromState(exposedEndpoints map[string]state.ExposedEndpoint) (map[string]params.ExposedEndpoint,
+func (context *statusContext) mapExposedEndpointsFromDomain(exposedEndpoints map[string]application.ExposedEndpoint) (map[string]params.ExposedEndpoint,
 	error) {
 	if len(exposedEndpoints) == 0 {
 		return nil, nil
@@ -1237,12 +1246,12 @@ func (context *statusContext) mapExposedEndpointsFromState(exposedEndpoints map[
 	res := make(map[string]params.ExposedEndpoint, len(exposedEndpoints))
 	for endpointName, exposeDetails := range exposedEndpoints {
 		mappedParam := params.ExposedEndpoint{
-			ExposeToCIDRs: exposeDetails.ExposeToCIDRs,
+			ExposeToCIDRs: exposeDetails.ExposeToCIDRs.Values(),
 		}
 
 		if len(exposeDetails.ExposeToSpaceIDs) != 0 {
 			spaceNames := make([]string, len(exposeDetails.ExposeToSpaceIDs))
-			for i, spaceID := range exposeDetails.ExposeToSpaceIDs {
+			for i, spaceID := range exposeDetails.ExposeToSpaceIDs.Values() {
 				sp := context.spaceInfos.GetByID(spaceID)
 				if sp == nil {
 					return nil, internalerrors.Errorf("space with ID %q: %w", spaceID, errors.NotFound)

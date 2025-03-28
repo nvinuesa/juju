@@ -417,23 +417,33 @@ func (f *FirewallerAPI) GetExposeInfo(ctx context.Context, args params.Entities)
 			result.Results[i].Error = apiservererrors.ServerError(apiservererrors.ErrPerm)
 			continue
 		}
-		application, err := f.getApplication(canAccess, tag)
+		if !canAccess(tag) {
+			result.Results[i].Error = apiservererrors.ServerError(apiservererrors.ErrPerm)
+			continue
+		}
+
+		isExposed, err := f.applicationService.ApplicationExposed(ctx, tag.Id())
+		if err != nil {
+			result.Results[i].Error = apiservererrors.ServerError(err)
+			continue
+		}
+		if isExposed {
+			continue
+		}
+
+		exposedEndpoints, err := f.applicationService.GetExposedEndpoints(ctx, tag.Id())
 		if err != nil {
 			result.Results[i].Error = apiservererrors.ServerError(err)
 			continue
 		}
 
-		if !application.IsExposed() {
-			continue
-		}
-
 		result.Results[i].Exposed = true
-		if exposedEndpoints := application.ExposedEndpoints(); len(exposedEndpoints) != 0 {
+		if len(exposedEndpoints) != 0 {
 			mappedEndpoints := make(map[string]params.ExposedEndpoint)
 			for endpoint, exposeDetails := range exposedEndpoints {
 				mappedEndpoints[endpoint] = params.ExposedEndpoint{
-					ExposeToSpaces: exposeDetails.ExposeToSpaceIDs,
-					ExposeToCIDRs:  exposeDetails.ExposeToCIDRs,
+					ExposeToSpaces: exposeDetails.ExposeToSpaceIDs.Values(),
+					ExposeToCIDRs:  exposeDetails.ExposeToCIDRs.Values(),
 				}
 			}
 			result.Results[i].ExposedEndpoints = mappedEndpoints
