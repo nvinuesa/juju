@@ -1145,6 +1145,37 @@ WHERE c.available = FALSE
 	return "application", queryFunc
 }
 
+// InitialWatchStatementCloudServiceAddressesHash returns the initial namespace
+// query for the cloud service address hash watcher.
+func (st *State) InitialWatchStatementCloudServiceAddressesHash(unitName string) (string, eventsource.NamespaceQuery) {
+	queryFunc := func(ctx context.Context, runner database.TxnRunner) ([]string, error) {
+		app := applicationName{Name: appName}
+		stmt, err := st.Prepare(`
+SELECT sha256 AS &applicationConfigHash.sha256
+FROM application_config_hash ach
+JOIN application a ON a.uuid = ach.application_uuid
+WHERE a.name = $applicationName.name
+`, applicationConfigHash{}, app)
+		if err != nil {
+			return nil, errors.Errorf("preparing query for application config hash: %w", err)
+		}
+
+		var result []applicationConfigHash
+		err = runner.Txn(ctx, func(ctx context.Context, tx *sqlair.TX) error {
+			err := tx.Query(ctx, stmt, app).GetAll(&result)
+			if errors.Is(err, sqlair.ErrNoRows) {
+				return nil
+			}
+			return errors.Capture(err)
+		})
+		if err != nil {
+
+		}
+		return nil, nil
+	}
+	return "", nil
+}
+
 // InitialWatchStatementApplicationConfigHash returns the initial namespace
 // query for the application config hash watcher.
 func (st *State) InitialWatchStatementApplicationConfigHash(appName string) (string, eventsource.NamespaceQuery) {

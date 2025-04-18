@@ -514,6 +514,18 @@ func (s *WatchableService) WatchUnitForLegacyUniter(ctx context.Context, unitNam
 	)
 }
 
+// WatchCloudServiceAddressesHash watches for changes to the unit's cloud
+// service and emits a hash of the service's address whenever it changes.
+//
+// If the unit does not exist an error satisfying
+// [applicationerrors.UnitNotFound] is returned.
+func (s *WatchableService) WatchCloudServiceAddressesHash(ctx context.Context, unitName string) (watcher.StringsWatcher, error) {
+	unitUUID, err := s.GetUnitUUID(ctx, coreunit.Name(unitName))
+	if err != nil {
+		return nil, errors.Errorf("getting ID of unit %s: %w", unitName, err)
+	}
+}
+
 type maskedChangeIDEvent struct {
 	changestream.ChangeEvent
 	id string

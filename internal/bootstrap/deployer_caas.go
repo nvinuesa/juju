@@ -10,25 +10,16 @@ import (
 	"github.com/juju/errors"
 	"github.com/juju/names/v6"
 
+	"github.com/juju/juju/caas"
+	k8sconstants "github.com/juju/juju/caas/kubernetes/provider/constants"
 	corebase "github.com/juju/juju/core/base"
 	"github.com/juju/juju/core/network"
 	coreunit "github.com/juju/juju/core/unit"
 	"github.com/juju/juju/core/version"
 	applicationservice "github.com/juju/juju/domain/application/service"
+	"github.com/juju/juju/environs/bootstrap"
 	"github.com/juju/juju/state"
 )
-
-// CloudService is the interface that is used to get the cloud service
-// for the controller.
-type CloudService interface {
-	Addresses() network.SpaceAddresses
-}
-
-// CloudServiceGetter is the interface that is used to get the cloud service
-// for the controller.
-type CloudServiceGetter interface {
-	CloudService(string) (CloudService, error)
-}
 
 // OperationApplier is the interface that is used to apply operations.
 type OperationApplier interface {
@@ -36,12 +27,18 @@ type OperationApplier interface {
 	ApplyOperation(*state.UpdateUnitOperation) error
 }
 
+// ServiceManager provides the API to manipulate services.
+type ServiceManager interface {
+	// GetService returns the service for the specified application.
+	GetService(ctx context.Context, appName string, includeClusterIP bool) (*caas.Service, error)
+}
+
 // CAASDeployerConfig holds the configuration for a CAASDeployer.
 type CAASDeployerConfig struct {
 	BaseDeployerConfig
-	CloudServiceGetter CloudServiceGetter
-	OperationApplier   OperationApplier
-	UnitPassword       string
+	ServiceManager   ServiceManager
+	OperationApplier OperationApplier
+	UnitPassword     string
 }
 
 // Validate validates the configuration.
@@ -49,8 +46,8 @@ func (c CAASDeployerConfig) Validate() error {
 	if err := c.BaseDeployerConfig.Validate(); err != nil {
 		return errors.Trace(err)
 	}
-	if c.CloudServiceGetter == nil {
-		return errors.NotValidf("CloudServiceGetter")
+	if c.ServiceManager == nil {
+		return errors.NotValidf("ServiceManager")
 	}
 	if c.OperationApplier == nil {
 		return errors.NotValidf("OperationApplier")
@@ -62,9 +59,9 @@ func (c CAASDeployerConfig) Validate() error {
 // for CAAS workloads.
 type CAASDeployer struct {
 	baseDeployer
-	cloudServiceGetter CloudServiceGetter
-	operationApplier   OperationApplier
-	unitPassword       string
+	serviceManager   ServiceManager
+	operationApplier OperationApplier
+	unitPassword     string
 }
 
 // NewCAASDeployer returns a new ControllerCharmDeployer for CAAS workloads.
@@ -73,21 +70,35 @@ func NewCAASDeployer(config CAASDeployerConfig) (*CAASDeployer, error) {
 		return nil, errors.Trace(err)
 	}
 	return &CAASDeployer{
-		baseDeployer:       makeBaseDeployer(config.BaseDeployerConfig),
-		cloudServiceGetter: config.CloudServiceGetter,
-		operationApplier:   config.OperationApplier,
-		unitPassword:       config.UnitPassword,
+		baseDeployer:     makeBaseDeployer(config.BaseDeployerConfig),
+		serviceManager:   config.ServiceManager,
+		operationApplier: config.OperationApplier,
+		unitPassword:     config.UnitPassword,
 	}, nil
+}
+
+// getAlphaSpaceAddresses returns a SpaceAddresses created from the input
+// providerAddresses and using the alpha space ID as their SpaceID.
+// We set all the spaces of the output SpaceAddresses to be the alpha space ID.
+func (d *CAASDeployer) getAlphaSpaceAddresses(providerAddresses network.ProviderAddresses) network.SpaceAddresses {
+	sas := make(network.SpaceAddresses, len(providerAddresses))
+	for i, pa := range providerAddresses {
+		sas[i] = network.SpaceAddress{MachineAddress: pa.MachineAddress}
+		if pa.SpaceName != "" {
+			sas[i].SpaceID = network.AlphaSpaceId
+		}
+	}
+	return sas
 }
 
 // ControllerAddress returns the address of the controller that should be
 // used.
-func (d *CAASDeployer) ControllerAddress(context.Context) (string, error) {
-	s, err := d.cloudServiceGetter.CloudService(d.controllerConfig.ControllerUUID())
+func (d *CAASDeployer) ControllerAddress(ctx context.Context) (string, error) {
+	addrs, err := d.applicationService.CloudServiceAddresses(ctx, bootstrap.ControllerApplicationName)
 	if err != nil {
 		return "", errors.Trace(err)
 	}
-	hp := network.SpaceAddressesWithPort(s.Addresses(), 0)
+	hp := network.SpaceAddressesWithPort(addrs, 0)
 	addr := hp.AllMatchingScope(network.ScopeMatchCloudLocal)
 
 	var controllerAddress string
@@ -129,6 +140,23 @@ func (d *CAASDeployer) CompleteProcess(ctx context.Context, controllerUnit Unit)
 		return errors.Annotate(err, "cannot update controller unit")
 	}
 
+	// Retrieve the k8s service from the k8s broker.
+	svc, err := d.serviceManager.GetService(ctx, k8sconstants.JujuControllerStackName, true)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	// Insert the k8s service..
+	if len(svc.Addresses) == 0 {
+		// this should never happen because we have already checked in k8s controller bootstrap stacker.
+		return errors.NotProvisionedf("k8s controller service %q address", svc.Id)
+	}
+	addrs := d.getAlphaSpaceAddresses(svc.Addresses)
+	d.logger.Infof(ctx, "creating cloud service for k8s controller %q", controllerProviderID(controllerUnit.UnitTag()))
+	err = d.applicationService.UpdateCloudService(ctx, bootstrap.ControllerApplicationName, controllerProviderID(controllerUnit.UnitTag()), addrs)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	d.logger.Criticalf(ctx, "created cloud service %v for controller", svc)
 	return nil
 }
 

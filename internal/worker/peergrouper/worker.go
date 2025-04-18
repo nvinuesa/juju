@@ -28,12 +28,22 @@ import (
 	"github.com/juju/juju/core/status"
 	"github.com/juju/juju/core/watcher"
 	"github.com/juju/juju/core/watcher/eventsource"
+	"github.com/juju/juju/environs/bootstrap"
 	internallogger "github.com/juju/juju/internal/logger"
 	"github.com/juju/juju/internal/pubsub/apiserver"
 	"github.com/juju/juju/state"
 )
 
 var logger = internallogger.GetLogger("juju.worker.peergrouper")
+
+// ApplicationService instances create an application.
+type ApplicationService interface {
+	// CloudServiceAddresses returns the addresses of the cloud service for the
+	// specified application, returning an error satisfying
+	// [applicationerrors.ApplicationNotFoundError] if the application doesn't
+	// exist.
+	CloudServiceAddresses(ctx context.Context, applicationName string) (network.SpaceAddresses, error)
+}
 
 // ControllerConfigService is an interface for getting the controller config.
 type ControllerConfigService interface {
@@ -46,6 +56,7 @@ type ControllerConfigService interface {
 }
 
 type State interface {
+	ModelType() (state.ModelType, error)
 	RemoveControllerReference(m ControllerNode) error
 	ControllerIds() ([]string, error)
 	ControllerNode(id string) (ControllerNode, error)
@@ -71,6 +82,42 @@ type ControllerHost interface {
 	SetStatus(status.StatusInfo) error
 	Refresh() error
 	Addresses() network.SpaceAddresses
+}
+
+type cloudServiceAddresses struct {
+	addresses network.SpaceAddresses
+}
+
+func NewCloudServiceAddresses(addresses network.SpaceAddresses) *cloudServiceAddresses {
+	return &cloudServiceAddresses{addresses: addresses}
+}
+
+func (c *cloudServiceAddresses) Addresses() network.SpaceAddresses {
+	return c.addresses
+}
+
+func (c *cloudServiceAddresses) Id() string {
+	return "cloud-service-addresses"
+}
+
+func (c *cloudServiceAddresses) Refresh() error {
+	return nil
+}
+
+func (c *cloudServiceAddresses) Watch() state.NotifyWatcher {
+	return nil
+}
+
+func (c *cloudServiceAddresses) Life() state.Life {
+	return state.Alive
+}
+
+func (c *cloudServiceAddresses) SetStatus(status.StatusInfo) error {
+	return nil
+}
+
+func (c *cloudServiceAddresses) Status() (status.StatusInfo, error) {
+	return status.StatusInfo{}, nil
 }
 
 type MongoSession interface {
@@ -152,6 +199,7 @@ type pgWorker struct {
 type Config struct {
 	State                   State
 	ControllerConfigService ControllerConfigService
+	ApplicationService      ApplicationService
 	APIHostPortsSetter      APIHostPortsSetter
 	MongoSession            MongoSession
 	Clock                   clock.Clock
@@ -301,7 +349,7 @@ func (w *pgWorker) loop() error {
 		case <-controllerChanges:
 			// A controller was added or removed.
 			logger.Tracef(context.TODO(), "<-controllerChanges")
-			changed, err := w.updateControllerNodes()
+			changed, err := w.updateControllerNodes(context.TODO())
 			if err != nil {
 				return errors.Trace(err)
 			}
@@ -466,7 +514,7 @@ func (w *pgWorker) watchForConfigChanges(ctx context.Context) (<-chan []string, 
 // updateControllerNodes updates the peergrouper's current list of
 // controller nodes, as well as starting and stopping trackers for
 // them as they are added and removed.
-func (w *pgWorker) updateControllerNodes() (bool, error) {
+func (w *pgWorker) updateControllerNodes(ctx context.Context) (bool, error) {
 	controllerIds, err := w.config.State.ControllerIds()
 	if err != nil {
 		return false, fmt.Errorf("cannot get controller ids: %v", err)
@@ -498,7 +546,25 @@ func (w *pgWorker) updateControllerNodes() (bool, error) {
 			}
 			return false, fmt.Errorf("cannot get controller %q: %v", id, err)
 		}
-		controllerHost, err := w.config.State.ControllerHost(id)
+		var controllerHost ControllerHost
+		modelType, err := w.config.State.ModelType()
+		if err != nil {
+			return false, errors.Trace(err)
+		}
+		if modelType == state.ModelTypeIAAS {
+			controllerHost, err = w.config.State.ControllerHost(id)
+			if err != nil {
+				return false, errors.Trace(err)
+			}
+		} else {
+			addrs, err := w.config.ApplicationService.CloudServiceAddresses(ctx, bootstrap.ControllerApplicationName)
+			if err != nil {
+				return false, errors.Trace(err)
+			}
+			logger.Criticalf(ctx, "addresses %+v", addrs)
+
+			controllerHost = NewCloudServiceAddresses(addrs)
+		}
 		if err != nil {
 			if errors.Is(err, errors.NotFound) {
 				// If the controller isn't found, it must have been

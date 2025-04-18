@@ -8,8 +8,6 @@ import (
 	"github.com/juju/mgo/v3"
 	"github.com/juju/mgo/v3/bson"
 	"github.com/juju/mgo/v3/txn"
-
-	"github.com/juju/juju/core/network"
 )
 
 // CloudServicer represents the state of a CAAS service.
@@ -18,8 +16,8 @@ type CloudServicer interface {
 	// by the cloud.
 	ProviderId() string
 
-	// Addresses returns the service addresses.
-	Addresses() network.SpaceAddresses
+	// // Addresses returns the service addresses.
+	// Addresses() network.SpaceAddresses
 
 	// Generation returns the service config generation.
 	Generation() int64
@@ -70,10 +68,10 @@ func (c *CloudService) ProviderId() string {
 	return c.doc.ProviderId
 }
 
-// Addresses implements CloudServicer.
-func (c *CloudService) Addresses() network.SpaceAddresses {
-	return networkAddresses(c.doc.Addresses)
-}
+// // Addresses implements CloudServicer.
+// func (c *CloudService) Addresses() network.SpaceAddresses {
+// 	return networkAddresses(c.doc.Addresses)
+// }
 
 // Generation implements CloudServicer.
 func (c *CloudService) Generation() int64 {

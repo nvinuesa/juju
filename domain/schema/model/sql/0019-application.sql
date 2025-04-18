@@ -43,6 +43,14 @@ ON k8s_service (application_uuid);
 CREATE UNIQUE INDEX idx_k8s_service_net_node
 ON k8s_service (net_node_uuid);
 
+CREATE TABLE application_config_hash (
+    application_uuid TEXT NOT NULL PRIMARY KEY,
+    sha256 TEXT NOT NULL,
+    CONSTRAINT fk_application_config_hash_application
+    FOREIGN KEY (application_uuid)
+    REFERENCES application (uuid)
+);
+
 -- Application scale is currently only targeting k8s applications.
 CREATE TABLE application_scale (
     application_uuid TEXT NOT NULL PRIMARY KEY,

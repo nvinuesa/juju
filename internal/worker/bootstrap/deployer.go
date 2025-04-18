@@ -57,8 +57,6 @@ type SystemState interface {
 	Machine(string) (bootstrap.Machine, error)
 	// ApplyOperation applies the given operation.
 	ApplyOperation(*state.UpdateUnitOperation) error
-	// CloudService returns the cloud service for the given cloud.
-	CloudService(string) (bootstrap.CloudService, error)
 	// SetAPIHostPorts sets the addresses, if changed, of two collections:
 	//   - The list of *all* addresses at which the API is accessible.
 	//   - The list of addresses at which the API can be accessed by agents according
@@ -158,7 +156,6 @@ func IAASAgentBinaryUploader(
 func CAASControllerCharmUploader(cfg ControllerCharmDeployerConfig) (bootstrap.ControllerCharmDeployer, error) {
 	return bootstrap.NewCAASDeployer(bootstrap.CAASDeployerConfig{
 		BaseDeployerConfig: makeBaseDeployerConfig(cfg),
-		CloudServiceGetter: cfg.StateBackend,
 		OperationApplier:   cfg.StateBackend,
 		UnitPassword:       cfg.UnitPassword,
 	})
@@ -238,10 +235,6 @@ func (s *stateShim) Machine(name string) (bootstrap.Machine, error) {
 
 func (s *stateShim) ApplyOperation(op *state.UpdateUnitOperation) error {
 	return s.State.ApplyOperation(op)
-}
-
-func (s *stateShim) CloudService(name string) (bootstrap.CloudService, error) {
-	return s.State.CloudService(name)
 }
 
 type applicationShim struct {

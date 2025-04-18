@@ -23,9 +23,7 @@ import (
 type deployerCAASSuite struct {
 	baseSuite
 
-	cloudService       *MockCloudService
-	cloudServiceGetter *MockCloudServiceGetter
-	operationApplier   *MockOperationApplier
+	operationApplier *MockOperationApplier
 }
 
 var _ = gc.Suite(&deployerCAASSuite{})
@@ -180,7 +178,6 @@ func (s *deployerCAASSuite) setupMocks(c *gc.C) *gomock.Controller {
 func (s *deployerCAASSuite) newConfig(c *gc.C) CAASDeployerConfig {
 	return CAASDeployerConfig{
 		BaseDeployerConfig: s.baseSuite.newConfig(c),
-		CloudServiceGetter: s.cloudServiceGetter,
 		OperationApplier:   s.operationApplier,
 		UnitPassword:       uuid.MustNewUUID().String(),
 	}
