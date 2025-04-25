@@ -35,7 +35,7 @@ import (
 	"github.com/juju/juju/state/watcher"
 )
 
-type egressAddressWatcherFunc func(context.Context, facade.Resources, firewall.State, firewall.ModelConfigService, params.Entities) (params.StringsWatchResults, error)
+type egressAddressWatcherFunc func(context.Context, facade.Resources, firewall.State, firewall.ModelConfigService, firewall.ApplicationService, params.Entities) (params.StringsWatchResults, error)
 type relationStatusWatcherFunc func(CrossModelRelationsState, names.RelationTag) (state.StringsWatcher, error)
 type offerStatusWatcherFunc func(context.Context, CrossModelRelationsState, string) (OfferWatcher, error)
 type consumedSecretsWatcherFunc func(context.Context, SecretService, string) (corewatcher.StringsWatcher, error)
@@ -46,6 +46,7 @@ type CrossModelRelationsAPIv3 struct {
 	fw                 firewall.State
 	secretService      SecretService
 	modelConfigService ModelConfigService
+	applicationService ApplicationService
 	statusService      StatusService
 	resources          facade.Resources
 	authorizer         facade.Authorizer
@@ -72,6 +73,7 @@ func NewCrossModelRelationsAPI(
 	authCtxt *commoncrossmodel.AuthContext,
 	secretService SecretService,
 	modelConfigService ModelConfigService,
+	applicationService ApplicationService,
 	statusService StatusService,
 	egressAddressWatcher egressAddressWatcherFunc,
 	relationStatusWatcher relationStatusWatcherFunc,
@@ -87,6 +89,7 @@ func NewCrossModelRelationsAPI(
 		authCtxt:               authCtxt,
 		secretService:          secretService,
 		modelConfigService:     modelConfigService,
+		applicationService:     applicationService,
 		statusService:          statusService,
 		egressAddressWatcher:   egressAddressWatcher,
 		relationStatusWatcher:  relationStatusWatcher,
@@ -677,7 +680,7 @@ func (api *CrossModelRelationsAPIv3) WatchEgressAddressesForRelations(ctx contex
 		}
 		relations.Entities = append(relations.Entities, params.Entity{Tag: relationTag.String()})
 	}
-	watchResults, err := api.egressAddressWatcher(ctx, api.resources, api.fw, api.modelConfigService, relations)
+	watchResults, err := api.egressAddressWatcher(ctx, api.resources, api.fw, api.modelConfigService, api.applicationService, relations)
 	if err != nil {
 		return results, err
 	}

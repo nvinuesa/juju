@@ -59,6 +59,11 @@ type OpenParams struct {
 	// and should disapear as soon as we migrate units and applications.
 	CharmServiceGetter func(modelUUID coremodel.UUID) (CharmService, error)
 
+	// Note(nvinuesa): The application service is needed until we migrate
+	// machines and it's used so we can get the cloud service addresses from
+	// domain while getting machine addresses from state at the same time.
+	ApplicationServiceGetter func(modelUUID coremodel.UUID) (ApplicationService, error)
+
 	// WatcherPollInterval is defaulted by the TxnWatcher if otherwise not set.
 	WatcherPollInterval time.Duration
 }
@@ -105,6 +110,7 @@ func open(
 	newPolicy NewPolicyFunc,
 	clock clock.Clock,
 	charmServiceGetter func(modelUUID coremodel.UUID) (CharmService, error),
+	applicationServiceGetter func(modelUUID coremodel.UUID) (ApplicationService, error),
 	runTransactionObserver RunTransactionObserverFunc,
 	maxTxnAttempts int,
 ) (*State, error) {
@@ -115,6 +121,7 @@ func open(
 		newPolicy,
 		clock,
 		charmServiceGetter,
+		applicationServiceGetter,
 		runTransactionObserver,
 		maxTxnAttempts)
 	if err != nil {
@@ -144,6 +151,7 @@ func newState(
 	newPolicy NewPolicyFunc,
 	clock clock.Clock,
 	charmServiceGetter func(modelUUID coremodel.UUID) (CharmService, error),
+	applicationServiceGetter func(modelUUID coremodel.UUID) (ApplicationService, error),
 	runTransactionObserver RunTransactionObserverFunc,
 	maxTxnAttempts int,
 ) (_ *State, err error) {
@@ -181,15 +189,16 @@ func newState(
 
 	// Create State.
 	st := &State{
-		stateClock:             clock,
-		modelTag:               modelTag,
-		controllerModelTag:     controllerModelTag,
-		session:                session,
-		database:               db,
-		newPolicy:              newPolicy,
-		runTransactionObserver: runTransactionObserver,
-		charmServiceGetter:     charmServiceGetter,
-		maxTxnAttempts:         maxTxnAttempts,
+		stateClock:               clock,
+		modelTag:                 modelTag,
+		controllerModelTag:       controllerModelTag,
+		session:                  session,
+		database:                 db,
+		newPolicy:                newPolicy,
+		runTransactionObserver:   runTransactionObserver,
+		charmServiceGetter:       charmServiceGetter,
+		applicationServiceGetter: applicationServiceGetter,
+		maxTxnAttempts:           maxTxnAttempts,
 	}
 	if newPolicy != nil {
 		st.policy = newPolicy(st)

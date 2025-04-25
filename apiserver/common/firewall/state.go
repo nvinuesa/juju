@@ -67,7 +67,7 @@ type applicationShim struct {
 
 type Unit interface {
 	Name() string
-	PublicAddress() (network.SpaceAddress, error)
+	ShouldBeAssigned() bool
 	AssignedMachineId() (string, error)
 }
 
@@ -79,6 +79,7 @@ type Machine interface {
 	Id() string
 	WatchAddresses() state.NotifyWatcher
 	IsManual() (bool, error)
+	PublicAddress() (network.SpaceAddress, error)
 }
 
 func (st stateShim) Machine(id string) (Machine, error) {

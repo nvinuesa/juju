@@ -34,7 +34,6 @@ import (
 	bootstrap "github.com/juju/juju/internal/bootstrap"
 	charm0 "github.com/juju/juju/internal/charm"
 	storage "github.com/juju/juju/internal/storage"
-	state "github.com/juju/juju/state"
 	binarystorage "github.com/juju/juju/state/binarystorage"
 	gomock "go.uber.org/mock/gomock"
 )
@@ -347,45 +346,6 @@ func (m *MockSystemState) EXPECT() *MockSystemStateMockRecorder {
 	return m.recorder
 }
 
-// CloudService mocks base method.
-func (m *MockSystemState) CloudService(arg0 string) (bootstrap.CloudService, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CloudService", arg0)
-	ret0, _ := ret[0].(bootstrap.CloudService)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// CloudService indicates an expected call of CloudService.
-func (mr *MockSystemStateMockRecorder) CloudService(arg0 any) *MockSystemStateCloudServiceCall {
-	mr.mock.ctrl.T.Helper()
-	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CloudService", reflect.TypeOf((*MockSystemState)(nil).CloudService), arg0)
-	return &MockSystemStateCloudServiceCall{Call: call}
-}
-
-// MockSystemStateCloudServiceCall wrap *gomock.Call
-type MockSystemStateCloudServiceCall struct {
-	*gomock.Call
-}
-
-// Return rewrite *gomock.Call.Return
-func (c *MockSystemStateCloudServiceCall) Return(arg0 bootstrap.CloudService, arg1 error) *MockSystemStateCloudServiceCall {
-	c.Call = c.Call.Return(arg0, arg1)
-	return c
-}
-
-// Do rewrite *gomock.Call.Do
-func (c *MockSystemStateCloudServiceCall) Do(f func(string) (bootstrap.CloudService, error)) *MockSystemStateCloudServiceCall {
-	c.Call = c.Call.Do(f)
-	return c
-}
-
-// DoAndReturn rewrite *gomock.Call.DoAndReturn
-func (c *MockSystemStateCloudServiceCall) DoAndReturn(f func(string) (bootstrap.CloudService, error)) *MockSystemStateCloudServiceCall {
-	c.Call = c.Call.DoAndReturn(f)
-	return c
-}
-
 // Machine mocks base method.
 func (m *MockSystemState) Machine(arg0 string) (bootstrap.Machine, error) {
 	m.ctrl.T.Helper()
@@ -421,45 +381,6 @@ func (c *MockSystemStateMachineCall) Do(f func(string) (bootstrap.Machine, error
 
 // DoAndReturn rewrite *gomock.Call.DoAndReturn
 func (c *MockSystemStateMachineCall) DoAndReturn(f func(string) (bootstrap.Machine, error)) *MockSystemStateMachineCall {
-	c.Call = c.Call.DoAndReturn(f)
-	return c
-}
-
-// SaveCloudService mocks base method.
-func (m *MockSystemState) SaveCloudService(arg0 state.SaveCloudServiceArgs) (*state.CloudService, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SaveCloudService", arg0)
-	ret0, _ := ret[0].(*state.CloudService)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// SaveCloudService indicates an expected call of SaveCloudService.
-func (mr *MockSystemStateMockRecorder) SaveCloudService(arg0 any) *MockSystemStateSaveCloudServiceCall {
-	mr.mock.ctrl.T.Helper()
-	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SaveCloudService", reflect.TypeOf((*MockSystemState)(nil).SaveCloudService), arg0)
-	return &MockSystemStateSaveCloudServiceCall{Call: call}
-}
-
-// MockSystemStateSaveCloudServiceCall wrap *gomock.Call
-type MockSystemStateSaveCloudServiceCall struct {
-	*gomock.Call
-}
-
-// Return rewrite *gomock.Call.Return
-func (c *MockSystemStateSaveCloudServiceCall) Return(arg0 *state.CloudService, arg1 error) *MockSystemStateSaveCloudServiceCall {
-	c.Call = c.Call.Return(arg0, arg1)
-	return c
-}
-
-// Do rewrite *gomock.Call.Do
-func (c *MockSystemStateSaveCloudServiceCall) Do(f func(state.SaveCloudServiceArgs) (*state.CloudService, error)) *MockSystemStateSaveCloudServiceCall {
-	c.Call = c.Call.Do(f)
-	return c
-}
-
-// DoAndReturn rewrite *gomock.Call.DoAndReturn
-func (c *MockSystemStateSaveCloudServiceCall) DoAndReturn(f func(state.SaveCloudServiceArgs) (*state.CloudService, error)) *MockSystemStateSaveCloudServiceCall {
 	c.Call = c.Call.DoAndReturn(f)
 	return c
 }
@@ -793,6 +714,45 @@ func (c *MockApplicationServiceCreateApplicationCall) DoAndReturn(f func(context
 	return c
 }
 
+// GetCloudServiceAddresses mocks base method.
+func (m *MockApplicationService) GetCloudServiceAddresses(arg0 context.Context, arg1 string) (network.SpaceAddresses, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetCloudServiceAddresses", arg0, arg1)
+	ret0, _ := ret[0].(network.SpaceAddresses)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetCloudServiceAddresses indicates an expected call of GetCloudServiceAddresses.
+func (mr *MockApplicationServiceMockRecorder) GetCloudServiceAddresses(arg0, arg1 any) *MockApplicationServiceGetCloudServiceAddressesCall {
+	mr.mock.ctrl.T.Helper()
+	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCloudServiceAddresses", reflect.TypeOf((*MockApplicationService)(nil).GetCloudServiceAddresses), arg0, arg1)
+	return &MockApplicationServiceGetCloudServiceAddressesCall{Call: call}
+}
+
+// MockApplicationServiceGetCloudServiceAddressesCall wrap *gomock.Call
+type MockApplicationServiceGetCloudServiceAddressesCall struct {
+	*gomock.Call
+}
+
+// Return rewrite *gomock.Call.Return
+func (c *MockApplicationServiceGetCloudServiceAddressesCall) Return(arg0 network.SpaceAddresses, arg1 error) *MockApplicationServiceGetCloudServiceAddressesCall {
+	c.Call = c.Call.Return(arg0, arg1)
+	return c
+}
+
+// Do rewrite *gomock.Call.Do
+func (c *MockApplicationServiceGetCloudServiceAddressesCall) Do(f func(context.Context, string) (network.SpaceAddresses, error)) *MockApplicationServiceGetCloudServiceAddressesCall {
+	c.Call = c.Call.Do(f)
+	return c
+}
+
+// DoAndReturn rewrite *gomock.Call.DoAndReturn
+func (c *MockApplicationServiceGetCloudServiceAddressesCall) DoAndReturn(f func(context.Context, string) (network.SpaceAddresses, error)) *MockApplicationServiceGetCloudServiceAddressesCall {
+	c.Call = c.Call.DoAndReturn(f)
+	return c
+}
+
 // ResolveControllerCharmDownload mocks base method.
 func (m *MockApplicationService) ResolveControllerCharmDownload(arg0 context.Context, arg1 application0.ResolveControllerCharmDownload) (application0.ResolvedControllerCharmDownload, error) {
 	m.ctrl.T.Helper()
@@ -866,6 +826,44 @@ func (c *MockApplicationServiceUpdateCAASUnitCall) Do(f func(context.Context, un
 
 // DoAndReturn rewrite *gomock.Call.DoAndReturn
 func (c *MockApplicationServiceUpdateCAASUnitCall) DoAndReturn(f func(context.Context, unit.Name, service0.UpdateCAASUnitParams) error) *MockApplicationServiceUpdateCAASUnitCall {
+	c.Call = c.Call.DoAndReturn(f)
+	return c
+}
+
+// UpdateCloudService mocks base method.
+func (m *MockApplicationService) UpdateCloudService(arg0 context.Context, arg1, arg2 string, arg3 network.SpaceAddresses) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateCloudService", arg0, arg1, arg2, arg3)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdateCloudService indicates an expected call of UpdateCloudService.
+func (mr *MockApplicationServiceMockRecorder) UpdateCloudService(arg0, arg1, arg2, arg3 any) *MockApplicationServiceUpdateCloudServiceCall {
+	mr.mock.ctrl.T.Helper()
+	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateCloudService", reflect.TypeOf((*MockApplicationService)(nil).UpdateCloudService), arg0, arg1, arg2, arg3)
+	return &MockApplicationServiceUpdateCloudServiceCall{Call: call}
+}
+
+// MockApplicationServiceUpdateCloudServiceCall wrap *gomock.Call
+type MockApplicationServiceUpdateCloudServiceCall struct {
+	*gomock.Call
+}
+
+// Return rewrite *gomock.Call.Return
+func (c *MockApplicationServiceUpdateCloudServiceCall) Return(arg0 error) *MockApplicationServiceUpdateCloudServiceCall {
+	c.Call = c.Call.Return(arg0)
+	return c
+}
+
+// Do rewrite *gomock.Call.Do
+func (c *MockApplicationServiceUpdateCloudServiceCall) Do(f func(context.Context, string, string, network.SpaceAddresses) error) *MockApplicationServiceUpdateCloudServiceCall {
+	c.Call = c.Call.Do(f)
+	return c
+}
+
+// DoAndReturn rewrite *gomock.Call.DoAndReturn
+func (c *MockApplicationServiceUpdateCloudServiceCall) DoAndReturn(f func(context.Context, string, string, network.SpaceAddresses) error) *MockApplicationServiceUpdateCloudServiceCall {
 	c.Call = c.Call.DoAndReturn(f)
 	return c
 }

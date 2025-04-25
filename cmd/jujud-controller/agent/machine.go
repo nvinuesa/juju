@@ -1123,16 +1123,24 @@ func openStatePool(
 		}
 		return svc.Application(), nil
 	}
+	applicationServiceGetter := func(modelUUID coremodel.UUID) (state.ApplicationService, error) {
+		svc, err := domainServicesGetter.ServicesForModel(context.Background(), modelUUID)
+		if err != nil {
+			return nil, err
+		}
+		return svc.Application(), nil
+	}
 
 	pool, err := state.OpenStatePool(state.OpenParams{
 
-		Clock:                  clock.WallClock,
-		ControllerTag:          agentConfig.Controller(),
-		ControllerModelTag:     agentConfig.Model(),
-		MongoSession:           session,
-		NewPolicy:              stateenvirons.GetNewPolicyFunc(cloudService, credService, modelConfigServiceGetter, storageServiceGetter),
-		CharmServiceGetter:     charmServiceGetter,
-		RunTransactionObserver: runTransactionObserver,
+		Clock:                    clock.WallClock,
+		ControllerTag:            agentConfig.Controller(),
+		ControllerModelTag:       agentConfig.Model(),
+		MongoSession:             session,
+		NewPolicy:                stateenvirons.GetNewPolicyFunc(cloudService, credService, modelConfigServiceGetter, storageServiceGetter),
+		CharmServiceGetter:       charmServiceGetter,
+		ApplicationServiceGetter: applicationServiceGetter,
+		RunTransactionObserver:   runTransactionObserver,
 	})
 	if err != nil {
 		return nil, err

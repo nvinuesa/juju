@@ -22,7 +22,7 @@ var logger = internallogger.GetLogger("juju.apiserver.crossmodelrelations")
 // WatchEgressAddressesForRelations creates a watcher that notifies when addresses, from which
 // connections will originate for the relation, change.
 // Each event contains the entire set of addresses which are required for ingress for the relation.
-func WatchEgressAddressesForRelations(ctx context.Context, resources facade.Resources, st State, modelConfigService ModelConfigService, relations params.Entities) (params.StringsWatchResults, error) {
+func WatchEgressAddressesForRelations(ctx context.Context, resources facade.Resources, st State, modelConfigService ModelConfigService, applicationService ApplicationService, relations params.Entities) (params.StringsWatchResults, error) {
 	results := params.StringsWatchResults{
 		Results: make([]params.StringsWatchResult, len(relations.Entities)),
 	}
@@ -41,7 +41,7 @@ func WatchEgressAddressesForRelations(ctx context.Context, resources facade.Reso
 			return "", nil, errors.Trace(err)
 		}
 
-		w, err := NewEgressAddressWatcher(st, modelConfigService, localEndpoint.relation, localEndpoint.application)
+		w, err := NewEgressAddressWatcher(st, modelConfigService, applicationService, localEndpoint.relation, localEndpoint.application)
 		if err != nil {
 			return "", nil, errors.Trace(err)
 		}
