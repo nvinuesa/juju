@@ -8,6 +8,7 @@ import (
 	"github.com/juju/mgo/v3"
 	"github.com/juju/replicaset/v3"
 
+	"github.com/juju/juju/core/network"
 	"github.com/juju/juju/core/status"
 	"github.com/juju/juju/state"
 )
@@ -34,11 +35,7 @@ func (s StateShim) ControllerHost(id string) (ControllerHost, error) {
 		return s.State.Machine(id)
 	}
 
-	cloudService, err := s.State.CloudService(model.ControllerUUID())
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	return &cloudServiceShim{cloudService}, nil
+	return &cloudServiceShim{}, nil
 }
 
 func (s StateShim) RemoveControllerReference(c ControllerNode) error {
@@ -49,7 +46,27 @@ func (s StateShim) RemoveControllerReference(c ControllerNode) error {
 // supported by the k8s service abstraction.
 // We don't yet support HA on k8s.
 type cloudServiceShim struct {
-	*state.CloudService
+	applicationService ApplicationService
+}
+
+func (*cloudServiceShim) Addresses() network.SpaceAddresses {
+	// We don't manage the address of a cloud service entity.
+	return network.SpaceAddresses{}
+}
+
+func (*cloudServiceShim) Id() string {
+	// We don't manage the id of a cloud service entity.
+	return ""
+}
+
+func (*cloudServiceShim) Refresh() error {
+	// We don't manage the refresh of a cloud service entity.
+	return nil
+}
+
+func (*cloudServiceShim) Watch() state.NotifyWatcher {
+	// We don't manage the watch of a cloud service entity.
+	return nil
 }
 
 func (*cloudServiceShim) Life() state.Life {

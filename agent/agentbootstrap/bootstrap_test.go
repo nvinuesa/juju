@@ -147,7 +147,6 @@ func (s *bootstrapSuite) TestInitializeState(c *gc.C) {
 		},
 	}
 	registry := provider.CommonStorageProviders()
-	var envProvider fakeProvider
 	stateInitParams := instancecfg.StateInitializationParams{
 		BootstrapMachineConstraints: expectBootstrapConstraints,
 		BootstrapMachineInstanceId:  "i-bootstrap",
@@ -188,10 +187,6 @@ func (s *bootstrapSuite) TestInitializeState(c *gc.C) {
 			BootstrapDqlite: getBootstrapDqliteWithDummyCloudTypeWithAssertions(c,
 				getModelConstraintAssertion(c, expectModelConstraints),
 			),
-			Provider: func(t string) (environs.EnvironProvider, error) {
-				c.Assert(t, gc.Equals, "dummy")
-				return &envProvider, nil
-			},
 			Logger: loggertesting.WrapCheckLog(c),
 		},
 	)
@@ -361,10 +356,7 @@ func (s *bootstrapSuite) TestInitializeStateFailsSecondTime(c *gc.C) {
 			SharedSecret:              "abc123",
 			StorageProviderRegistry:   provider.CommonStorageProviders(),
 			BootstrapDqlite:           getBootstrapDqliteWithDummyCloudTypeWithAssertions(c),
-			Provider: func(t string) (environs.EnvironProvider, error) {
-				return &fakeProvider{}, nil
-			},
-			Logger: loggertesting.WrapCheckLog(c),
+			Logger:                    loggertesting.WrapCheckLog(c),
 		},
 	)
 	c.Assert(err, jc.ErrorIsNil)

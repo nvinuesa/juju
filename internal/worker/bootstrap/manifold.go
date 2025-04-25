@@ -201,6 +201,14 @@ func Manifold(config ManifoldConfig) dependency.Manifold {
 			)
 			addressFinder := BootstrapAddressFinder(instanceListerProvider)
 
+			serviceManagerGetter := providertracker.ProviderRunner[ServiceManager](
+				providerFactory, controllerModel.UUID.String(),
+			)
+			serviceManager, err := serviceManagerGetter(ctx)
+			if err != nil {
+				return nil, errors.Trace(err)
+			}
+
 			var objectStoreGetter objectstore.ObjectStoreGetter
 			if err := getter.Get(config.ObjectStoreName, &objectStoreGetter); err != nil {
 				return nil, errors.Trace(err)
@@ -286,6 +294,7 @@ func Manifold(config ManifoldConfig) dependency.Manifold {
 				PopulateControllerCharm: config.PopulateControllerCharm,
 				CharmhubHTTPClient:      charmhubHTTPClient,
 				UnitPassword:            unitPassword,
+				ServiceManager:          serviceManager,
 				Logger:                  config.Logger,
 				Clock:                   config.Clock,
 				BootstrapAddressFinder:  addressFinder,

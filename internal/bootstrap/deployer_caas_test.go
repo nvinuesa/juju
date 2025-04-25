@@ -11,7 +11,6 @@ import (
 	"go.uber.org/mock/gomock"
 	gc "gopkg.in/check.v1"
 
-	"github.com/juju/juju/core/network"
 	unit "github.com/juju/juju/core/unit"
 	"github.com/juju/juju/core/version"
 	applicationservice "github.com/juju/juju/domain/application/service"
@@ -20,9 +19,6 @@ import (
 
 type deployerCAASSuite struct {
 	baseSuite
-
-	cloudService       *MockCloudService
-	cloudServiceGetter *MockCloudServiceGetter
 }
 
 var _ = gc.Suite(&deployerCAASSuite{})
@@ -35,7 +31,6 @@ func (s *deployerCAASSuite) TestValidate(c *gc.C) {
 	c.Assert(err, gc.IsNil)
 
 	cfg = s.newConfig(c)
-	cfg.CloudServiceGetter = nil
 	err = cfg.Validate()
 	c.Assert(err, jc.ErrorIs, errors.NotValid)
 }
@@ -45,8 +40,8 @@ func (s *deployerCAASSuite) TestControllerAddress(c *gc.C) {
 
 	cfg := s.newConfig(c)
 
-	s.cloudService.EXPECT().Addresses().Return(network.NewSpaceAddresses("10.0.0.1"))
-	s.cloudServiceGetter.EXPECT().CloudService(cfg.ControllerConfig.ControllerUUID()).Return(s.cloudService, nil)
+	// s.cloudService.EXPECT().Addresses().Return(network.NewSpaceAddresses("10.0.0.1"))
+	// s.cloudServiceGetter.EXPECT().CloudService(cfg.ControllerConfig.ControllerUUID()).Return(s.cloudService, nil)
 
 	deployer := s.newDeployerWithConfig(c, cfg)
 	address, err := deployer.ControllerAddress(context.Background())
@@ -61,8 +56,8 @@ func (s *deployerCAASSuite) TestControllerAddressMultipleAddresses(c *gc.C) {
 
 	cfg := s.newConfig(c)
 
-	s.cloudService.EXPECT().Addresses().Return(network.NewSpaceAddresses("10.0.0.1", "10.0.0.2"))
-	s.cloudServiceGetter.EXPECT().CloudService(cfg.ControllerConfig.ControllerUUID()).Return(s.cloudService, nil)
+	// s.cloudService.EXPECT().Addresses().Return(network.NewSpaceAddresses("10.0.0.1", "10.0.0.2"))
+	// s.cloudServiceGetter.EXPECT().CloudService(cfg.ControllerConfig.ControllerUUID()).Return(s.cloudService, nil)
 
 	deployer := s.newDeployerWithConfig(c, cfg)
 	address, err := deployer.ControllerAddress(context.Background())
@@ -77,8 +72,8 @@ func (s *deployerCAASSuite) TestControllerAddressMultipleAddressesScopeNonLocal(
 
 	cfg := s.newConfig(c)
 
-	s.cloudService.EXPECT().Addresses().Return(network.NewSpaceAddresses("2.201.120.241", "10.0.0.2"))
-	s.cloudServiceGetter.EXPECT().CloudService(cfg.ControllerConfig.ControllerUUID()).Return(s.cloudService, nil)
+	// s.cloudService.EXPECT().Addresses().Return(network.NewSpaceAddresses("2.201.120.241", "10.0.0.2"))
+	// s.cloudServiceGetter.EXPECT().CloudService(cfg.ControllerConfig.ControllerUUID()).Return(s.cloudService, nil)
 
 	deployer := s.newDeployerWithConfig(c, cfg)
 	address, err := deployer.ControllerAddress(context.Background())
@@ -94,8 +89,8 @@ func (s *deployerCAASSuite) TestControllerAddressScopeNonLocal(c *gc.C) {
 
 	cfg := s.newConfig(c)
 
-	s.cloudService.EXPECT().Addresses().Return(network.NewSpaceAddresses("2.201.120.241"))
-	s.cloudServiceGetter.EXPECT().CloudService(cfg.ControllerConfig.ControllerUUID()).Return(s.cloudService, nil)
+	// s.cloudService.EXPECT().Addresses().Return(network.NewSpaceAddresses("2.201.120.241"))
+	// s.cloudServiceGetter.EXPECT().CloudService(cfg.ControllerConfig.ControllerUUID()).Return(s.cloudService, nil)
 
 	deployer := s.newDeployerWithConfig(c, cfg)
 	address, err := deployer.ControllerAddress(context.Background())
@@ -108,8 +103,8 @@ func (s *deployerCAASSuite) TestControllerAddressNoAddresses(c *gc.C) {
 
 	cfg := s.newConfig(c)
 
-	s.cloudService.EXPECT().Addresses().Return(network.NewSpaceAddresses())
-	s.cloudServiceGetter.EXPECT().CloudService(cfg.ControllerConfig.ControllerUUID()).Return(s.cloudService, nil)
+	// s.cloudService.EXPECT().Addresses().Return(network.NewSpaceAddresses())
+	// s.cloudServiceGetter.EXPECT().CloudService(cfg.ControllerConfig.ControllerUUID()).Return(s.cloudService, nil)
 
 	deployer := s.newDeployerWithConfig(c, cfg)
 	address, err := deployer.ControllerAddress(context.Background())
@@ -156,16 +151,12 @@ func (s *deployerCAASSuite) newDeployerWithConfig(c *gc.C, cfg CAASDeployerConfi
 func (s *deployerCAASSuite) setupMocks(c *gc.C) *gomock.Controller {
 	ctrl := s.baseSuite.setupMocks(c)
 
-	s.cloudService = NewMockCloudService(ctrl)
-	s.cloudServiceGetter = NewMockCloudServiceGetter(ctrl)
-
 	return ctrl
 }
 
 func (s *deployerCAASSuite) newConfig(c *gc.C) CAASDeployerConfig {
 	return CAASDeployerConfig{
 		BaseDeployerConfig: s.baseSuite.newConfig(c),
-		CloudServiceGetter: s.cloudServiceGetter,
 		UnitPassword:       uuid.MustNewUUID().String(),
 	}
 }

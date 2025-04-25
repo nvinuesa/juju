@@ -12,6 +12,7 @@ import (
 	"github.com/juju/worker/v4/catacomb"
 
 	"github.com/juju/juju/core/network"
+	coreunit "github.com/juju/juju/core/unit"
 	"github.com/juju/juju/core/watcher"
 	"github.com/juju/juju/environs/config"
 )
@@ -23,6 +24,19 @@ type ModelConfigService interface {
 	Watch() (watcher.StringsWatcher, error)
 }
 
+// ApplicationService instances implement an application service.
+type ApplicationService interface {
+	// GetPublicAddress returns the public address for the specified unit.
+	// For k8s provider, it will return the first public address of the cloud
+	// service if any, the first public address of the cloud container otherwise.
+	// For machines provider, it will return the first public address of the
+	// machine.
+	//
+	// The following errors may be returned:
+	// - [uniterrors.UnitNotFound] if the unit does not exist
+	GetPublicAddress(ctx context.Context, unitName coreunit.Name) (network.SpaceAddress, error)
+}
+
 // EgressAddressWatcher reports changes to addresses
 // for local units in a given relation.
 // Each event contains the entire set of addresses which
@@ -32,6 +46,7 @@ type EgressAddressWatcher struct {
 
 	backend            State
 	modelConfigService ModelConfigService
+	applicationService ApplicationService
 
 	appName string
 	rel     Relation
@@ -67,10 +82,11 @@ type machineData struct {
 }
 
 // NewEgressAddressWatcher creates an EgressAddressWatcher.
-func NewEgressAddressWatcher(backend State, modelConfigService ModelConfigService, rel Relation, appName string) (*EgressAddressWatcher, error) {
+func NewEgressAddressWatcher(backend State, modelConfigService ModelConfigService, applicationService ApplicationService, rel Relation, appName string) (*EgressAddressWatcher, error) {
 	w := &EgressAddressWatcher{
 		backend:            backend,
 		modelConfigService: modelConfigService,
+		applicationService: applicationService,
 		appName:            appName,
 		rel:                rel,
 		known:              make(map[string]string),
@@ -88,7 +104,11 @@ func NewEgressAddressWatcher(backend State, modelConfigService ModelConfigServic
 }
 
 func (w *EgressAddressWatcher) loop() error {
-	defer close(w.out)
+	ctx, cancel := w.scopedContext()
+	defer func() {
+		cancel()
+		close(w.out)
+	}()
 
 	ruw, err := w.rel.WatchUnits(w.appName)
 	if errors.Is(err, errors.NotFound) {
@@ -177,7 +197,7 @@ func (w *EgressAddressWatcher) loop() error {
 			if !ok {
 				return w.catacomb.ErrDying()
 			}
-			egress, err := w.getEgressSubnets()
+			egress, err := w.getEgressSubnets(ctx)
 			if err != nil {
 				return err
 			}
@@ -203,7 +223,7 @@ func (w *EgressAddressWatcher) loop() error {
 			// Get the new set of addresses resulting from that
 			// change, and if different to what we know, send the change.
 			haveInitialRelationUnits = true
-			addressesChanged, err := w.processUnitChanges(c)
+			addressesChanged, err := w.processUnitChanges(ctx, c)
 			if err != nil {
 				return err
 			}
@@ -213,7 +233,7 @@ func (w *EgressAddressWatcher) loop() error {
 			if !ok {
 				continue
 			}
-			addressesChanged, err := w.processMachineAddresses(machineId)
+			addressesChanged, err := w.processMachineAddresses(ctx, machineId)
 			if err != nil {
 				return errors.Trace(err)
 			}
@@ -230,10 +250,7 @@ func (w *EgressAddressWatcher) scopedContext() (context.Context, context.CancelF
 	return w.catacomb.Context(ctx), cancel
 }
 
-func (w *EgressAddressWatcher) getEgressSubnets() (set.Strings, error) {
-	ctx, cancel := w.scopedContext()
-	defer cancel()
-
+func (w *EgressAddressWatcher) getEgressSubnets(ctx context.Context) (set.Strings, error) {
 	cfg, err := w.modelConfigService.ModelConfig(ctx)
 	if err != nil {
 		return nil, err
@@ -241,8 +258,34 @@ func (w *EgressAddressWatcher) getEgressSubnets() (set.Strings, error) {
 	return set.NewStrings(cfg.EgressSubnets()...), nil
 }
 
-func (w *EgressAddressWatcher) unitAddress(unit Unit) (string, bool, error) {
-	addr, err := unit.PublicAddress()
+func (w *EgressAddressWatcher) unitAddress(ctx context.Context, unit Unit) (string, bool, error) {
+	var (
+		addr network.SpaceAddress
+		err  error
+	)
+	if unit.ShouldBeAssigned() {
+		machineID, err := unit.AssignedMachineId()
+		if err != nil {
+			return "", false, errors.Annotatef(err, "unit %v cannot get assigned machine", unit)
+		}
+		machine, err := w.backend.Machine(machineID)
+		if err != nil {
+			return "", false, err
+		}
+		addr, err = machine.PublicAddress()
+		if errors.Is(err, errors.NotAssigned) {
+			logger.Debugf(context.TODO(), "unit %s is not assigned to a machine, can't get address", unit.Name())
+			return "", false, nil
+		}
+		if network.IsNoAddressError(err) {
+			logger.Debugf(context.TODO(), "unit %s has no public address", unit.Name())
+			return "", false, nil
+		}
+		if err != nil {
+			return "", false, err
+		}
+	}
+	addr, err = w.applicationService.GetPublicAddress(ctx, coreunit.Name(unit.Name()))
 	if errors.Is(err, errors.NotAssigned) {
 		logger.Debugf(context.TODO(), "unit %s is not assigned to a machine, can't get address", unit.Name())
 		return "", false, nil
@@ -258,7 +301,7 @@ func (w *EgressAddressWatcher) unitAddress(unit Unit) (string, bool, error) {
 	return addr.Value, true, nil
 }
 
-func (w *EgressAddressWatcher) processUnitChanges(c watcher.RelationUnitsChange) (bool, error) {
+func (w *EgressAddressWatcher) processUnitChanges(ctx context.Context, c watcher.RelationUnitsChange) (bool, error) {
 	changed := false
 	for name := range c.Changed {
 
@@ -277,7 +320,7 @@ func (w *EgressAddressWatcher) processUnitChanges(c watcher.RelationUnitsChange)
 		// We need to know whether to look at the public or cloud local address.
 		// For now, we'll use the public address and later if needed use a watcher
 		// parameter to look at the cloud local address.
-		addr, ok, err := w.unitAddress(u)
+		addr, ok, err := w.unitAddress(ctx, u)
 		if err != nil {
 			return false, err
 		}
@@ -389,7 +432,7 @@ func (w *EgressAddressWatcher) assignedMachine(unit Unit) (Machine, error) {
 	return machine, nil
 }
 
-func (w *EgressAddressWatcher) processMachineAddresses(machineId string) (changed bool, err error) {
+func (w *EgressAddressWatcher) processMachineAddresses(ctx context.Context, machineId string) (changed bool, err error) {
 	mData, ok := w.machines[machineId]
 	if !ok {
 		return false, errors.Errorf("missing machineData for machine %q", machineId)
@@ -402,7 +445,7 @@ func (w *EgressAddressWatcher) processMachineAddresses(machineId string) (change
 		if err != nil {
 			return false, errors.Trace(err)
 		}
-		address, _, err := w.unitAddress(unit)
+		address, _, err := w.unitAddress(ctx, unit)
 		if err != nil {
 			return false, errors.Trace(err)
 		}

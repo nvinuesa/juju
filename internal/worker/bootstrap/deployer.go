@@ -11,6 +11,7 @@ import (
 	"github.com/juju/clock"
 	"github.com/juju/errors"
 
+	"github.com/juju/juju/caas"
 	k8sconstants "github.com/juju/juju/caas/kubernetes/provider/constants"
 	"github.com/juju/juju/controller"
 	corecharm "github.com/juju/juju/core/charm"
@@ -40,8 +41,6 @@ type SystemState interface {
 	ToolsStorage(store objectstore.ObjectStore) (binarystorage.StorageCloser, error)
 	// Machine returns the machine with the given id.
 	Machine(string) (bootstrap.Machine, error)
-	// CloudService returns the cloud service for the given cloud.
-	CloudService(string) (bootstrap.CloudService, error)
 	// SetAPIHostPorts sets the addresses, if changed, of two collections:
 	//   - The list of *all* addresses at which the API is accessible.
 	//   - The list of addresses at which the API can be accessed by agents according
@@ -49,8 +48,6 @@ type SystemState interface {
 	//
 	// Each server is represented by one element in the top level slice.
 	SetAPIHostPorts(controllerConfig controller.Config, newHostPorts []network.SpaceHostPorts, newHostPortsForAgents []network.SpaceHostPorts) error
-	// SaveCloudService creates a cloud service.
-	SaveCloudService(args state.SaveCloudServiceArgs) (*state.CloudService, error)
 }
 
 // BinaryAgentStorageService is the interface that is used to get the storage
@@ -65,6 +62,12 @@ type BinaryAgentStorage interface {
 	Add(context.Context, io.Reader, binarystorage.Metadata) error
 	// Close closes the storage.
 	Close() error
+}
+
+// ServiceManager provides the API to manipulate services.
+type ServiceManager interface {
+	// GetService returns the service for the specified application.
+	GetService(ctx context.Context, appName string, includeClusterIP bool) (*caas.Service, error)
 }
 
 // AgentBinaryBootstrapFunc is the function that is used to populate the tools.
@@ -93,6 +96,7 @@ type ControllerCharmDeployerConfig struct {
 	ControllerCharmChannel      charm.Channel
 	CharmhubHTTPClient          HTTPClient
 	UnitPassword                string
+	ServiceManager              ServiceManager
 	Logger                      logger.Logger
 	Clock                       clock.Clock
 }
@@ -142,8 +146,8 @@ func IAASAgentBinaryUploader(
 func CAASControllerCharmUploader(cfg ControllerCharmDeployerConfig) (bootstrap.ControllerCharmDeployer, error) {
 	return bootstrap.NewCAASDeployer(bootstrap.CAASDeployerConfig{
 		BaseDeployerConfig: makeBaseDeployerConfig(cfg),
-		CloudServiceGetter: cfg.StateBackend,
 		UnitPassword:       cfg.UnitPassword,
+		ServiceManager:     cfg.ServiceManager,
 	})
 }
 
@@ -190,10 +194,6 @@ func (s *stateShim) Machine(name string) (bootstrap.Machine, error) {
 		return nil, err
 	}
 	return &machineShim{Machine: m}, nil
-}
-
-func (s *stateShim) CloudService(name string) (bootstrap.CloudService, error) {
-	return s.State.CloudService(name)
 }
 
 type machineShim struct {
