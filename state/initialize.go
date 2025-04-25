@@ -74,6 +74,11 @@ type InitializeParams struct {
 	// and should disapear as soon as we migrate units and applications.
 	CharmServiceGetter func(modelUUID coremodel.UUID) (CharmService, error)
 
+	// Note(nvinuesa): The application service is needed until we migrate
+	// machines and it's used so we can get the cloud service addresses from
+	// domain while getting machine addresses from state at the same time.
+	ApplicationServiceGetter func(modelUUID coremodel.UUID) (ApplicationService, error)
+
 	// SSHServerHostKey holds the embedded SSH server host key.
 	SSHServerHostKey string
 }
@@ -120,15 +125,16 @@ func Initialize(args InitializeParams) (_ *Controller, err error) {
 	modelTag := names.NewModelTag(modelUUID)
 
 	ctlr, err := OpenController(OpenParams{
-		Clock:               args.Clock,
-		ControllerTag:       controllerTag,
-		ControllerModelTag:  modelTag,
-		MongoSession:        args.MongoSession,
-		MaxTxnAttempts:      args.MaxTxnAttempts,
-		WatcherPollInterval: args.WatcherPollInterval,
-		NewPolicy:           args.NewPolicy,
-		InitDatabaseFunc:    InitDatabase,
-		CharmServiceGetter:  args.CharmServiceGetter,
+		Clock:                    args.Clock,
+		ControllerTag:            controllerTag,
+		ControllerModelTag:       modelTag,
+		MongoSession:             args.MongoSession,
+		MaxTxnAttempts:           args.MaxTxnAttempts,
+		WatcherPollInterval:      args.WatcherPollInterval,
+		NewPolicy:                args.NewPolicy,
+		InitDatabaseFunc:         InitDatabase,
+		CharmServiceGetter:       args.CharmServiceGetter,
+		ApplicationServiceGetter: args.ApplicationServiceGetter,
 	})
 	if err != nil {
 		return nil, errors.Annotate(err, "opening controller")

@@ -69,6 +69,7 @@ type WorkerConfig struct {
 	PopulateControllerCharm    PopulateControllerCharmFunc
 	CharmhubHTTPClient         HTTPClient
 	UnitPassword               string
+	ServiceManager             ServiceManager
 	BootstrapAddressFinder     BootstrapAddressFinderFunc
 	Logger                     logger.Logger
 	Clock                      clock.Clock
@@ -534,6 +535,7 @@ func (w *bootstrapWorker) seedControllerCharm(ctx context.Context, dataDir strin
 		ControllerCharmChannel:      bootstrapArgs.ControllerCharmChannel,
 		CharmhubHTTPClient:          w.cfg.CharmhubHTTPClient,
 		UnitPassword:                w.cfg.UnitPassword,
+		ServiceManager:              w.cfg.ServiceManager,
 		Logger:                      w.cfg.Logger,
 		Clock:                       w.cfg.Clock,
 	})

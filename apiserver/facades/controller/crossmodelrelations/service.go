@@ -6,8 +6,10 @@ package crossmodelrelations
 import (
 	"context"
 
+	"github.com/juju/juju/core/network"
 	"github.com/juju/juju/core/secrets"
 	"github.com/juju/juju/core/status"
+	"github.com/juju/juju/core/unit"
 	"github.com/juju/juju/core/watcher"
 	"github.com/juju/juju/environs/config"
 )
@@ -24,6 +26,19 @@ type SecretService interface {
 type ModelConfigService interface {
 	ModelConfig(ctx context.Context) (*config.Config, error)
 	Watch() (watcher.StringsWatcher, error)
+}
+
+// ApplicationService instances implement an application service.
+type ApplicationService interface {
+	// GetPublicAddress returns the public address for the specified unit.
+	// For k8s provider, it will return the first public address of the cloud
+	// service if any, the first public address of the cloud container otherwise.
+	// For machines provider, it will return the first public address of the
+	// machine.
+	//
+	// The following errors may be returned:
+	// - [uniterrors.UnitNotFound] if the unit does not exist
+	GetPublicAddress(ctx context.Context, unitName unit.Name) (network.SpaceAddress, error)
 }
 
 type StatusService interface {

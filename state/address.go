@@ -17,9 +17,20 @@ import (
 
 	k8sconstants "github.com/juju/juju/caas/kubernetes/provider/constants"
 	"github.com/juju/juju/controller"
+	coremodel "github.com/juju/juju/core/model"
 	"github.com/juju/juju/core/network"
+	"github.com/juju/juju/environs/bootstrap"
 	"github.com/juju/juju/internal/mongo"
 )
+
+// ApplicationService instances create an application.
+type ApplicationService interface {
+	// GetCloudServiceAddresses returns the addresses of the cloud service for the
+	// specified application, returning an error satisfying
+	// [applicationerrors.ApplicationNotFoundError] if the application doesn't
+	// exist.
+	GetCloudServiceAddresses(ctx context.Context, applicationName string) (network.SpaceAddresses, error)
+}
 
 const (
 	// Key for *all* addresses at which controllers are accessible.
@@ -178,11 +189,11 @@ func (st *State) apiHostPortsForCAAS(controllerConfig controller.Config, public 
 	}
 
 	apiPort := controllerConfig.APIPort()
-	svc, err := st.CloudService(controllerConfig.ControllerUUID())
+	applicationService, err := st.applicationServiceGetter(coremodel.UUID(st.ModelUUID()))
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	addrs := svc.Addresses()
+	addrs, err := applicationService.GetCloudServiceAddresses(context.TODO(), bootstrap.ControllerApplicationName)
 
 	addrsToHostPorts := func(addrs ...network.SpaceAddress) []network.SpaceHostPorts {
 		return []network.SpaceHostPorts{network.SpaceAddressesWithPort(addrs, apiPort)}

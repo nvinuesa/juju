@@ -99,6 +99,20 @@ func (config ManifoldConfig) start(ctx context.Context, getter dependency.Getter
 		return nil, errors.Trace(err)
 	}
 
+	controllerModel, err := domainServices.Model().ControllerModel(context)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	var domainServicesGetter services.DomainServicesGetter
+	if err := getter.Get(config.DomainServicesName, &domainServicesGetter); err != nil {
+		return nil, errors.Trace(err)
+	}
+	controllerModelDomainServices, err := domainServicesGetter.ServicesForModel(context, controllerModel.UUID)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	applicationService := controllerModelDomainServices.Application()
+
 	var stTracker workerstate.StateTracker
 	if err := getter.Get(config.StateName, &stTracker); err != nil {
 		return nil, errors.Trace(err)
@@ -124,6 +138,7 @@ func (config ManifoldConfig) start(ctx context.Context, getter dependency.Getter
 	w, err := config.NewWorker(Config{
 		State:                   StateShim{State: st},
 		ControllerConfigService: controllerConfigService,
+		ApplicationService:      applicationService,
 		MongoSession:            MongoSessionShim{mongoSession},
 		APIHostPortsSetter:      &CachingAPIHostPortsSetter{APIHostPortsSetter: st},
 		Clock:                   clock,

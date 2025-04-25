@@ -16,6 +16,7 @@ import (
 	"github.com/juju/juju/core/machine"
 	"github.com/juju/juju/core/network"
 	"github.com/juju/juju/core/unit"
+	coreunit "github.com/juju/juju/core/unit"
 	"github.com/juju/juju/core/watcher"
 	"github.com/juju/juju/domain/application"
 	"github.com/juju/juju/rpc/params"
@@ -81,6 +82,16 @@ type ApplicationService interface {
 	// If no application is found, an error satisfying
 	// [applicationerrors.ApplicationNotFound] is returned.
 	GetExposedEndpoints(ctx context.Context, appName string) (map[string]application.ExposedEndpoint, error)
+
+	// GetPublicAddress returns the public address for the specified unit.
+	// For k8s provider, it will return the first public address of the cloud
+	// service if any, the first public address of the cloud container otherwise.
+	// For machines provider, it will return the first public address of the
+	// machine.
+	//
+	// The following errors may be returned:
+	// - [uniterrors.UnitNotFound] if the unit does not exist
+	GetPublicAddress(ctx context.Context, unitName coreunit.Name) (network.SpaceAddress, error)
 }
 
 // ControllerConfigAPI provides the subset of common.ControllerConfigAPI

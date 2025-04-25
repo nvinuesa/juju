@@ -12,6 +12,7 @@ import (
 	"github.com/juju/worker/v4/catacomb"
 
 	"github.com/juju/juju/core/network"
+	coreunit "github.com/juju/juju/core/unit"
 	"github.com/juju/juju/core/watcher"
 	"github.com/juju/juju/environs/config"
 )
@@ -23,6 +24,19 @@ type ModelConfigService interface {
 	Watch() (watcher.StringsWatcher, error)
 }
 
+// ApplicationService instances implement an application service.
+type ApplicationService interface {
+	// GetPublicAddress returns the public address for the specified unit.
+	// For k8s provider, it will return the first public address of the cloud
+	// service if any, the first public address of the cloud container otherwise.
+	// For machines provider, it will return the first public address of the
+	// machine.
+	//
+	// The following errors may be returned:
+	// - [uniterrors.UnitNotFound] if the unit does not exist
+	GetPublicAddress(ctx context.Context, unitName coreunit.Name) (network.SpaceAddress, error)
+}
+
 // EgressAddressWatcher reports changes to addresses
 // for local units in a given relation.
 // Each event contains the entire set of addresses which
@@ -32,6 +46,7 @@ type EgressAddressWatcher struct {
 
 	backend            State
 	modelConfigService ModelConfigService
+	applicationService ApplicationService
 
 	appName string
 	rel     Relation
@@ -67,10 +82,11 @@ type machineData struct {
 }
 
 // NewEgressAddressWatcher creates an EgressAddressWatcher.
-func NewEgressAddressWatcher(backend State, modelConfigService ModelConfigService, rel Relation, appName string) (*EgressAddressWatcher, error) {
+func NewEgressAddressWatcher(backend State, modelConfigService ModelConfigService, applicationService ApplicationService, rel Relation, appName string) (*EgressAddressWatcher, error) {
 	w := &EgressAddressWatcher{
 		backend:            backend,
 		modelConfigService: modelConfigService,
+		applicationService: applicationService,
 		appName:            appName,
 		rel:                rel,
 		known:              make(map[string]string),
@@ -89,8 +105,6 @@ func NewEgressAddressWatcher(backend State, modelConfigService ModelConfigServic
 }
 
 func (w *EgressAddressWatcher) loop() error {
-	defer close(w.out)
-
 	ctx, cancel := w.scopedContext()
 	defer cancel()
 
@@ -181,7 +195,7 @@ func (w *EgressAddressWatcher) loop() error {
 			if !ok {
 				return w.catacomb.ErrDying()
 			}
-			egress, err := w.getEgressSubnets()
+			egress, err := w.getEgressSubnets(ctx)
 			if err != nil {
 				return err
 			}
@@ -234,10 +248,7 @@ func (w *EgressAddressWatcher) scopedContext() (context.Context, context.CancelF
 	return w.catacomb.Context(ctx), cancel
 }
 
-func (w *EgressAddressWatcher) getEgressSubnets() (set.Strings, error) {
-	ctx, cancel := w.scopedContext()
-	defer cancel()
-
+func (w *EgressAddressWatcher) getEgressSubnets(ctx context.Context) (set.Strings, error) {
 	cfg, err := w.modelConfigService.ModelConfig(ctx)
 	if err != nil {
 		return nil, err
@@ -246,7 +257,34 @@ func (w *EgressAddressWatcher) getEgressSubnets() (set.Strings, error) {
 }
 
 func (w *EgressAddressWatcher) unitAddress(ctx context.Context, unit Unit) (string, bool, error) {
-	addr, err := unit.PublicAddress()
+	var (
+		addr network.SpaceAddress
+		err  error
+	)
+	if unit.ShouldBeAssigned() {
+		machineID, err := unit.AssignedMachineId()
+		if err != nil {
+			return "", false, errors.Annotatef(err, "unit %v cannot get assigned machine", unit)
+		}
+		machine, err := w.backend.Machine(machineID)
+		if err != nil {
+			return "", false, err
+		}
+		addr, err = machine.PublicAddress()
+		if errors.Is(err, errors.NotAssigned) {
+			logger.Debugf(ctx, "unit %s is not assigned to a machine, can't get address", unit.Name())
+			return "", false, nil
+		}
+		if network.IsNoAddressError(err) {
+			logger.Debugf(ctx, "unit %s has no public address", unit.Name())
+			return "", false, nil
+		}
+		if err != nil {
+			return "", false, err
+		}
+	}
+
+	addr, err = w.applicationService.GetPublicAddress(ctx, coreunit.Name(unit.Name()))
 	if errors.Is(err, errors.NotAssigned) {
 		logger.Debugf(ctx, "unit %s is not assigned to a machine, can't get address", unit.Name())
 		return "", false, nil

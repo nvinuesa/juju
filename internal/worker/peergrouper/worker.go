@@ -45,6 +45,15 @@ type ControllerConfigService interface {
 	WatchControllerConfig(context.Context) (watcher.StringsWatcher, error)
 }
 
+// ApplicationService instances implement an application service.
+type ApplicationService interface {
+	// GetCloudServiceAddresses returns the addresses of the cloud service for the
+	// specified application, returning an error satisfying
+	// [applicationerrors.ApplicationNotFoundError] if the application doesn't
+	// exist.
+	GetCloudServiceAddresses(ctx context.Context, applicationName string) (network.SpaceAddresses, error)
+}
+
 type State interface {
 	RemoveControllerReference(m ControllerNode) error
 	ControllerIds() ([]string, error)
@@ -125,7 +134,8 @@ type Hub interface {
 type pgWorker struct {
 	catacomb catacomb.Catacomb
 
-	config Config
+	config             Config
+	applicationService ApplicationService
 
 	// controllerChanges receives events from the controllerTrackers when
 	// controller nodes change in ways that are relevant to the
@@ -152,6 +162,7 @@ type pgWorker struct {
 type Config struct {
 	State                   State
 	ControllerConfigService ControllerConfigService
+	ApplicationService      ApplicationService
 	APIHostPortsSetter      APIHostPortsSetter
 	MongoSession            MongoSession
 	Clock                   clock.Clock
@@ -187,6 +198,9 @@ func (config Config) Validate() error {
 	if config.ControllerConfigService == nil {
 		return errors.NotValidf("nil ControllerConfigService")
 	}
+	if config.ApplicationService == nil {
+		return errors.NotValidf("nil ApplicationService")
+	}
 	if config.APIHostPortsSetter == nil {
 		return errors.NotValidf("nil APIHostPortsSetter")
 	}
@@ -221,6 +235,7 @@ func New(config Config) (worker.Worker, error) {
 
 	w := &pgWorker{
 		config:             config,
+		applicationService: config.ApplicationService,
 		controllerChanges:  make(chan struct{}),
 		controllerTrackers: make(map[string]*controllerTracker),
 		detailsRequests:    make(chan string),
