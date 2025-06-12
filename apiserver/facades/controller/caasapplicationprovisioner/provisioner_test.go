@@ -33,8 +33,10 @@ import (
 	jujuversion "github.com/juju/juju/core/version"
 	"github.com/juju/juju/core/watcher/eventsource"
 	"github.com/juju/juju/core/watcher/watchertest"
+	"github.com/juju/juju/domain/application"
 	applicationcharm "github.com/juju/juju/domain/application/charm"
 	"github.com/juju/juju/domain/application/service"
+	"github.com/juju/juju/domain/deployment"
 	envconfig "github.com/juju/juju/environs/config"
 	"github.com/juju/juju/internal/charm"
 	charmresource "github.com/juju/juju/internal/charm/resource"
@@ -184,6 +186,14 @@ func (s *CAASApplicationProvisionerSuite) TestProvisioningInfo(c *tc.C) {
 	s.applicationService.EXPECT().GetApplicationIDByName(gomock.Any(), "gitlab").Return(coreapplication.ID("deadbeef"), nil)
 	s.applicationService.EXPECT().GetApplicationConstraints(gomock.Any(), coreapplication.ID("deadbeef")).Return(constraints.Value{}, nil)
 	s.applicationService.EXPECT().GetDeviceConstraints(gomock.Any(), "gitlab").Return(map[string]devices.Constraints{}, nil)
+	s.applicationService.EXPECT().GetApplicationCharmOrigin(gomock.Any(), "gitlab").Return(application.CharmOrigin{
+		Platform: deployment.Platform{
+			Channel: "stable",
+			OSType:  deployment.Ubuntu,
+		},
+	}, nil)
+	s.applicationService.EXPECT().GetCharmModifiedVersion(gomock.Any(), coreapplication.ID("deadbeef")).Return(10, nil)
+	s.applicationService.EXPECT().GetApplicationTrustSetting(gomock.Any(), "gitlab").Return(true, nil)
 
 	result, err := s.api.ProvisioningInfo(c.Context(), params.Entities{Entities: []params.Entity{{Tag: "application-gitlab"}}})
 	c.Assert(err, tc.ErrorIsNil)
@@ -203,6 +213,10 @@ func (s *CAASApplicationProvisionerSuite) TestProvisioningInfo(c *tc.C) {
 			CharmModifiedVersion: 10,
 			Scale:                3,
 			Trust:                true,
+			Base: params.Base{
+				Name:    "ubuntu",
+				Channel: "stable",
+			},
 		}},
 	})
 }
@@ -705,33 +719,6 @@ func (s *CAASApplicationProvisionerSuite) TestClearApplicationsResources(c *tc.C
 	c.Assert(err, tc.ErrorIsNil)
 	c.Assert(result.Results[0].Error, tc.IsNil)
 	s.st.app.CheckCallNames(c, "ClearResources")
-}
-
-func (s *CAASApplicationProvisionerSuite) TestWatchUnits(c *tc.C) {
-	ctrl := s.setupAPI(c)
-	defer ctrl.Finish()
-
-	unitsChanges := make(chan []string, 1)
-	s.st.app = &mockApplication{
-		life:         state.Alive,
-		unitsChanges: unitsChanges,
-		unitsWatcher: watchertest.NewMockStringsWatcher(unitsChanges),
-	}
-	unitsChanges <- []string{"gitlab/0", "gitlab/1"}
-
-	results, err := s.api.WatchUnits(c.Context(), params.Entities{
-		Entities: []params.Entity{
-			{Tag: "application-gitlab"},
-		},
-	})
-
-	c.Assert(err, tc.ErrorIsNil)
-	c.Assert(results.Results, tc.HasLen, 1)
-	c.Assert(results.Results[0].Error, tc.IsNil)
-	c.Assert(results.Results[0].StringsWatcherId, tc.Equals, "1")
-	c.Assert(results.Results[0].Changes, tc.DeepEquals, []string{"gitlab/0", "gitlab/1"})
-	res := s.resources.Get("1")
-	c.Assert(res, tc.Equals, s.st.app.unitsWatcher)
 }
 
 func (s *CAASApplicationProvisionerSuite) TestProvisioningState(c *tc.C) {

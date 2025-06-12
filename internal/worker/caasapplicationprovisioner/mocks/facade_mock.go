@@ -625,84 +625,6 @@ func (c *MockCAASProvisionerFacadeUpdateUnitsCall) DoAndReturn(f func(context.Co
 	return c
 }
 
-// WatchApplication mocks base method.
-func (m *MockCAASProvisionerFacade) WatchApplication(arg0 context.Context, arg1 string) (watcher.Watcher[struct{}], error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "WatchApplication", arg0, arg1)
-	ret0, _ := ret[0].(watcher.Watcher[struct{}])
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// WatchApplication indicates an expected call of WatchApplication.
-func (mr *MockCAASProvisionerFacadeMockRecorder) WatchApplication(arg0, arg1 any) *MockCAASProvisionerFacadeWatchApplicationCall {
-	mr.mock.ctrl.T.Helper()
-	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WatchApplication", reflect.TypeOf((*MockCAASProvisionerFacade)(nil).WatchApplication), arg0, arg1)
-	return &MockCAASProvisionerFacadeWatchApplicationCall{Call: call}
-}
-
-// MockCAASProvisionerFacadeWatchApplicationCall wrap *gomock.Call
-type MockCAASProvisionerFacadeWatchApplicationCall struct {
-	*gomock.Call
-}
-
-// Return rewrite *gomock.Call.Return
-func (c *MockCAASProvisionerFacadeWatchApplicationCall) Return(arg0 watcher.Watcher[struct{}], arg1 error) *MockCAASProvisionerFacadeWatchApplicationCall {
-	c.Call = c.Call.Return(arg0, arg1)
-	return c
-}
-
-// Do rewrite *gomock.Call.Do
-func (c *MockCAASProvisionerFacadeWatchApplicationCall) Do(f func(context.Context, string) (watcher.Watcher[struct{}], error)) *MockCAASProvisionerFacadeWatchApplicationCall {
-	c.Call = c.Call.Do(f)
-	return c
-}
-
-// DoAndReturn rewrite *gomock.Call.DoAndReturn
-func (c *MockCAASProvisionerFacadeWatchApplicationCall) DoAndReturn(f func(context.Context, string) (watcher.Watcher[struct{}], error)) *MockCAASProvisionerFacadeWatchApplicationCall {
-	c.Call = c.Call.DoAndReturn(f)
-	return c
-}
-
-// WatchApplications mocks base method.
-func (m *MockCAASProvisionerFacade) WatchApplications(arg0 context.Context) (watcher.Watcher[[]string], error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "WatchApplications", arg0)
-	ret0, _ := ret[0].(watcher.Watcher[[]string])
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// WatchApplications indicates an expected call of WatchApplications.
-func (mr *MockCAASProvisionerFacadeMockRecorder) WatchApplications(arg0 any) *MockCAASProvisionerFacadeWatchApplicationsCall {
-	mr.mock.ctrl.T.Helper()
-	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WatchApplications", reflect.TypeOf((*MockCAASProvisionerFacade)(nil).WatchApplications), arg0)
-	return &MockCAASProvisionerFacadeWatchApplicationsCall{Call: call}
-}
-
-// MockCAASProvisionerFacadeWatchApplicationsCall wrap *gomock.Call
-type MockCAASProvisionerFacadeWatchApplicationsCall struct {
-	*gomock.Call
-}
-
-// Return rewrite *gomock.Call.Return
-func (c *MockCAASProvisionerFacadeWatchApplicationsCall) Return(arg0 watcher.Watcher[[]string], arg1 error) *MockCAASProvisionerFacadeWatchApplicationsCall {
-	c.Call = c.Call.Return(arg0, arg1)
-	return c
-}
-
-// Do rewrite *gomock.Call.Do
-func (c *MockCAASProvisionerFacadeWatchApplicationsCall) Do(f func(context.Context) (watcher.Watcher[[]string], error)) *MockCAASProvisionerFacadeWatchApplicationsCall {
-	c.Call = c.Call.Do(f)
-	return c
-}
-
-// DoAndReturn rewrite *gomock.Call.DoAndReturn
-func (c *MockCAASProvisionerFacadeWatchApplicationsCall) DoAndReturn(f func(context.Context) (watcher.Watcher[[]string], error)) *MockCAASProvisionerFacadeWatchApplicationsCall {
-	c.Call = c.Call.DoAndReturn(f)
-	return c
-}
-
 // WatchProvisioningInfo mocks base method.
 func (m *MockCAASProvisionerFacade) WatchProvisioningInfo(arg0 context.Context, arg1 string) (watcher.Watcher[struct{}], error) {
 	m.ctrl.T.Helper()
@@ -738,45 +660,6 @@ func (c *MockCAASProvisionerFacadeWatchProvisioningInfoCall) Do(f func(context.C
 
 // DoAndReturn rewrite *gomock.Call.DoAndReturn
 func (c *MockCAASProvisionerFacadeWatchProvisioningInfoCall) DoAndReturn(f func(context.Context, string) (watcher.Watcher[struct{}], error)) *MockCAASProvisionerFacadeWatchProvisioningInfoCall {
-	c.Call = c.Call.DoAndReturn(f)
-	return c
-}
-
-// WatchUnits mocks base method.
-func (m *MockCAASProvisionerFacade) WatchUnits(arg0 context.Context, arg1 string) (watcher.Watcher[[]string], error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "WatchUnits", arg0, arg1)
-	ret0, _ := ret[0].(watcher.Watcher[[]string])
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// WatchUnits indicates an expected call of WatchUnits.
-func (mr *MockCAASProvisionerFacadeMockRecorder) WatchUnits(arg0, arg1 any) *MockCAASProvisionerFacadeWatchUnitsCall {
-	mr.mock.ctrl.T.Helper()
-	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WatchUnits", reflect.TypeOf((*MockCAASProvisionerFacade)(nil).WatchUnits), arg0, arg1)
-	return &MockCAASProvisionerFacadeWatchUnitsCall{Call: call}
-}
-
-// MockCAASProvisionerFacadeWatchUnitsCall wrap *gomock.Call
-type MockCAASProvisionerFacadeWatchUnitsCall struct {
-	*gomock.Call
-}
-
-// Return rewrite *gomock.Call.Return
-func (c *MockCAASProvisionerFacadeWatchUnitsCall) Return(arg0 watcher.Watcher[[]string], arg1 error) *MockCAASProvisionerFacadeWatchUnitsCall {
-	c.Call = c.Call.Return(arg0, arg1)
-	return c
-}
-
-// Do rewrite *gomock.Call.Do
-func (c *MockCAASProvisionerFacadeWatchUnitsCall) Do(f func(context.Context, string) (watcher.Watcher[[]string], error)) *MockCAASProvisionerFacadeWatchUnitsCall {
-	c.Call = c.Call.Do(f)
-	return c
-}
-
-// DoAndReturn rewrite *gomock.Call.DoAndReturn
-func (c *MockCAASProvisionerFacadeWatchUnitsCall) DoAndReturn(f func(context.Context, string) (watcher.Watcher[[]string], error)) *MockCAASProvisionerFacadeWatchUnitsCall {
 	c.Call = c.Call.DoAndReturn(f)
 	return c
 }

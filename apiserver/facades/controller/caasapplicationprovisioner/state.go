@@ -11,7 +11,6 @@ import (
 	"github.com/juju/names/v6"
 
 	"github.com/juju/juju/controller"
-	coreconfig "github.com/juju/juju/core/config"
 	"github.com/juju/juju/core/constraints"
 	"github.com/juju/juju/core/network"
 	"github.com/juju/juju/core/objectstore"
@@ -28,7 +27,6 @@ type CAASApplicationProvisionerState interface {
 	ResolveConstraints(cons constraints.Value) (constraints.Value, error)
 	Resources(objectstore.ObjectStore) Resources
 	Unit(string) (Unit, error)
-	WatchApplications() state.StringsWatcher
 	IsController() bool
 }
 
@@ -43,18 +41,11 @@ type Model interface {
 	Containers(providerIds ...string) ([]state.CloudContainer, error)
 }
 
+// TODO(resources, storage): This interface must be removed once resources and
+// storage are fully migrated to dqlite.
 type Application interface {
-	AllUnits() ([]Unit, error)
 	StorageConstraints() (map[string]state.StorageConstraints, error)
-	Name() string
-	Life() state.Life
-	Base() state.Base
-	CharmModifiedVersion() int
-	CharmURL() (curl *string, force bool)
-	ApplicationConfig() (coreconfig.ConfigAttributes, error)
 	ClearResources() error
-	Watch() state.NotifyWatcher
-	WatchUnits() state.StringsWatcher
 }
 
 type Unit interface {
@@ -103,18 +94,6 @@ type applicationShim struct {
 
 func (a *applicationShim) ClearResources() error {
 	return errors.NotImplementedf("ClearResources")
-}
-
-func (a *applicationShim) AllUnits() ([]Unit, error) {
-	units, err := a.Application.AllUnits()
-	if err != nil {
-		return nil, err
-	}
-	res := make([]Unit, 0, len(units))
-	for _, unit := range units {
-		res = append(res, unit)
-	}
-	return res, nil
 }
 
 type resourcesShim struct{}

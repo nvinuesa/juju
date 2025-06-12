@@ -180,7 +180,7 @@ func (a *appWorker) loop() error {
 	}
 
 	var appUnitsWatcher watcher.StringsWatcher
-	appUnitsWatcher, err = a.facade.WatchUnits(ctx, a.name)
+	appUnitsWatcher, err = a.applicationService.WatchApplicationUnitLife(ctx, a.name)
 	if err != nil {
 		return errors.Annotatef(err, "creating application %q units watcher", a.name)
 	}

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/juju/clock"
@@ -22,15 +23,16 @@ import (
 	apiservererrors "github.com/juju/juju/apiserver/errors"
 	"github.com/juju/juju/apiserver/facade"
 	"github.com/juju/juju/apiserver/internal"
+	"github.com/juju/juju/apiserver/internal/charms"
 	charmscommon "github.com/juju/juju/apiserver/internal/charms"
 	"github.com/juju/juju/controller"
-	coreapplication "github.com/juju/juju/core/application"
 	"github.com/juju/juju/core/leadership"
 	"github.com/juju/juju/core/life"
 	corelogger "github.com/juju/juju/core/logger"
 	"github.com/juju/juju/core/model"
 	"github.com/juju/juju/core/network"
 	"github.com/juju/juju/core/objectstore"
+	"github.com/juju/juju/core/os/ostype"
 	coreresource "github.com/juju/juju/core/resource"
 	"github.com/juju/juju/core/status"
 	coreunit "github.com/juju/juju/core/unit"
@@ -39,6 +41,7 @@ import (
 	applicationcharm "github.com/juju/juju/domain/application/charm"
 	applicationerrors "github.com/juju/juju/domain/application/errors"
 	applicationservice "github.com/juju/juju/domain/application/service"
+	"github.com/juju/juju/domain/deployment"
 	statuserrors "github.com/juju/juju/domain/status/errors"
 	domainstorage "github.com/juju/juju/domain/storage"
 	storageerrors "github.com/juju/juju/domain/storage/errors"
@@ -55,7 +58,6 @@ import (
 	"github.com/juju/juju/internal/storage"
 	"github.com/juju/juju/rpc/params"
 	"github.com/juju/juju/state"
-	"github.com/juju/juju/state/watcher"
 )
 
 type APIGroup struct {
@@ -84,6 +86,7 @@ type API struct {
 	modelConfigService      ModelConfigService
 	modelInfoService        ModelInfoService
 	applicationService      ApplicationService
+	removalService          RemovalService
 	statusService           StatusService
 	leadershipRevoker       leadership.Revoker
 	clock                   clock.Clock
@@ -305,48 +308,21 @@ func (a *API) Remove(ctx context.Context, args params.Entities) (params.ErrorRes
 			result.Results[i].Error = apiservererrors.ServerError(apiservererrors.ErrPerm)
 			continue
 		}
-		unitName, err := coreunit.NewName(tag.Id())
+
+		unitUUID, err := a.applicationService.GetUnitUUID(ctx, coreunit.Name(tag.Id()))
 		if err != nil {
 			result.Results[i].Error = apiservererrors.ServerError(err)
 			continue
 		}
 
-		if err = a.applicationService.RemoveUnit(ctx, unitName, a.leadershipRevoker); err != nil {
+		_, err = a.removalService.RemoveUnit(ctx, unitUUID, false, 0)
+		if errors.Is(err, applicationerrors.UnitNotFound) {
+			result.Results[i].Error = apiservererrors.ServerError(errors.NotFoundf("unit %q", tag.Id()))
+		} else if err != nil {
 			result.Results[i].Error = apiservererrors.ServerError(err)
-			continue
-		}
-
-		// TODO(units) - remove me.
-		// Dual write to state.
-		unit, err := a.state.Unit(tag.Id())
-		if err != nil {
-			result.Results[i].Error = apiservererrors.ServerError(err)
-			continue
-		}
-		if err := unit.EnsureDead(); err != nil {
-			result.Results[i].Error = apiservererrors.ServerError(err)
-			continue
-		}
-		if err := unit.Remove(a.store); err != nil {
-			result.Results[i].Error = apiservererrors.ServerError(err)
-			continue
 		}
 	}
 	return result, nil
-}
-
-// WatchApplications starts a StringsWatcher to watch applications
-// deployed to this model.
-func (a *API) WatchApplications(ctx context.Context) (params.StringsWatchResult, error) {
-	watch := a.state.WatchApplications()
-	// Consume the initial event and forward it to the result.
-	if changes, ok := <-watch.Changes(); ok {
-		return params.StringsWatchResult{
-			StringsWatcherId: a.resources.Register(watch),
-			Changes:          changes,
-		}, nil
-	}
-	return params.StringsWatchResult{}, watcher.EnsureErr(watch)
 }
 
 // WatchProvisioningInfo provides a watcher for changes that affect the
@@ -381,12 +357,6 @@ func (a *API) watchProvisioningInfo(ctx context.Context, appName names.Applicati
 		return result, errors.Trace(err)
 	}
 
-	app, err := a.state.Application(appName.Id())
-	if err != nil {
-		return result, errors.Trace(err)
-	}
-
-	legacyAppWatcher := app.Watch()
 	controllerConfigWatcher, err := a.controllerConfigService.WatchControllerConfig(ctx)
 	if err != nil {
 		return result, errors.Trace(err)
@@ -414,7 +384,6 @@ func (a *API) watchProvisioningInfo(ctx context.Context, appName names.Applicati
 	// provisioning of k8s resources.
 	multiWatcher, err := eventsource.NewMultiNotifyWatcher(ctx,
 		appWatcher,
-		legacyAppWatcher,
 		controllerConfigNotifyWatcher,
 		controllerAPIHostPortsWatcher,
 		modelConfigNotifyWatcher,
@@ -456,6 +425,9 @@ func (a *API) provisioningInfo(ctx context.Context, appTag names.ApplicationTag)
 	// TODO: Either this needs to be implemented in the application domain or the worker
 	// needs to be refactored to fetch each value individually.
 	appName := appTag.Id()
+	// TODO(storage): We must keep this legacy Application here because of
+	// `StorageConstraints()`. Once that's migrated to dqlite this should be
+	// removed in favor of a domain service method.
 	app, err := a.state.Application(appName)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -517,6 +489,8 @@ func (a *API) provisioningInfo(ctx context.Context, appTag names.ApplicationTag)
 	} else if err != nil {
 		return nil, errors.Trace(err)
 	}
+	// TODO(model): This call should be removed once the model constraints are
+	// removed from the state.
 	mergedCons, err := a.state.ResolveConstraints(cons)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -551,22 +525,41 @@ func (a *API) provisioningInfo(ctx context.Context, appTag names.ApplicationTag)
 		}
 	}
 	caCert, _ := cfg.CACert()
-	appConfig, err := app.ApplicationConfig()
-	if err != nil {
-		return nil, errors.Annotatef(err, "getting application config")
-	}
+
 	scale, err := a.applicationService.GetApplicationScale(ctx, appName)
 	if err != nil {
 		return nil, errors.Annotatef(err, "getting application scale")
 	}
-	base := app.Base()
+	origin, err := a.applicationService.GetApplicationCharmOrigin(ctx, appName)
+	if err != nil {
+		return nil, internalerrors.Capture(err)
+	}
+
+	osType, err := encodeOSType(origin.Platform.OSType)
+	if err != nil {
+		return nil, internalerrors.Capture(err)
+	}
+	base := params.Base{
+		Name:    osType,
+		Channel: origin.Platform.Channel,
+	}
 	imageRepoDetails, err := docker.NewImageRepoDetails(cfg.CAASImageRepo())
 	if err != nil {
 		return nil, errors.Annotatef(err, "parsing %s", controller.CAASImageRepo)
 	}
-	charmURL, _ := app.CharmURL()
-	if charmURL == nil {
-		return nil, errors.NotValidf("application charm url nil")
+	charmURL, err := charms.CharmURLFromLocator(locator.Name, locator)
+	if err != nil {
+		return nil, internalerrors.Capture(err)
+	}
+
+	charmModifiedVersion, err := a.applicationService.GetCharmModifiedVersion(ctx, appID)
+	if err != nil {
+		return nil, internalerrors.Capture(err)
+	}
+
+	trustSetting, err := a.applicationService.GetApplicationTrustSetting(ctx, appName)
+	if err != nil {
+		return nil, internalerrors.Capture(err)
 	}
 	return &params.CAASApplicationProvisioningInfo{
 		Version:              vers,
@@ -576,11 +569,11 @@ func (a *API) provisioningInfo(ctx context.Context, appTag names.ApplicationTag)
 		Filesystems:          filesystemParams,
 		Devices:              devices,
 		Constraints:          mergedCons,
-		Base:                 params.Base{Name: base.OS, Channel: base.Channel},
+		Base:                 base,
 		ImageRepo:            params.NewDockerImageInfo(docker.ConvertToResourceImageDetails(imageRepoDetails), imagePath),
-		CharmModifiedVersion: app.CharmModifiedVersion(),
-		CharmURL:             *charmURL,
-		Trust:                appConfig.GetBool(coreapplication.TrustConfigOptionName, false),
+		CharmModifiedVersion: charmModifiedVersion,
+		CharmURL:             charmURL,
+		Trust:                trustSetting,
 		Scale:                scale,
 	}, nil
 }
@@ -985,14 +978,14 @@ func (a *API) UpdateApplicationsUnits(ctx context.Context, args params.UpdateApp
 			result.Results[i].Error = apiservererrors.ServerError(err)
 			continue
 		}
-		app, err := a.state.Application(appTag.Id())
+		appLife, err := a.applicationService.GetApplicationLifeByName(ctx, appTag.Id())
 		if err != nil {
 			result.Results[i].Error = apiservererrors.ServerError(err)
 			continue
 		}
-		if app.Life() != state.Alive {
+		if appLife != life.Alive {
 			// We ignore any updates for dying applications.
-			a.logger.Debugf(ctx, "ignoring unit updates for dying application: %v", app.Name())
+			a.logger.Debugf(ctx, "ignoring unit updates for dying application: %v", appTag.Id())
 			continue
 		}
 
@@ -1012,7 +1005,7 @@ func (a *API) UpdateApplicationsUnits(ctx context.Context, args params.UpdateApp
 				continue
 			}
 		}
-		appUnitInfo, err := a.updateUnitsFromCloud(ctx, app, appUpdate.Units)
+		appUnitInfo, err := a.updateUnitsFromCloud(ctx, appTag.Id(), appUpdate.Units)
 		if err != nil {
 			// Mask any not found errors as the worker (caller) treats them specially
 			// and they are not relevant here.
@@ -1047,7 +1040,7 @@ type volumeInfo struct {
 	volumeId   string
 }
 
-func (a *API) updateUnitsFromCloud(ctx context.Context, app Application, unitUpdates []params.ApplicationUnitParams) ([]params.ApplicationUnitInfo, error) {
+func (a *API) updateUnitsFromCloud(ctx context.Context, appName string, unitUpdates []params.ApplicationUnitParams) ([]params.ApplicationUnitInfo, error) {
 	a.logger.Debugf(ctx, "unit updates: %#v", unitUpdates)
 
 	m, err := a.state.Model()
@@ -1062,18 +1055,18 @@ func (a *API) updateUnitsFromCloud(ctx context.Context, app Application, unitUpd
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	units, err := app.AllUnits()
+	units, err := a.applicationService.GetUnitNamesForApplication(ctx, appName)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	unitByTag := make(map[string]Unit)
+	unitByTag := make(map[string]coreunit.Name)
 	for _, v := range units {
-		unitByTag[v.Tag().String()] = v
+		unitByTag[v.String()] = v
 	}
-	unitByProviderID := make(map[string]Unit)
+	unitByProviderID := make(map[string]coreunit.Name)
 	for _, v := range containers {
 		tag := names.NewUnitTag(v.Unit())
-		unit, ok := unitByTag[tag.String()]
+		unit, ok := unitByTag[tag.Id()]
 		if !ok {
 			return nil, errors.NotFoundf("unit %q with provider id %q", tag, v.ProviderId())
 		}
@@ -1181,28 +1174,23 @@ func (a *API) updateUnitsFromCloud(ctx context.Context, app Application, unitUpd
 	}
 
 	unitUpdateParams := make(map[coreunit.Name]applicationservice.UpdateCAASUnitParams, len(unitUpdates))
-	unitUpdate := state.UpdateUnitsOperation{}
 	processedFilesystemIds := set.NewStrings()
 	for _, unitParams := range unitUpdates {
-		unit, ok := unitByProviderID[unitParams.ProviderId]
+		unitName, ok := unitByProviderID[unitParams.ProviderId]
 		if !ok {
 			a.logger.Warningf(ctx, "ignoring non-existent unit with provider id %q", unitParams.ProviderId)
 			continue
 		}
 
 		updateParams := processUnitParams(unitParams)
-		unitName, err := coreunit.NewName(unit.Tag().Id())
-		if err != nil {
-			return nil, errors.Annotatef(err, "parsing unit name %q", unit.Tag().Id())
-		}
 		unitUpdateParams[unitName] = updateParams
-		legacyParams := legacyUnitParams(&updateParams)
-		unitUpdate.Updates = append(unitUpdate.Updates, unit.UpdateOperation(legacyParams))
+
+		unitTag := names.NewUnitTag(unitName.String())
 
 		if len(unitParams.FilesystemInfo) > 0 {
-			err := processFilesystemParams(processedFilesystemIds, unit.Tag().(names.UnitTag), unitParams)
+			err := processFilesystemParams(processedFilesystemIds, unitTag, unitParams)
 			if err != nil {
-				return nil, errors.Annotatef(err, "processing filesystems for unit %q", unit.Tag())
+				return nil, errors.Annotatef(err, "processing filesystems for unit %q", unitTag)
 			}
 		}
 	}
@@ -1219,7 +1207,6 @@ func (a *API) updateUnitsFromCloud(ctx context.Context, app Application, unitUpd
 	// If pods are recreated on the Kubernetes side, new units are created on the Juju
 	// side and so any previously attached filesystems become orphaned and need to
 	// be cleaned up.
-	appName := app.Name()
 	if err := a.cleanupOrphanedFilesystems(ctx, processedFilesystemIds); err != nil {
 		return nil, errors.Annotatef(err, "deleting orphaned filesystems for %v", appName)
 	}
@@ -1547,6 +1534,9 @@ func (a *API) ClearApplicationsResources(ctx context.Context, args params.Entiti
 			result.Results[i].Error = apiservererrors.ServerError(err)
 			continue
 		}
+		// TODO(resources): This legacy app is still being read from the legacy
+		// state. We should remove this once resources are fully migrated to
+		// dqlite.
 		app, err := a.state.Application(appTag.Id())
 		if err != nil {
 			result.Results[i].Error = apiservererrors.ServerError(err)
@@ -1558,41 +1548,6 @@ func (a *API) ClearApplicationsResources(ctx context.Context, args params.Entiti
 		}
 	}
 	return result, nil
-}
-
-// WatchUnits starts a StringsWatcher to watch changes to the
-// lifecycle states of units for the specified applications in
-// this model.
-func (a *API) WatchUnits(ctx context.Context, args params.Entities) (params.StringsWatchResults, error) {
-	results := params.StringsWatchResults{
-		Results: make([]params.StringsWatchResult, len(args.Entities)),
-	}
-	for i, arg := range args.Entities {
-		id, changes, err := a.watchUnits(arg.Tag)
-		if err != nil {
-			results.Results[i].Error = apiservererrors.ServerError(err)
-			continue
-		}
-		results.Results[i].StringsWatcherId = id
-		results.Results[i].Changes = changes
-	}
-	return results, nil
-}
-
-func (a *API) watchUnits(tagString string) (string, []string, error) {
-	tag, err := names.ParseApplicationTag(tagString)
-	if err != nil {
-		return "", nil, errors.Trace(err)
-	}
-	app, err := a.state.Application(tag.Id())
-	if err != nil {
-		return "", nil, errors.Trace(err)
-	}
-	w := app.WatchUnits()
-	if changes, ok := <-w.Changes(); ok {
-		return a.resources.Register(w), changes, nil
-	}
-	return "", nil, watcher.EnsureErr(w)
 }
 
 // DestroyUnits is responsible for scaling down a set of units on the this
@@ -1715,4 +1670,13 @@ func (a *API) ProvisionerConfig(ctx context.Context) (params.CAASApplicationProv
 
 func ptr[T any](v T) *T {
 	return &v
+}
+
+func encodeOSType(t deployment.OSType) (string, error) {
+	switch t {
+	case deployment.Ubuntu:
+		return strings.ToLower(ostype.Ubuntu.String()), nil
+	default:
+		return "", internalerrors.Errorf("unsupported OS type %v", t)
+	}
 }

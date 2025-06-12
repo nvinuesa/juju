@@ -23,6 +23,7 @@ import (
 	status "github.com/juju/juju/core/status"
 	unit "github.com/juju/juju/core/unit"
 	watcher "github.com/juju/juju/core/watcher"
+	application0 "github.com/juju/juju/domain/application"
 	charm "github.com/juju/juju/domain/application/charm"
 	service "github.com/juju/juju/domain/application/service"
 	config "github.com/juju/juju/environs/config"
@@ -212,6 +213,21 @@ func (mr *MockApplicationServiceMockRecorder) DestroyUnit(arg0, arg1 any) *gomoc
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DestroyUnit", reflect.TypeOf((*MockApplicationService)(nil).DestroyUnit), arg0, arg1)
 }
 
+// GetApplicationCharmOrigin mocks base method.
+func (m *MockApplicationService) GetApplicationCharmOrigin(arg0 context.Context, arg1 string) (application0.CharmOrigin, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetApplicationCharmOrigin", arg0, arg1)
+	ret0, _ := ret[0].(application0.CharmOrigin)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetApplicationCharmOrigin indicates an expected call of GetApplicationCharmOrigin.
+func (mr *MockApplicationServiceMockRecorder) GetApplicationCharmOrigin(arg0, arg1 any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetApplicationCharmOrigin", reflect.TypeOf((*MockApplicationService)(nil).GetApplicationCharmOrigin), arg0, arg1)
+}
+
 // GetApplicationConstraints mocks base method.
 func (m *MockApplicationService) GetApplicationConstraints(arg0 context.Context, arg1 application.ID) (constraints.Value, error) {
 	m.ctrl.T.Helper()
@@ -287,6 +303,21 @@ func (mr *MockApplicationServiceMockRecorder) GetApplicationScalingState(arg0, a
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetApplicationScalingState", reflect.TypeOf((*MockApplicationService)(nil).GetApplicationScalingState), arg0, arg1)
 }
 
+// GetApplicationTrustSetting mocks base method.
+func (m *MockApplicationService) GetApplicationTrustSetting(arg0 context.Context, arg1 string) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetApplicationTrustSetting", arg0, arg1)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetApplicationTrustSetting indicates an expected call of GetApplicationTrustSetting.
+func (mr *MockApplicationServiceMockRecorder) GetApplicationTrustSetting(arg0, arg1 any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetApplicationTrustSetting", reflect.TypeOf((*MockApplicationService)(nil).GetApplicationTrustSetting), arg0, arg1)
+}
+
 // GetCharmLocatorByApplicationName mocks base method.
 func (m *MockApplicationService) GetCharmLocatorByApplicationName(arg0 context.Context, arg1 string) (charm.CharmLocator, error) {
 	m.ctrl.T.Helper()
@@ -332,6 +363,21 @@ func (mr *MockApplicationServiceMockRecorder) GetCharmMetadataStorage(arg0, arg1
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCharmMetadataStorage", reflect.TypeOf((*MockApplicationService)(nil).GetCharmMetadataStorage), arg0, arg1)
 }
 
+// GetCharmModifiedVersion mocks base method.
+func (m *MockApplicationService) GetCharmModifiedVersion(arg0 context.Context, arg1 application.ID) (int, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetCharmModifiedVersion", arg0, arg1)
+	ret0, _ := ret[0].(int)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetCharmModifiedVersion indicates an expected call of GetCharmModifiedVersion.
+func (mr *MockApplicationServiceMockRecorder) GetCharmModifiedVersion(arg0, arg1 any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCharmModifiedVersion", reflect.TypeOf((*MockApplicationService)(nil).GetCharmModifiedVersion), arg0, arg1)
+}
+
 // GetDeviceConstraints mocks base method.
 func (m *MockApplicationService) GetDeviceConstraints(arg0 context.Context, arg1 string) (map[string]devices.Constraints, error) {
 	m.ctrl.T.Helper()
@@ -360,6 +406,36 @@ func (m *MockApplicationService) GetUnitLife(arg0 context.Context, arg1 unit.Nam
 func (mr *MockApplicationServiceMockRecorder) GetUnitLife(arg0, arg1 any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUnitLife", reflect.TypeOf((*MockApplicationService)(nil).GetUnitLife), arg0, arg1)
+}
+
+// GetUnitNamesForApplication mocks base method.
+func (m *MockApplicationService) GetUnitNamesForApplication(arg0 context.Context, arg1 string) ([]unit.Name, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetUnitNamesForApplication", arg0, arg1)
+	ret0, _ := ret[0].([]unit.Name)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetUnitNamesForApplication indicates an expected call of GetUnitNamesForApplication.
+func (mr *MockApplicationServiceMockRecorder) GetUnitNamesForApplication(arg0, arg1 any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUnitNamesForApplication", reflect.TypeOf((*MockApplicationService)(nil).GetUnitNamesForApplication), arg0, arg1)
+}
+
+// GetUnitUUID mocks base method.
+func (m *MockApplicationService) GetUnitUUID(arg0 context.Context, arg1 unit.Name) (unit.UUID, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetUnitUUID", arg0, arg1)
+	ret0, _ := ret[0].(unit.UUID)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetUnitUUID indicates an expected call of GetUnitUUID.
+func (mr *MockApplicationServiceMockRecorder) GetUnitUUID(arg0, arg1 any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUnitUUID", reflect.TypeOf((*MockApplicationService)(nil).GetUnitUUID), arg0, arg1)
 }
 
 // IsCharmAvailable mocks base method.
@@ -432,6 +508,21 @@ func (m *MockApplicationService) WatchApplication(arg0 context.Context, arg1 str
 func (mr *MockApplicationServiceMockRecorder) WatchApplication(arg0, arg1 any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WatchApplication", reflect.TypeOf((*MockApplicationService)(nil).WatchApplication), arg0, arg1)
+}
+
+// WatchApplications mocks base method.
+func (m *MockApplicationService) WatchApplications(arg0 context.Context) (watcher.Watcher[[]string], error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "WatchApplications", arg0)
+	ret0, _ := ret[0].(watcher.Watcher[[]string])
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// WatchApplications indicates an expected call of WatchApplications.
+func (mr *MockApplicationServiceMockRecorder) WatchApplications(arg0 any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WatchApplications", reflect.TypeOf((*MockApplicationService)(nil).WatchApplications), arg0)
 }
 
 // MockStatusService is a mock of StatusService interface.
