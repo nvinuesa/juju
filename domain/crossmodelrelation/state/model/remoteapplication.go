@@ -10,6 +10,7 @@ import (
 	"github.com/canonical/sqlair"
 	"gopkg.in/macaroon.v2"
 
+	"github.com/juju/juju/core/database"
 	"github.com/juju/juju/core/network"
 	corerelation "github.com/juju/juju/core/relation"
 	"github.com/juju/juju/domain/application/charm"
@@ -914,4 +915,146 @@ func decodeMacaroon(data []byte) (*macaroon.Macaroon, error) {
 		return nil, errors.Errorf("unmarshalling macaroon: %w", err)
 	}
 	return &m, nil
+}
+
+// InitialWatchStatementForConsumedSecretsChanges returns the initial watch
+// statement and the table name for watching remote consumed secrets.
+func (st *State) InitialWatchStatementForConsumedSecretsChanges(
+	appName string,
+) (string, func(context.Context, database.TxnRunner) ([]string, error)) {
+	queryFunc := func(ctx context.Context, runner database.TxnRunner) ([]string, error) {
+		db, err := st.DB(ctx)
+		if err != nil {
+			return nil, errors.Capture(err)
+		}
+
+		// Get the initial set of revision UUIDs for secrets that have new revisions
+		// available for the specified remote consumer application.
+		// This mimics the behavior from juju 3.6:
+		// SELECT DISTINCT sr.uuid
+		// FROM secret_remote_unit_consumer sruc
+		// LEFT JOIN secret_revision sr ON sr.secret_id = sruc.secret_id
+		// WHERE sruc.unit_name LIKE 'appname/%'
+		// GROUP BY sruc.secret_id
+		// HAVING sruc.current_revision < MAX(sr.revision)
+		
+		type revisionUUID struct {
+			UUID string `db:"uuid"`
+		}
+
+		query := `
+SELECT DISTINCT sr.uuid AS &revisionUUID.uuid
+FROM secret_remote_unit_consumer sruc
+LEFT JOIN secret_revision sr ON sr.secret_id = sruc.secret_id
+WHERE sruc.unit_name LIKE $dbPattern.pattern
+GROUP BY sruc.secret_id
+HAVING sruc.current_revision < MAX(sr.revision)`
+
+		stmt, err := st.Prepare(query, revisionUUID{}, dbPattern{})
+		if err != nil {
+			return nil, errors.Capture(err)
+		}
+
+		var revisionUUIDs []revisionUUID
+		err = db.Txn(ctx, func(ctx context.Context, tx *sqlair.TX) error {
+			err := tx.Query(ctx, stmt, dbPattern{Pattern: appName + "/%"}).GetAll(&revisionUUIDs)
+			if errors.Is(err, sqlair.ErrNoRows) {
+				// No consumed secrets found.
+				return nil
+			}
+			return errors.Capture(err)
+		})
+		if err != nil {
+			return nil, errors.Capture(err)
+		}
+
+		result := make([]string, len(revisionUUIDs))
+		for i, rev := range revisionUUIDs {
+			result[i] = rev.UUID
+		}
+		return result, nil
+	}
+	return "secret_revision", queryFunc
+}
+
+// GetConsumedSecretURIsWithChanges returns the URIs and latest revisions
+// of secrets consumed by the specified remote application that have new
+// revisions available.
+func (st *State) GetConsumedSecretURIsWithChanges(
+	ctx context.Context, appName string, revUUIDs ...string,
+) ([]SecretRevisionChange, error) {
+	db, err := st.DB(ctx)
+	if err != nil {
+		return nil, errors.Capture(err)
+	}
+
+	if len(revUUIDs) == 0 {
+		return nil, nil
+	}
+
+	type revisionInfo struct {
+		SecretID string `db:"secret_id"`
+		Revision int    `db:"revision"`
+	}
+
+	// Get the secret URIs and revisions for the given revision UUIDs
+	// that are consumed by units of the remote application.
+	query := `
+SELECT DISTINCT sr.secret_id AS &revisionInfo.secret_id,
+                sr.revision AS &revisionInfo.revision
+FROM secret_revision sr
+JOIN secret_remote_unit_consumer sruc ON sr.secret_id = sruc.secret_id
+WHERE sr.uuid IN ($dbUUIDs[:])
+  AND sruc.unit_name LIKE $dbPattern.pattern
+  AND sruc.current_revision < sr.revision
+ORDER BY sr.secret_id, sr.revision DESC`
+
+	stmt, err := st.Prepare(query, revisionInfo{}, dbUUIDs{}, dbPattern{})
+	if err != nil {
+		return nil, errors.Capture(err)
+	}
+
+	var results []revisionInfo
+	err = db.Txn(ctx, func(ctx context.Context, tx *sqlair.TX) error {
+		err := tx.Query(ctx, stmt, dbUUIDs{UUIDs: revUUIDs}, dbPattern{Pattern: appName + "/%"}).GetAll(&results)
+		if errors.Is(err, sqlair.ErrNoRows) {
+			return nil
+		}
+		return errors.Capture(err)
+	})
+	if err != nil {
+		return nil, errors.Capture(err)
+	}
+
+	// Convert to SecretRevisionChange, keeping only the highest revision per secret
+	seen := make(map[string]bool)
+	changes := make([]SecretRevisionChange, 0, len(results))
+	for _, r := range results {
+		if seen[r.SecretID] {
+			continue
+		}
+		seen[r.SecretID] = true
+		changes = append(changes, SecretRevisionChange{
+			URI:      r.SecretID,
+			Revision: r.Revision,
+		})
+	}
+
+	return changes, nil
+}
+
+// SecretRevisionChange holds information about a secret revision change.
+type SecretRevisionChange struct {
+	// URI is the secret URI.
+	URI string
+	// Revision is the latest revision number.
+	Revision int
+}
+
+type dbPattern struct {
+	Pattern string `db:"pattern"`
+}
+
+type dbUUIDs struct {
+	UUIDs []string `db:"uuids"`
 }

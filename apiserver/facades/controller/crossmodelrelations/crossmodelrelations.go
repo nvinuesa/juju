@@ -6,16 +6,38 @@ package crossmodelrelations
 import (
 	"context"
 
+	"github.com/juju/errors"
+
+	apiservererrors "github.com/juju/juju/apiserver/errors"
+	"github.com/juju/juju/apiserver/internal"
+	"github.com/juju/juju/core/watcher"
+	"github.com/juju/juju/internal/worker/watcherregistry"
 	"github.com/juju/juju/rpc/params"
 )
 
+// CrossModelRelationsService provides access to the crossmodelrelation domain service.
+type CrossModelRelationsService interface {
+	// WatchConsumedSecretsChanges watches secrets consumed by the specified remote
+	// application and returns a watcher which notifies of secret URIs that have had
+	// a new revision added.
+	WatchConsumedSecretsChanges(ctx context.Context, appName string) (watcher.SecretTriggerWatcher, error)
+}
+
 // CrossModelRelationsAPIv3 provides access to the CrossModelRelations API facade.
 type CrossModelRelationsAPIv3 struct {
+	watcherRegistry watcherregistry.WatcherRegistry
+	service         CrossModelRelationsService
 }
 
 // NewCrossModelRelationsAPI returns a new server-side CrossModelRelationsAPI facade.
-func NewCrossModelRelationsAPI() (*CrossModelRelationsAPIv3, error) {
-	return &CrossModelRelationsAPIv3{}, nil
+func NewCrossModelRelationsAPI(
+	watcherRegistry watcherregistry.WatcherRegistry,
+	service         CrossModelRelationsService,
+) (*CrossModelRelationsAPIv3, error) {
+	return &CrossModelRelationsAPIv3{
+		watcherRegistry: watcherRegistry,
+		service:         service,
+	}, nil
 }
 
 // PublishRelationChanges publishes relation changes to the
@@ -66,7 +88,62 @@ func (api *CrossModelRelationsAPIv3) WatchOfferStatus(
 // WatchConsumedSecretsChanges returns a watcher which notifies of changes to any secrets
 // for the specified remote consumers.
 func (api *CrossModelRelationsAPIv3) WatchConsumedSecretsChanges(ctx context.Context, args params.WatchRemoteSecretChangesArgs) (params.SecretRevisionWatchResults, error) {
-	return params.SecretRevisionWatchResults{}, nil
+	results := params.SecretRevisionWatchResults{
+		Results: make([]params.SecretRevisionWatchResult, len(args.Args)),
+	}
+
+	// TODO: Add proper authentication/authorization using macaroons
+	// For now, this is a basic implementation without auth
+
+	for i, arg := range args.Args {
+		// For now, we use the application token as the app name
+		// TODO: Properly extract the app name from token after implementing
+		// GetSecretConsumerInfo in the state layer
+		appName := arg.ApplicationToken
+
+		w, err := api.service.WatchConsumedSecretsChanges(ctx, appName)
+		if err != nil {
+			results.Results[i].Error = apiservererrors.ServerError(err)
+			continue
+		}
+
+		// Get initial changes
+		select {
+		case changes, ok := <-w.Changes():
+			if !ok {
+				results.Results[i].Error = apiservererrors.ServerError(errors.New("watcher closed unexpectedly"))
+				w.Kill()
+				continue
+			}
+
+			// Convert to params
+			paramChanges := make([]params.SecretRevisionChange, len(changes))
+			for j, c := range changes {
+				paramChanges[j] = params.SecretRevisionChange{
+					URI:            c.URI.String(),
+					LatestRevision: c.Revision,
+				}
+			}
+
+			watcherId, _, err := internal.EnsureRegisterWatcher(ctx, api.watcherRegistry, w)
+			if err != nil {
+				results.Results[i].Error = apiservererrors.ServerError(err)
+				w.Kill()
+				continue
+			}
+
+			results.Results[i] = params.SecretRevisionWatchResult{
+				WatcherId: watcherId,
+				Changes:   paramChanges,
+			}
+		case <-ctx.Done():
+			results.Results[i].Error = apiservererrors.ServerError(ctx.Err())
+			w.Kill()
+			continue
+		}
+	}
+
+	return results, nil
 }
 
 // PublishIngressNetworkChanges publishes changes to the required

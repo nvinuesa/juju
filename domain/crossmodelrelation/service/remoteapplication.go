@@ -16,6 +16,7 @@ import (
 	coreremoteapplication "github.com/juju/juju/core/remoteapplication"
 	corestatus "github.com/juju/juju/core/status"
 	"github.com/juju/juju/core/trace"
+	"github.com/juju/juju/core/watcher/eventsource"
 	"github.com/juju/juju/domain/application"
 	"github.com/juju/juju/domain/application/charm"
 	applicationerrors "github.com/juju/juju/domain/application/errors"
@@ -55,6 +56,16 @@ type ModelRemoteApplicationState interface {
 	// SaveMacaroonForRelation saves the given macaroon for the specified
 	// remote application.
 	SaveMacaroonForRelation(context.Context, string, []byte) error
+
+	// InitialWatchStatementForConsumedSecretsChanges returns the namespace
+	// and initial query for watching consumed secrets changes for a remote
+	// application.
+	InitialWatchStatementForConsumedSecretsChanges(appName string) (string, eventsource.NamespaceQuery)
+
+	// GetConsumedSecretURIsWithChanges returns the URIs and latest revisions
+	// of secrets consumed by the specified remote application that have new
+	// revisions available.
+	GetConsumedSecretURIsWithChanges(ctx context.Context, appName string, revisionUUIDs ...string) ([]SecretRevisionChange, error)
 }
 
 // AddRemoteApplicationOfferer adds a new synthetic application representing

@@ -11,6 +11,7 @@ import (
 	"github.com/juju/juju/core/changestream"
 	"github.com/juju/juju/core/errors"
 	"github.com/juju/juju/core/logger"
+	"github.com/juju/juju/core/secrets"
 	corestatus "github.com/juju/juju/core/status"
 	"github.com/juju/juju/core/trace"
 	"github.com/juju/juju/core/user"
@@ -33,6 +34,12 @@ type StatusHistory interface {
 // relations in the model database.
 type ModelState interface {
 	ModelOfferState
+	ModelRemoteApplicationState
+}
+
+// ModelWatchState describes the methods needed for watching cross model
+// relation changes.
+type ModelWatchState interface {
 	ModelRemoteApplicationState
 }
 
@@ -74,6 +81,16 @@ type WatcherFactory interface {
 		filterOption eventsource.FilterOption,
 		filterOptions ...eventsource.FilterOption,
 	) (watcher.NotifyWatcher, error)
+
+	// NewNamespaceWatcher returns a new watcher that filters changes from the
+	// input base watcher's db/queue. A single filter option is required, though
+	// additional filter options can be provided.
+	NewNamespaceWatcher(
+		ctx context.Context,
+		initialQuery eventsource.NamespaceQuery,
+		summary string,
+		filterOption eventsource.FilterOption, filterOptions ...eventsource.FilterOption,
+	) (watcher.StringsWatcher, error)
 }
 
 // Service provides the API for working with cross model relations.
@@ -148,6 +165,48 @@ func (w *WatchableService) WatchRemoteApplicationOfferers(ctx context.Context) (
 		"watch remote application offerer",
 		eventsource.NamespaceFilter(table, changestream.All),
 	)
+}
+
+// WatchConsumedSecretsChanges watches secrets consumed by the specified remote
+// application and returns a watcher which notifies of secret URIs that have had
+// a new revision added.
+func (w *WatchableService) WatchConsumedSecretsChanges(ctx context.Context, appName string) (watcher.SecretTriggerWatcher, error) {
+	ctx, span := trace.Start(ctx, trace.NameFromFunc())
+	defer span.End()
+
+	table, query := w.modelState.InitialWatchStatementForConsumedSecretsChanges(appName)
+	sw, err := w.watcherFactory.NewNamespaceWatcher(
+		ctx,
+		query,
+		"watch consumed secrets changes for "+appName,
+		eventsource.NamespaceFilter(table, changestream.All),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	processChanges := func(ctx context.Context, revisionUUIDs ...string) ([]watcher.SecretTriggerChange, error) {
+		changes, err := w.modelState.GetConsumedSecretURIsWithChanges(ctx, appName, revisionUUIDs...)
+		if err != nil {
+			return nil, err
+		}
+
+		result := make([]watcher.SecretTriggerChange, 0, len(changes))
+		for _, c := range changes {
+			uri, err := secrets.ParseURI(c.URI)
+			if err != nil {
+				w.logger.Warningf(ctx, "invalid secret URI %q: %v", c.URI, err)
+				continue
+			}
+			result = append(result, watcher.SecretTriggerChange{
+				URI:      uri,
+				Revision: c.Revision,
+			})
+		}
+		return result, nil
+	}
+
+	return newSecretRevisionWatcher(sw, w.logger, processChanges)
 }
 
 func ptr[T any](v T) *T {

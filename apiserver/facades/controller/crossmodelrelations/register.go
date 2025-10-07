@@ -25,5 +25,12 @@ func Register(registry facade.FacadeRegistry) {
 // makeStateCrossModelRelationsAPI creates a new server-side CrossModelRelations API facade
 // backed by global state.
 func makeStateCrossModelRelationsAPI(stdCtx context.Context, ctx facade.ModelContext) (*CrossModelRelationsAPIv3, error) {
-	return NewCrossModelRelationsAPI()
+	// Get the service from the domain services
+	domainServices := ctx.DomainServices()
+	crossModelRelationService := domainServices.CrossModelRelation()
+
+	return NewCrossModelRelationsAPI(
+		ctx.WatcherRegistry(),
+		crossModelRelationService,
+	)
 }
