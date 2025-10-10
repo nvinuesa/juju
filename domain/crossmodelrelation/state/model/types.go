@@ -9,10 +9,12 @@ import (
 	"slices"
 	"time"
 
+	corerelation "github.com/juju/juju/core/relation"
 	"github.com/juju/juju/domain/application/architecture"
 	"github.com/juju/juju/domain/application/charm"
 	"github.com/juju/juju/domain/crossmodelrelation"
 	"github.com/juju/juju/domain/life"
+	internalcharm "github.com/juju/juju/internal/charm"
 )
 
 // nameAndUUID is an agnostic container for the pair of
@@ -263,4 +265,57 @@ type setApplicationEndpointBinding struct {
 type charmRelationName struct {
 	UUID string `db:"uuid"`
 	Name string `db:"name"`
+}
+
+// applicationName is a container for application name.
+type applicationName struct {
+	Name string `db:"name"`
+}
+
+// applicationUUID is a container for application UUID.
+type applicationUUID struct {
+	UUID string `db:"uuid"`
+}
+
+// entityUUID is a container for a generic entity UUID.
+type entityUUID struct {
+	UUID string `db:"uuid"`
+}
+
+// relationUUID is a container for relation UUID.
+type relationUUID struct {
+	UUID string `db:"uuid"`
+}
+
+// relationEndpoint contains relation endpoint information.
+type relationEndpoint struct {
+	ApplicationUUID string `db:"application_uuid"`
+	ApplicationName string `db:"application_name"`
+	EndpointName    string `db:"endpoint_name"`
+	RoleID          int    `db:"role_id"`
+}
+
+// toEndpointIdentifier converts a relationEndpoint to a corerelation.EndpointIdentifier.
+func (e relationEndpoint) toEndpointIdentifier() corerelation.EndpointIdentifier {
+	return corerelation.EndpointIdentifier{
+		ApplicationName: e.ApplicationName,
+		EndpointName:    e.EndpointName,
+		Role:            decodeRelationRole(e.RoleID),
+	}
+}
+
+// decodeRelationRole decodes the role ID to a charm.RelationRole.
+func decodeRelationRole(roleID int) internalcharm.RelationRole {
+	// These values match the database schema:
+	// 0 = provider, 1 = requirer, 2 = peer
+	switch roleID {
+	case 0:
+		return internalcharm.RoleProvider
+	case 1:
+		return internalcharm.RoleRequirer
+	case 2:
+		return internalcharm.RolePeer
+	default:
+		return internalcharm.RoleRequirer // default fallback
+	}
 }

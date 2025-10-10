@@ -194,6 +194,39 @@ func (s *WatchableService) WatchApplicationLifeSuspendedStatus(
 	)
 }
 
+// WatchApplicationRelationKeysSuspended returns a watcher that notifies of
+// changes to the life or suspended status for any relation the application
+// is part of. The watcher notifies with the relation keys.
+func (s *WatchableService) WatchApplicationRelationKeysSuspended(
+	ctx context.Context,
+	applicationUUID application.UUID,
+) (watcher.StringsWatcher, error) {
+	ctx, span := trace.Start(ctx, trace.NameFromFunc())
+	defer span.End()
+
+	if err := applicationUUID.Validate(); err != nil {
+		return nil, errors.Errorf(
+			"%w:%w", relationerrors.ApplicationUUIDNotValid, err)
+	}
+
+	// Check if the application exists before starting the watcher.
+	// This prevents watching an application that has been removed or
+	// never existed.
+	if err := s.st.ApplicationExists(ctx, applicationUUID); err != nil {
+		return nil, errors.Errorf("checking application exists: %w", err)
+	}
+
+	w := newApplicationLifeSuspendedStatusKeysWatcher(s, applicationUUID)
+	return s.watcherFactory.NewNamespaceMapperWatcher(
+		ctx,
+		w.GetInitialQuery(),
+		fmt.Sprintf("life suspended status keys watcher for application %q", applicationUUID),
+		w.GetMapper(),
+		w.GetFirstFilterOption(),
+		w.GetFilterOptions()...,
+	)
+}
+
 // WatchRelatedUnits returns a watcher that notifies of changes to counterpart
 // units in the relation.
 func (s *WatchableService) WatchRelatedUnits(
@@ -668,4 +701,73 @@ func (w *applicationLifeSuspendedStatusWatcher) processChange(
 
 	w.currentRelations[relUUID] = changedRelationData
 	return relUUID, nil
+}
+
+// applicationLifeSuspendedStatusKeysWatcher implements the processChange method
+// unique to watching LifeSuspendedStatus for an application and emitting relation keys.
+type applicationLifeSuspendedStatusKeysWatcher struct {
+	lifeSuspendedStatusWatcher[corerelation.Key]
+}
+
+func newApplicationLifeSuspendedStatusKeysWatcher(s *WatchableService, appUUID application.UUID) namespaceMapper {
+	w := &applicationLifeSuspendedStatusKeysWatcher{}
+	w.lifeSuspendedStatusWatcher = lifeSuspendedStatusWatcher[corerelation.Key]{
+		s:                    s,
+		appUUID:              appUUID,
+		currentRelations:     make(map[corerelation.UUID]relation.RelationLifeSuspendedData),
+		processChange:        w.processChange,
+		processInitialChange: w.processInitialChange,
+	}
+	// returns a set of relation keys if the life or suspended status has changed
+	// for any relation this application is part of.
+	w.lifeNameSpace, w.suspendedNameSpace, w.initialQuery = s.st.InitialWatchLifeSuspendedStatus(appUUID)
+
+	return w
+}
+
+// processInitialChange returns the relation key for the initial set of
+// relations the application is part of.
+func (w *applicationLifeSuspendedStatusKeysWatcher) processInitialChange(
+	ctx context.Context,
+	relUUID corerelation.UUID,
+	data relation.RelationLifeSuspendedData,
+) (corerelation.Key, error) {
+	return corerelation.NewKey(data.EndpointIdentifiers)
+}
+
+// processChange returns a relation key when the relation change should
+// trigger a notify event from the LifeSuspendedStatusWatcher. For
+// applications, this is when either it's life value has changed, or the
+// relation has been suspended. Notify on any new relation for the application
+// and continue watching it.
+func (w *applicationLifeSuspendedStatusKeysWatcher) processChange(
+	ctx context.Context,
+	relUUID corerelation.UUID,
+	relationsIgnored set.Strings,
+) (corerelation.Key, error) {
+	changedRelationData, err := w.s.st.GetMapperDataForWatchLifeSuspendedStatus(ctx, relUUID, w.appUUID)
+	if errors.Is(err, relationerrors.ApplicationNotFoundForRelation) {
+		relationsIgnored.Add(relUUID.String())
+		return nil, continueError
+	} else if errors.Is(err, relationerrors.RelationNotFound) {
+		delete(w.currentRelations, relUUID)
+		return nil, continueError
+	} else if err != nil {
+		return nil, errors.Capture(err)
+	}
+
+	// If this is a known relation where neither the Life nor
+	// Suspended value have changed, do not notify.
+	currentRelationData, ok := w.currentRelations[relUUID]
+	if ok && changedRelationData.Life == currentRelationData.Life &&
+		changedRelationData.Suspended == currentRelationData.Suspended {
+		return nil, continueError
+	}
+
+	w.currentRelations[relUUID] = changedRelationData
+	key, err := corerelation.NewKey(changedRelationData.EndpointIdentifiers)
+	if err != nil {
+		return nil, errors.Capture(err)
+	}
+	return key, nil
 }

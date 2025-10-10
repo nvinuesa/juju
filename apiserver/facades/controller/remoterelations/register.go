@@ -33,6 +33,8 @@ func makeAPI(_ context.Context, ctx facade.ModelContext) (*API, error) {
 	return NewRemoteRelationsAPI(
 		externalControllerService,
 		domainServices.Secret(),
+		domainServices.CrossModelRelation(),
+		ctx.WatcherRegistry(),
 		common.NewControllerConfigAPI(
 			controllerConfigService,
 			controllerNodeService,

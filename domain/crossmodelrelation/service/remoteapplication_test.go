@@ -582,3 +582,44 @@ func (s *remoteApplicationServiceSuite) TestGetApplicationNameAndUUIDByOfferUUID
 	_, _, err := service.GetApplicationNameAndUUIDByOfferUUID(c.Context(), offerUUID)
 	c.Assert(err, tc.ErrorMatches, "boom")
 }
+
+func (s *remoteApplicationServiceSuite) TestGetRemoteApplicationUUIDByName(c *tc.C) {
+	defer s.setupMocks(c).Finish()
+
+	appName := "test-app"
+	appUUID := tc.Must(c, uuid.NewUUID).String()
+
+	s.modelState.EXPECT().GetRemoteApplicationUUIDByName(gomock.Any(), appName).Return(appUUID, nil)
+
+	service := s.service(c)
+
+	got, err := service.GetRemoteApplicationUUIDByName(c.Context(), appName)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(string(got), tc.Equals, appUUID)
+}
+
+func (s *remoteApplicationServiceSuite) TestGetRemoteApplicationUUIDByNameNotFound(c *tc.C) {
+	defer s.setupMocks(c).Finish()
+
+	appName := "non-existent"
+
+	s.modelState.EXPECT().GetRemoteApplicationUUIDByName(gomock.Any(), appName).Return("", applicationerrors.ApplicationNotFound)
+
+	service := s.service(c)
+
+	_, err := service.GetRemoteApplicationUUIDByName(c.Context(), appName)
+	c.Assert(err, tc.ErrorIs, applicationerrors.ApplicationNotFound)
+}
+
+func (s *remoteApplicationServiceSuite) TestGetRemoteApplicationUUIDByNameStateError(c *tc.C) {
+	defer s.setupMocks(c).Finish()
+
+	appName := "foo"
+
+	s.modelState.EXPECT().GetRemoteApplicationUUIDByName(gomock.Any(), appName).Return("", internalerrors.Errorf("boom"))
+
+	service := s.service(c)
+
+	_, err := service.GetRemoteApplicationUUIDByName(c.Context(), appName)
+	c.Assert(err, tc.ErrorMatches, "boom")
+}

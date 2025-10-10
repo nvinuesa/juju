@@ -62,6 +62,10 @@ type ModelRemoteApplicationState interface {
 	// Returns [applicationerrors.ApplicationNotFound] if the offer or associated
 	// application is not found.
 	GetApplicationNameAndUUIDByOfferUUID(ctx context.Context, offerUUID string) (string, coreapplication.UUID, error)
+
+	// GetRemoteApplicationUUIDByName returns the application UUID for a remote application by name.
+	// Returns [applicationerrors.ApplicationNotFound] if the application is not found.
+	GetRemoteApplicationUUIDByName(ctx context.Context, name string) (string, error)
 }
 
 // AddRemoteApplicationOfferer adds a new synthetic application representing
@@ -287,6 +291,19 @@ func (s *Service) GetApplicationNameAndUUIDByOfferUUID(ctx context.Context, offe
 		return "", "", internalerrors.Capture(err)
 	}
 	return appName, appUUID, nil
+}
+
+// GetRemoteApplicationUUIDByName returns the application UUID for a remote
+// application by name.
+func (s *Service) GetRemoteApplicationUUIDByName(ctx context.Context, name string) (coreapplication.UUID, error) {
+	ctx, span := trace.Start(ctx, trace.NameFromFunc())
+	defer span.End()
+
+	uuidStr, err := s.modelState.GetRemoteApplicationUUIDByName(ctx, name)
+	if err != nil {
+		return "", internalerrors.Capture(err)
+	}
+	return coreapplication.UUID(uuidStr), nil
 }
 
 func constructSyntheticCharm(applicationName string, endpoints []charm.Relation) (charm.Charm, error) {

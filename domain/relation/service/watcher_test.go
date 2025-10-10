@@ -256,6 +256,15 @@ func (s *watcherSuite) TestWatchApplicationLifeSuspendedStatusApplicationNotFoun
 	c.Assert(err, tc.ErrorIs, applicationerrors.ApplicationNotFound)
 }
 
+func (s *watcherSuite) TestWatchApplicationRelationKeysSuspendedApplicationNotFound(c *tc.C) {
+	defer s.setupMocks(c).Finish()
+
+	s.state.EXPECT().ApplicationExists(gomock.Any(), gomock.Any()).Return(applicationerrors.ApplicationNotFound)
+
+	_, err := s.service.WatchApplicationRelationKeysSuspended(c.Context(), applicationtesting.GenApplicationUUID(c))
+	c.Assert(err, tc.ErrorIs, applicationerrors.ApplicationNotFound)
+}
+
 func (s *watcherSuite) setupMocks(c *tc.C) *gomock.Controller {
 	ctrl := gomock.NewController(c)
 

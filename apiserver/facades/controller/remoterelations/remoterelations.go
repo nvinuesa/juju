@@ -11,6 +11,7 @@ import (
 
 	apiservererrors "github.com/juju/juju/apiserver/errors"
 	"github.com/juju/juju/apiserver/facade"
+	"github.com/juju/juju/apiserver/internal"
 	"github.com/juju/juju/core/crossmodel"
 	coresecrets "github.com/juju/juju/core/secrets"
 	"github.com/juju/juju/rpc/params"
@@ -27,14 +28,20 @@ type ExternalControllerService interface {
 // API provides access to the remote relations API facade.
 type API struct {
 	ControllerConfigAPI
-	ecService     ExternalControllerService
-	secretService SecretService
+	ecService                 ExternalControllerService
+	secretService             SecretService
+	crossModelRelationService CrossModelRelationService
+	relationService           RelationService
+	watcherRegistry           facade.WatcherRegistry
 }
 
 // NewRemoteRelationsAPI returns a new server-side API facade.
 func NewRemoteRelationsAPI(
 	ecService ExternalControllerService,
 	secretService SecretService,
+	crossModelRelationService CrossModelRelationService,
+	relationService RelationService,
+	watcherRegistry facade.WatcherRegistry,
 	controllerCfgAPI ControllerConfigAPI,
 	authorizer facade.Authorizer,
 ) (*API, error) {
@@ -42,9 +49,12 @@ func NewRemoteRelationsAPI(
 		return nil, apiservererrors.ErrPerm
 	}
 	return &API{
-		ecService:           ecService,
-		secretService:       secretService,
-		ControllerConfigAPI: controllerCfgAPI,
+		ecService:                 ecService,
+		secretService:             secretService,
+		crossModelRelationService: crossModelRelationService,
+		relationService:           relationService,
+		watcherRegistry:           watcherRegistry,
+		ControllerConfigAPI:       controllerCfgAPI,
 	}, nil
 }
 
@@ -100,7 +110,39 @@ func (api *API) WatchLocalRelationChanges(ctx context.Context, args params.Entit
 // and initial values, or an error if the services' relations could not be
 // watched.
 func (api *API) WatchRemoteApplicationRelations(ctx context.Context, args params.Entities) (params.StringsWatchResults, error) {
-	return params.StringsWatchResults{}, nil
+	results := params.StringsWatchResults{
+		Results: make([]params.StringsWatchResult, len(args.Entities)),
+	}
+
+	for i, entity := range args.Entities {
+		applicationTag, err := names.ParseApplicationTag(entity.Tag)
+		if err != nil {
+			results.Results[i].Error = apiservererrors.ServerError(err)
+			continue
+		}
+		appName := applicationTag.Id()
+
+		// Watch for life and suspended status changes for all relations
+		// involving this application. The crossmodelrelation service returns
+		// relation keys directly.
+		w, err := api.relationService.WatchApplicationRelationKeysSuspended(ctx, appName)
+		if err != nil {
+			results.Results[i].Error = apiservererrors.ServerError(err)
+			continue
+		}
+
+		// Register the watcher and get the initial changes.
+		watcherId, changes, err := internal.EnsureRegisterWatcher(ctx, api.watcherRegistry, w)
+		if err != nil {
+			results.Results[i].Error = apiservererrors.ServerError(err)
+			continue
+		}
+
+		results.Results[i].StringsWatcherId = watcherId
+		results.Results[i].Changes = changes
+	}
+
+	return results, nil
 }
 
 // WatchRemoteRelations starts a strings watcher that notifies of the addition,

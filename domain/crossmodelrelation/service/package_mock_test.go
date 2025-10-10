@@ -531,6 +531,45 @@ func (c *MockModelStateGetRemoteApplicationOfferersCall) DoAndReturn(f func(cont
 	return c
 }
 
+// GetRemoteApplicationUUIDByName mocks base method.
+func (m *MockModelState) GetRemoteApplicationUUIDByName(arg0 context.Context, arg1 string) (string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetRemoteApplicationUUIDByName", arg0, arg1)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetRemoteApplicationUUIDByName indicates an expected call of GetRemoteApplicationUUIDByName.
+func (mr *MockModelStateMockRecorder) GetRemoteApplicationUUIDByName(arg0, arg1 any) *MockModelStateGetRemoteApplicationUUIDByNameCall {
+	mr.mock.ctrl.T.Helper()
+	call := mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetRemoteApplicationUUIDByName", reflect.TypeOf((*MockModelState)(nil).GetRemoteApplicationUUIDByName), arg0, arg1)
+	return &MockModelStateGetRemoteApplicationUUIDByNameCall{Call: call}
+}
+
+// MockModelStateGetRemoteApplicationUUIDByNameCall wrap *gomock.Call
+type MockModelStateGetRemoteApplicationUUIDByNameCall struct {
+	*gomock.Call
+}
+
+// Return rewrite *gomock.Call.Return
+func (c *MockModelStateGetRemoteApplicationUUIDByNameCall) Return(arg0 string, arg1 error) *MockModelStateGetRemoteApplicationUUIDByNameCall {
+	c.Call = c.Call.Return(arg0, arg1)
+	return c
+}
+
+// Do rewrite *gomock.Call.Do
+func (c *MockModelStateGetRemoteApplicationUUIDByNameCall) Do(f func(context.Context, string) (string, error)) *MockModelStateGetRemoteApplicationUUIDByNameCall {
+	c.Call = c.Call.Do(f)
+	return c
+}
+
+// DoAndReturn rewrite *gomock.Call.DoAndReturn
+func (c *MockModelStateGetRemoteApplicationUUIDByNameCall) DoAndReturn(f func(context.Context, string) (string, error)) *MockModelStateGetRemoteApplicationUUIDByNameCall {
+	c.Call = c.Call.DoAndReturn(f)
+	return c
+}
+
 // NamespaceRemoteApplicationOfferers mocks base method.
 func (m *MockModelState) NamespaceRemoteApplicationOfferers() string {
 	m.ctrl.T.Helper()

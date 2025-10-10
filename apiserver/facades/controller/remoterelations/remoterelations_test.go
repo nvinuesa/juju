@@ -28,11 +28,12 @@ func TestRemoteRelationsSuite(t *testing.T) {
 type remoteRelationsSuite struct {
 	coretesting.BaseSuite
 
-	authorizer    *apiservertesting.FakeAuthorizer
-	ecService     *mocks.MockExternalControllerService
-	secretService *mocks.MockSecretService
-	cc            *mocks.MockControllerConfigAPI
-	api           *remoterelations.API
+	authorizer            *apiservertesting.FakeAuthorizer
+	ecService             *mocks.MockExternalControllerService
+	secretService         *mocks.MockSecretService
+	crossModelRelationSvc *mocks.MockCrossModelRelationService
+	cc                    *mocks.MockControllerConfigAPI
+	api                   *remoterelations.API
 }
 
 func (s *remoteRelationsSuite) SetUpTest(c *tc.C) {
@@ -50,9 +51,12 @@ func (s *remoteRelationsSuite) setup(c *tc.C) *gomock.Controller {
 	s.cc = mocks.NewMockControllerConfigAPI(ctrl)
 	s.ecService = mocks.NewMockExternalControllerService(ctrl)
 	s.secretService = mocks.NewMockSecretService(ctrl)
+	s.crossModelRelationSvc = mocks.NewMockCrossModelRelationService(ctrl)
 	api, err := remoterelations.NewRemoteRelationsAPI(
 		s.ecService,
 		s.secretService,
+		s.crossModelRelationSvc,
+		s.watcherRegistry,
 		s.cc,
 		s.authorizer,
 	)
@@ -141,4 +145,130 @@ func (s *remoteRelationsSuite) TestConsumeRemoteSecretChanges(c *tc.C) {
 	result, err := s.api.ConsumeRemoteSecretChanges(c.Context(), changes)
 	c.Assert(err, tc.ErrorIsNil)
 	c.Assert(result.OneError(), tc.IsNil)
+}
+
+func (s *remoteRelationsSuite) TestWatchRemoteApplicationRelations(c *tc.C) {
+	defer s.setup(c).Finish()
+
+	// This test just ensures that the method can be called without errors.
+	// A full test would require more complex watcher setup.
+	appTag := names.NewApplicationTag("mysql")
+	args := params.Entities{
+		Entities: []params.Entity{
+			{Tag: appTag.String()},
+		},
+	}
+
+	// The test should handle the case where the application doesn't exist
+	s.crossModelRelationSvc.EXPECT().WatchRemoteApplicationRelations(gomock.Any(), "mysql").Return(nil, errors.New("application not found"))
+
+	result, err := s.api.WatchRemoteApplicationRelations(c.Context(), args)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Assert(result.Results, tc.HasLen, 1)
+	c.Assert(result.Results[0].Error, tc.Not(tc.IsNil))
+}
+
+func (s *remoteRelationsSuite) TestWatchRemoteApplicationRelationsSuccess(c *tc.C) {
+	defer s.setup(c).Finish()
+
+	appTag := names.NewApplicationTag("mysql")
+	args := params.Entities{
+		Entities: []params.Entity{
+			{Tag: appTag.String()},
+		},
+	}
+
+	mockWatcher := &mockStringsWatcher{changes: make(chan []string)}
+
+	s.crossModelRelationSvc.EXPECT().WatchRemoteApplicationRelations(gomock.Any(), "mysql").Return(mockWatcher, nil)
+	s.watcherRegistry.EXPECT().Register(gomock.Any()).Return("watcher-1", nil)
+
+	result, err := s.api.WatchRemoteApplicationRelations(c.Context(), args)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Assert(result.Results, tc.HasLen, 1)
+	c.Assert(result.Results[0].Error, tc.IsNil)
+	c.Assert(result.Results[0].StringsWatcherId, tc.Equals, "watcher-1")
+}
+
+func (s *remoteRelationsSuite) TestWatchRemoteApplicationRelationsMultipleEntities(c *tc.C) {
+	defer s.setup(c).Finish()
+
+	args := params.Entities{
+		Entities: []params.Entity{
+			{Tag: names.NewApplicationTag("mysql").String()},
+			{Tag: names.NewApplicationTag("postgres").String()},
+		},
+	}
+
+	mockWatcher1 := &mockStringsWatcher{changes: make(chan []string)}
+	mockWatcher2 := &mockStringsWatcher{changes: make(chan []string)}
+
+	s.crossModelRelationSvc.EXPECT().WatchRemoteApplicationRelations(gomock.Any(), "mysql").Return(mockWatcher1, nil)
+	s.watcherRegistry.EXPECT().Register(gomock.Any()).Return("watcher-1", nil)
+
+	s.crossModelRelationSvc.EXPECT().WatchRemoteApplicationRelations(gomock.Any(), "postgres").Return(mockWatcher2, nil)
+	s.watcherRegistry.EXPECT().Register(gomock.Any()).Return("watcher-2", nil)
+
+	result, err := s.api.WatchRemoteApplicationRelations(c.Context(), args)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Assert(result.Results, tc.HasLen, 2)
+	c.Assert(result.Results[0].Error, tc.IsNil)
+	c.Assert(result.Results[0].StringsWatcherId, tc.Equals, "watcher-1")
+	c.Assert(result.Results[1].Error, tc.IsNil)
+	c.Assert(result.Results[1].StringsWatcherId, tc.Equals, "watcher-2")
+}
+
+func (s *remoteRelationsSuite) TestWatchRemoteApplicationRelationsInvalidTag(c *tc.C) {
+	defer s.setup(c).Finish()
+
+	args := params.Entities{
+		Entities: []params.Entity{
+			{Tag: "invalid-tag"},
+		},
+	}
+
+	result, err := s.api.WatchRemoteApplicationRelations(c.Context(), args)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Assert(result.Results, tc.HasLen, 1)
+	c.Assert(result.Results[0].Error, tc.Not(tc.IsNil))
+	c.Assert(result.Results[0].Error.Message, tc.Matches, `.*invalid.*tag.*`)
+}
+
+func (s *remoteRelationsSuite) TestWatchRemoteApplicationRelationsWatcherRegistrationError(c *tc.C) {
+	defer s.setup(c).Finish()
+
+	appTag := names.NewApplicationTag("mysql")
+	args := params.Entities{
+		Entities: []params.Entity{
+			{Tag: appTag.String()},
+		},
+	}
+
+	mockWatcher := &mockStringsWatcher{changes: make(chan []string)}
+
+	s.crossModelRelationSvc.EXPECT().WatchRemoteApplicationRelations(gomock.Any(), "mysql").Return(mockWatcher, nil)
+	s.watcherRegistry.EXPECT().Register(gomock.Any()).Return("", errors.New("registration failed"))
+
+	result, err := s.api.WatchRemoteApplicationRelations(c.Context(), args)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Assert(result.Results, tc.HasLen, 1)
+	c.Assert(result.Results[0].Error, tc.Not(tc.IsNil))
+	c.Assert(result.Results[0].Error.Message, tc.Matches, `.*registration failed.*`)
+}
+
+// mockStringsWatcher is a simple mock implementation of watcher.StringsWatcher
+type mockStringsWatcher struct {
+	changes chan []string
+}
+
+func (m *mockStringsWatcher) Changes() <-chan []string {
+	return m.changes
+}
+
+func (m *mockStringsWatcher) Kill() {
+	close(m.changes)
+}
+
+func (m *mockStringsWatcher) Wait() error {
+	return nil
 }

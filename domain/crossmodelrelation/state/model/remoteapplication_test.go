@@ -786,6 +786,51 @@ func (s *modelRemoteApplicationSuite) TestGetApplicationUUIDByOfferUUIDNotExists
 	c.Assert(err, tc.ErrorMatches, "application not found")
 }
 
+func (s *modelRemoteApplicationSuite) TestGetRemoteApplicationUUIDByName(c *tc.C) {
+	applicationUUID := tc.Must(c, internaluuid.NewUUID).String()
+	charmUUID := tc.Must(c, internaluuid.NewUUID).String()
+
+	charm := charm.Charm{
+		ReferenceName: "bar",
+		Source:        charm.CMRSource,
+		Metadata: charm.Metadata{
+			Name:        "test-app",
+			Description: "remote offerer application",
+			Provides: map[string]charm.Relation{
+				"db": {
+					Name:      "db",
+					Role:      charm.RoleProvider,
+					Interface: "db",
+					Limit:     1,
+					Scope:     charm.ScopeGlobal,
+				},
+			},
+		},
+	}
+
+	err := s.state.AddRemoteApplicationOfferer(c.Context(), "test-app", crossmodelrelation.AddRemoteApplicationOffererArgs{
+		AddRemoteApplicationArgs: crossmodelrelation.AddRemoteApplicationArgs{
+			ApplicationUUID:       applicationUUID,
+			CharmUUID:             charmUUID,
+			RemoteApplicationUUID: tc.Must(c, internaluuid.NewUUID).String(),
+			OfferUUID:             tc.Must(c, internaluuid.NewUUID).String(),
+			Charm:                 charm,
+		},
+		EncodedMacaroon: []byte("encoded macaroon"),
+	})
+	c.Assert(err, tc.ErrorIsNil)
+
+	// Test successful retrieval
+	uuid, err := s.state.GetRemoteApplicationUUIDByName(c.Context(), "test-app")
+	c.Assert(err, tc.ErrorIsNil)
+	c.Assert(uuid, tc.Equals, applicationUUID)
+}
+
+func (s *modelRemoteApplicationSuite) TestGetRemoteApplicationUUIDByNameNotFound(c *tc.C) {
+	_, err := s.state.GetRemoteApplicationUUIDByName(c.Context(), "non-existent")
+	c.Assert(err, tc.ErrorMatches, `.*not found.*`)
+}
+
 func (s *modelRemoteApplicationSuite) assertApplicationRemoteConsumer(c *tc.C, applicationUUID string) {
 	var count int
 	err := s.TxnRunner().StdTxn(c.Context(), func(ctx context.Context, tx *sql.Tx) error {

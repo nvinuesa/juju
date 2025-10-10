@@ -947,3 +947,37 @@ func decodeMacaroon(data []byte) (*macaroon.Macaroon, error) {
 	}
 	return &m, nil
 }
+
+// GetRemoteApplicationUUIDByName returns the UUID of the remote application
+// offerer with the given name.
+func (st *State) GetRemoteApplicationUUIDByName(ctx context.Context, name string) (string, error) {
+	db, err := st.DB(ctx)
+	if err != nil {
+		return "", errors.Capture(err)
+	}
+
+	stmt, err := st.Prepare(`
+SELECT app.uuid AS &applicationUUID.uuid
+FROM   application app
+WHERE  app.name = $applicationName.name
+`, applicationName{}, applicationUUID{})
+	if err != nil {
+		return "", errors.Capture(err)
+	}
+
+	appName := applicationName{Name: name}
+	var result applicationUUID
+
+	err = db.Txn(ctx, func(ctx context.Context, tx *sqlair.TX) error {
+		err := tx.Query(ctx, stmt, appName).Get(&result)
+		if errors.Is(err, sqlair.ErrNoRows) {
+			return errors.Errorf("remote application %q not found%w", name, applicationerrors.ApplicationNotFound)
+		}
+		return errors.Capture(err)
+	})
+	if err != nil {
+		return "", errors.Capture(err)
+	}
+
+	return result.UUID, nil
+}
