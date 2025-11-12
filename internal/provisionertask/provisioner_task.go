@@ -172,6 +172,8 @@ func NewProvisionerTask(cfg TaskConfig) (ProvisionerTask, error) {
 		wp:                           workerpool.NewWorkerPool(cfg.Logger, cfg.NumProvisionWorkers),
 		wpSizeChan:                   make(chan int, 1),
 		eventProcessedCb:             cfg.EventProcessedCb,
+		fsmStates:                    make(map[string]*MachineCtx),
+		sched:                        newScheduler(cfg.Logger),
 	}
 	err := catacomb.Invoke(catacomb.Plan{
 		Name: "provisioner-task",
@@ -228,6 +230,10 @@ type provisionerTask struct {
 	// will be invoked when the task main loop successfully processes an event.
 	// The event type is provided as the first arg to the callback.
 	eventProcessedCb func(string)
+
+	// FSM scaffolding (Milestone 0, Step 2) - not yet integrated into operational flow
+	fsmStates map[string]*MachineCtx
+	sched     *scheduler
 }
 
 // Kill implements worker.Worker.Kill.
@@ -271,6 +277,11 @@ func (task *provisionerTask) loop() (taskErr error) {
 
 			if err := task.processMachines(ctx, ids); err != nil {
 				return errors.Annotate(err, "processing updated machines")
+			}
+
+			// FSM scaffolding: record state transitions (no-op for behaviour)
+			for _, id := range ids {
+				task.transitionTo(ctx, id)
 			}
 
 			task.notifyEventProcessedCallback(eventTypeProcessedMachines)
@@ -405,6 +416,44 @@ func (task *provisionerTask) processMachines(ctx context.Context, ids []string) 
 
 	// Queue start requests for any other pending instances.
 	return errors.Trace(task.queueStartMachines(ctx, pending))
+}
+
+// transitionTo records the FSM state for a machine based on its classification.
+// This is part of the FSM scaffolding (Milestone 0, Step 2) and does not affect
+// the existing provisioning flow. It only classifies and records state.
+func (task *provisionerTask) transitionTo(ctx context.Context, machineID string) {
+	task.machinesMutex.RLock()
+	m, found := task.machines[machineID]
+	task.machinesMutex.RUnlock()
+
+	var state MachineState
+	if !found {
+		state = StateUnknown
+	} else {
+		cls, err := classifyMachine(ctx, task.logger, m)
+		if err != nil {
+			task.logger.Tracef(ctx, "fsm classify error for %s: %v", machineID, err)
+			state = StateUnknown
+		} else {
+			switch cls {
+			case Pending:
+				state = StatePending
+			case Dead:
+				state = StateDeadPlaceholder
+			default:
+				state = StateUnknown
+			}
+		}
+	}
+
+	mc := task.fsmStates[machineID]
+	if mc == nil {
+		mc = &MachineCtx{ID: machineID}
+		task.fsmStates[machineID] = mc
+	}
+	mc.State = state
+	task.logger.Tracef(ctx, "fsm state update: machine %s -> %d", machineID, state)
+	// NO scheduling yet; sched.markEligible intentionally omitted
 }
 
 func instanceIds(instances []instances.Instance) []string {
