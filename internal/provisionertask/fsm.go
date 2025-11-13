@@ -4,6 +4,8 @@
 package provisionertask
 
 import (
+	"fmt"
+
 	"github.com/juju/errors"
 )
 
@@ -11,20 +13,26 @@ import (
 type MachineState string
 
 const (
-	// StateUnknown represents an unknown or unclassified machine state.
-	StateUnknown MachineState = "unknown"
-	
 	// StatePending represents a machine that needs to be provisioned.
 	StatePending MachineState = "pending"
 	
-	// StateStartingPlaceholder is reserved for future use when machines are being started.
-	StateStartingPlaceholder MachineState = "starting"
+	// StateStarting represents a machine that is being started.
+	StateStarting MachineState = "starting"
 	
-	// StateRunningPlaceholder is reserved for future use when machines are running.
-	StateRunningPlaceholder MachineState = "running"
+	// StateCancellingStart represents a machine whose start is being cancelled.
+	StateCancellingStart MachineState = "cancelling-start"
 	
-	// StateDeadPlaceholder represents a machine that is dead and needs cleanup.
-	StateDeadPlaceholder MachineState = "dead"
+	// StateAllocated represents a machine that has been allocated (started successfully).
+	StateAllocated MachineState = "allocated"
+	
+	// StateRegistering represents a machine that is being registered.
+	StateRegistering MachineState = "registering"
+	
+	// StateRunning represents a machine that is running.
+	StateRunning MachineState = "running"
+	
+	// StateStopping represents a machine that is being stopped.
+	StateStopping MachineState = "stopping"
 	
 	// StateDeleted represents a machine that has been deleted.
 	StateDeleted MachineState = "deleted"
@@ -34,13 +42,68 @@ const (
 )
 
 // TransitionTo transitions from the current state to a new state.
-// This method validates state transitions and returns the new state or an error.
-// For now, it's a simple implementation that allows any transition.
+// This method validates state transitions according to the FSM rules.
+// Valid transitions are defined by the state diagram.
 func (s MachineState) TransitionTo(newState MachineState) (MachineState, error) {
-	// TODO: Add state transition validation logic in future milestones
-	// For scaffolding phase, allow any transition
 	if newState == "" {
 		return s, errors.New("invalid empty state transition")
 	}
-	return newState, nil
+
+	// Define valid state transitions based on the FSM diagram
+	validTransitions := map[MachineState][]MachineState{
+		StatePending: {
+			StateStarting,  // MachineAdded / ScheduleStart
+			StateDeleted,   // Dead|Remove
+		},
+		StateStarting: {
+			StateAllocated,       // StartOk
+			StatePending,         // StartErr (transient) / Backoff
+			StateFailed,          // StartErr (permanent)
+			StateCancellingStart, // Dead|Remove
+		},
+		StateCancellingStart: {
+			StateStopping, // StartOk / ScheduleStop
+			StateDeleted,  // StartErr (any)
+		},
+		StateAllocated: {
+			StateRegistering, // Auto / ScheduleRegister
+			StateStopping,    // Dead|Remove
+		},
+		StateRegistering: {
+			StateRunning,      // RegisterOk
+			StateRegistering,  // RegisterErr (transient) / Backoff
+			StateFailed,       // RegisterErr (permanent)
+			StateStopping,     // Dead|Remove
+		},
+		StateRunning: {
+			StateStopping, // Dead|Remove
+		},
+		StateStopping: {
+			StateDeleted,  // StopOk
+			StateStopping, // StopErr (transient) / Backoff
+			StateFailed,   // StopErr (permanent)
+		},
+		StateDeleted: {}, // Terminal state
+		StateFailed:  {}, // Terminal state
+	}
+
+	// Check if the transition is valid
+	allowedStates, exists := validTransitions[s]
+	if !exists {
+		return s, fmt.Errorf("unknown current state: %s", s)
+	}
+
+	// Allow staying in the same state (no-op transition)
+	if s == newState {
+		return s, nil
+	}
+
+	// Check if the new state is in the list of allowed transitions
+	for _, allowed := range allowedStates {
+		if newState == allowed {
+			return newState, nil
+		}
+	}
+
+	return s, fmt.Errorf("invalid transition from %s to %s", s, newState)
 }

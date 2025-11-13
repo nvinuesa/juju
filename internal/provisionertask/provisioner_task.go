@@ -422,37 +422,17 @@ func (task *provisionerTask) processMachines(ctx context.Context, ids []string) 
 // This is part of the FSM scaffolding (Milestone 0, Step 2) and does not affect
 // the existing provisioning flow. It only classifies and records state.
 func (task *provisionerTask) transitionTo(ctx context.Context, machineID string) {
-	task.machinesMutex.RLock()
-	m, found := task.machines[machineID]
-	task.machinesMutex.RUnlock()
+	// Determine the desired state based on machine classification
+	newState := task.classifyMachineState(ctx, machineID)
 
-	var newState MachineState
-	if !found {
-		newState = StateUnknown
-	} else {
-		cls, err := classifyMachine(ctx, task.logger, m)
-		if err != nil {
-			task.logger.Tracef(ctx, "fsm classify error for %s: %v", machineID, err)
-			newState = StateUnknown
-		} else {
-			switch cls {
-			case Pending:
-				newState = StatePending
-			case Dead:
-				newState = StateDeadPlaceholder
-			default:
-				newState = StateUnknown
-			}
-		}
-	}
-
-	// Get current state from map, default to StateUnknown if not present
+	// Get current state from map, default to StatePending if not present
+	// (machines start in Pending state when first seen)
 	currentState, exists := task.fsmStates[machineID]
 	if !exists {
-		currentState = StateUnknown
+		currentState = StatePending
 	}
 
-	// Use FSM's TransitionTo method for state transitions
+	// Use FSM's TransitionTo method for state transitions validation
 	transitionedState, err := currentState.TransitionTo(newState)
 	if err != nil {
 		task.logger.Tracef(ctx, "fsm transition error for %s: %v", machineID, err)
@@ -460,8 +440,39 @@ func (task *provisionerTask) transitionTo(ctx context.Context, machineID string)
 	}
 
 	task.fsmStates[machineID] = transitionedState
-	task.logger.Tracef(ctx, "fsm state update: machine %s -> %s", machineID, transitionedState)
+	task.logger.Tracef(ctx, "fsm state update: machine %s: %s -> %s", machineID, currentState, transitionedState)
 	// NO scheduling yet; sched.markEligible intentionally omitted
+}
+
+// classifyMachineState determines the desired FSM state based on machine classification.
+// This maps the existing classification system to FSM states.
+func (task *provisionerTask) classifyMachineState(ctx context.Context, machineID string) MachineState {
+	task.machinesMutex.RLock()
+	m, found := task.machines[machineID]
+	task.machinesMutex.RUnlock()
+
+	if !found {
+		// Machine not found in our map, it may have been deleted
+		return StateDeleted
+	}
+
+	cls, err := classifyMachine(ctx, task.logger, m)
+	if err != nil {
+		task.logger.Tracef(ctx, "fsm classify error for %s: %v", machineID, err)
+		// On error, keep machine in Pending state to retry
+		return StatePending
+	}
+
+	switch cls {
+	case Pending:
+		return StatePending
+	case Dead:
+		// Dead machines should transition to Stopping, then Deleted
+		return StateStopping
+	default:
+		// None classification means machine is already running or has an instance
+		return StateRunning
+	}
 }
 
 func instanceIds(instances []instances.Instance) []string {
