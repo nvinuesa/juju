@@ -3,57 +3,44 @@
 
 package provisionertask
 
+import (
+	"github.com/juju/errors"
+)
+
 // MachineState represents the state of a machine in the FSM.
-type MachineState int
+type MachineState string
 
 const (
 	// StateUnknown represents an unknown or unclassified machine state.
-	StateUnknown MachineState = iota
+	StateUnknown MachineState = "unknown"
 	
 	// StatePending represents a machine that needs to be provisioned.
-	StatePending
+	StatePending MachineState = "pending"
 	
 	// StateStartingPlaceholder is reserved for future use when machines are being started.
-	StateStartingPlaceholder
+	StateStartingPlaceholder MachineState = "starting"
 	
 	// StateRunningPlaceholder is reserved for future use when machines are running.
-	StateRunningPlaceholder
+	StateRunningPlaceholder MachineState = "running"
 	
 	// StateDeadPlaceholder represents a machine that is dead and needs cleanup.
-	StateDeadPlaceholder
+	StateDeadPlaceholder MachineState = "dead"
 	
 	// StateDeleted represents a machine that has been deleted.
-	StateDeleted
+	StateDeleted MachineState = "deleted"
 	
 	// StateFailed represents a machine that has failed provisioning.
-	StateFailed
+	StateFailed MachineState = "failed"
 )
 
-// MachineCtx holds the FSM state and context for a single machine.
-type MachineCtx struct {
-	// ID is the machine ID.
-	ID string
-	
-	// State is the current FSM state of the machine.
-	State MachineState
-}
-
-// ProviderOp represents an operation to be performed by the provider.
-// This is a placeholder for future integration.
-type ProviderOp struct {
-	// Type indicates the operation type (e.g., "start", "stop").
-	Type string
-	
-	// MachineID is the ID of the machine this operation applies to.
-	MachineID string
-}
-
-// ProviderResult represents the result of a provider operation.
-// This is a placeholder for future integration.
-type ProviderResult struct {
-	// MachineID is the ID of the machine this result applies to.
-	MachineID string
-	
-	// Error holds any error that occurred during the operation.
-	Error error
+// TransitionTo transitions from the current state to a new state.
+// This method validates state transitions and returns the new state or an error.
+// For now, it's a simple implementation that allows any transition.
+func (s MachineState) TransitionTo(newState MachineState) (MachineState, error) {
+	// TODO: Add state transition validation logic in future milestones
+	// For scaffolding phase, allow any transition
+	if newState == "" {
+		return s, errors.New("invalid empty state transition")
+	}
+	return newState, nil
 }

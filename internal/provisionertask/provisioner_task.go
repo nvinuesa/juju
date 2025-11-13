@@ -172,7 +172,7 @@ func NewProvisionerTask(cfg TaskConfig) (ProvisionerTask, error) {
 		wp:                           workerpool.NewWorkerPool(cfg.Logger, cfg.NumProvisionWorkers),
 		wpSizeChan:                   make(chan int, 1),
 		eventProcessedCb:             cfg.EventProcessedCb,
-		fsmStates:                    make(map[string]*MachineCtx),
+		fsmStates:                    make(map[string]MachineState),
 		sched:                        newScheduler(cfg.Logger),
 	}
 	err := catacomb.Invoke(catacomb.Plan{
@@ -232,7 +232,7 @@ type provisionerTask struct {
 	eventProcessedCb func(string)
 
 	// FSM scaffolding (Milestone 0, Step 2) - not yet integrated into operational flow
-	fsmStates map[string]*MachineCtx
+	fsmStates map[string]MachineState
 	sched     *scheduler
 }
 
@@ -426,33 +426,41 @@ func (task *provisionerTask) transitionTo(ctx context.Context, machineID string)
 	m, found := task.machines[machineID]
 	task.machinesMutex.RUnlock()
 
-	var state MachineState
+	var newState MachineState
 	if !found {
-		state = StateUnknown
+		newState = StateUnknown
 	} else {
 		cls, err := classifyMachine(ctx, task.logger, m)
 		if err != nil {
 			task.logger.Tracef(ctx, "fsm classify error for %s: %v", machineID, err)
-			state = StateUnknown
+			newState = StateUnknown
 		} else {
 			switch cls {
 			case Pending:
-				state = StatePending
+				newState = StatePending
 			case Dead:
-				state = StateDeadPlaceholder
+				newState = StateDeadPlaceholder
 			default:
-				state = StateUnknown
+				newState = StateUnknown
 			}
 		}
 	}
 
-	mc := task.fsmStates[machineID]
-	if mc == nil {
-		mc = &MachineCtx{ID: machineID}
-		task.fsmStates[machineID] = mc
+	// Get current state from map, default to StateUnknown if not present
+	currentState, exists := task.fsmStates[machineID]
+	if !exists {
+		currentState = StateUnknown
 	}
-	mc.State = state
-	task.logger.Tracef(ctx, "fsm state update: machine %s -> %d", machineID, state)
+
+	// Use FSM's TransitionTo method for state transitions
+	transitionedState, err := currentState.TransitionTo(newState)
+	if err != nil {
+		task.logger.Tracef(ctx, "fsm transition error for %s: %v", machineID, err)
+		return
+	}
+
+	task.fsmStates[machineID] = transitionedState
+	task.logger.Tracef(ctx, "fsm state update: machine %s -> %s", machineID, transitionedState)
 	// NO scheduling yet; sched.markEligible intentionally omitted
 }
 
