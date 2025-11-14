@@ -172,6 +172,7 @@ func NewProvisionerTask(cfg TaskConfig) (ProvisionerTask, error) {
 		wp:                           workerpool.NewWorkerPool(cfg.Logger, cfg.NumProvisionWorkers),
 		wpSizeChan:                   make(chan int, 1),
 		eventProcessedCb:             cfg.EventProcessedCb,
+		fsms:                         make(map[string]*MachineFSM),
 	}
 	err := catacomb.Invoke(catacomb.Plan{
 		Name: "provisioner-task",
@@ -219,6 +220,7 @@ type provisionerTask struct {
 	machinesStopDeferred     map[string]bool                              // machine IDs which were set as dead while starting. They will be stopped once they are online.
 	availabilityZoneMachines []*AvailabilityZoneMachine
 	instances                map[instance.Id]instances.Instance // instanceID -> instance
+	fsms                     map[string]*MachineFSM             // machine ID -> FSM for tracking machine state
 
 	// A worker pool for starting/stopping instances in parallel.
 	wp         *workerpool.WorkerPool
@@ -272,6 +274,10 @@ func (task *provisionerTask) loop() (taskErr error) {
 			if err := task.processMachines(ctx, ids); err != nil {
 				return errors.Annotate(err, "processing updated machines")
 			}
+
+			// Update FSM states for affected machines to mirror current state.
+			// This is purely for tracking; no behavior changes or scheduling.
+			task.updateMachineFSMStates(ctx, ids)
 
 			task.notifyEventProcessedCallback(eventTypeProcessedMachines)
 
@@ -405,6 +411,87 @@ func (task *provisionerTask) processMachines(ctx context.Context, ids []string) 
 
 	// Queue start requests for any other pending instances.
 	return errors.Trace(task.queueStartMachines(ctx, pending))
+}
+
+// updateMachineFSMStates updates the FSM state for each machine ID to mirror
+// the current provisioner task state. This is purely for state tracking and
+// does not change any provisioning behavior.
+//
+// In future iterations, reducers will drive state transitions. For now, we
+// derive the target state from existing task flags and classifications.
+func (task *provisionerTask) updateMachineFSMStates(ctx context.Context, ids []string) {
+	task.machinesMutex.Lock()
+	defer task.machinesMutex.Unlock()
+
+	for _, id := range ids {
+		// Look up the machine in our map
+		machine, machineExists := task.machines[id]
+
+		// Determine target FSM state based on current provisioner state
+		var targetState MachineState
+
+		if machineExists {
+			// Classify the machine to determine if it's pending or dead
+			classification, err := classifyMachine(ctx, task.logger, machine)
+			if err != nil {
+				task.logger.Tracef(ctx, "failed to classify machine %q for FSM update: %v", id, err)
+				continue
+			}
+
+			// Derive target state from classification and task flags
+			switch classification {
+			case Pending:
+				targetState = StatePending
+			case Dead:
+				targetState = StateDead
+			case None:
+				// Machine exists but not pending/dead, check operational state
+				if task.machinesStopping[id] {
+					targetState = StateStopping
+				} else if task.machinesStarting[id] && task.machinesStopDeferred[id] {
+					targetState = StateCancellingStart
+				} else if task.machinesStarting[id] {
+					targetState = StateStarting
+				} else {
+					// Check if machine has an instance
+					if _, err := machine.InstanceId(ctx); err == nil {
+						targetState = StateRunning
+					} else {
+						// Conservative: no instance yet, treat as pending
+						targetState = StatePending
+					}
+				}
+			}
+		} else {
+			// Machine not in our map anymore, likely dead
+			// Only transition to Dead if we have an FSM for it
+			if fsm, exists := task.fsms[id]; exists {
+				targetState = StateDead
+				// Transition the existing FSM
+				if err := fsm.TransitionTo(targetState); err != nil {
+					if !errors.Is(err, ErrIllegalTransition) {
+						task.logger.Tracef(ctx, "FSM transition error for machine %q: %v", id, err)
+					}
+				}
+			}
+			continue
+		}
+
+		// Get or create FSM for this machine
+		fsm, exists := task.fsms[id]
+		if !exists {
+			fsm = NewMachineFSM(id)
+			task.fsms[id] = fsm
+		}
+
+		// Attempt transition to target state
+		if err := fsm.TransitionTo(targetState); err != nil {
+			// Log trace only if it's not an illegal transition (expected in some cases)
+			if !errors.Is(err, ErrIllegalTransition) {
+				task.logger.Tracef(ctx, "FSM transition error for machine %q: %v", id, err)
+			}
+		}
+	}
 }
 
 func instanceIds(instances []instances.Instance) []string {
