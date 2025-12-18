@@ -7,6 +7,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/juju/errors"
 	tc "github.com/juju/tc"
@@ -561,7 +562,6 @@ func (s *MachineWorkerSuite) TestRollbackOnSetInstanceInfoFailure(c *tc.C) {
 	})
 
 	// First SetInstanceInfo fails, second succeeds
-	callCount := 0
 	h.infoSetter.err = errors.New("registration failed")
 
 	worker, err := NewMachineWorker(h.config())
@@ -586,17 +586,13 @@ func (s *MachineWorkerSuite) TestRollbackOnSetInstanceInfoFailure(c *tc.C) {
 	stopCalls := h.broker.getStopInstancesCalls()
 	c.Assert(stopCalls[0], tc.DeepEquals, []string{"i-0"})
 
-	// Worker should be back in Pending state
-	c.Assert(worker.State(), tc.Equals, StatePending)
-
-	// Now fix the error and retry
+	// Now fix the error - retry timer will fire automatically
 	h.infoSetter.setErr(nil)
-	callCount++
 
-	// Trigger retry
-	h.sendEvent(MachineEvent{Type: EventLifeChanged, Life: life.Alive})
+	// Worker will automatically retry via timer and request zone again
 	req = h.receiveRequest()
 	c.Assert(req.Type, tc.Equals, RequestZone)
+	c.Assert(worker.State(), tc.Equals, StateRequestingZone)
 
 	h.sendEvent(MachineEvent{Type: EventZoneAssigned, Zone: "zone-a"})
 
@@ -625,17 +621,16 @@ func (s *MachineWorkerSuite) TestRetryExhaustionSetsProvisioningError(c *tc.C) {
 	c.Assert(req.Type, tc.Equals, RequestZone)
 	h.sendEvent(MachineEvent{Type: EventZoneAssigned, Zone: "zone-a"})
 
-	// First failure
+	// First failure - worker schedules a retry
 	req = h.receiveRequest()
 	c.Assert(req.Type, tc.Equals, RequestProvisionComplete)
 	payload := req.Payload.(ProvisionResultPayload)
 	c.Assert(payload.Success, tc.IsFalse)
-	c.Assert(worker.State(), tc.Equals, StatePending)
 
-	// Second attempt (retry)
-	h.sendEvent(MachineEvent{Type: EventLifeChanged, Life: life.Alive})
+	// Retry timer fires automatically and requests zone again
 	req = h.receiveRequest()
 	c.Assert(req.Type, tc.Equals, RequestZone)
+	c.Assert(worker.State(), tc.Equals, StateRequestingZone)
 	h.sendEvent(MachineEvent{Type: EventZoneAssigned, Zone: "zone-a"})
 
 	// Second failure -> retries exhausted
@@ -661,23 +656,16 @@ func (s *MachineWorkerSuite) TestKeepInstanceOnDeadWhileRunning(c *tc.C) {
 	h := newWorkerTestHarness("0")
 	h.machine.setKeepInstance(true)
 	h.machine.setInstanceID("i-0") // Already has instance
-	h.broker.setStartInstanceResult(StartInstanceResult{
-		InstanceID: "i-0",
-		ZoneName:   "zone-a",
-	})
 
 	worker, err := NewMachineWorker(h.config())
 	c.Assert(err, tc.IsNil)
 	defer workertest.DirtyKill(c, worker)
 
-	// Provision the machine
+	// Machine already has instance - life.Alive goes directly to Running
 	h.sendEvent(MachineEvent{Type: EventLifeChanged, Life: life.Alive})
-	req := h.receiveRequest()
-	c.Assert(req.Type, tc.Equals, RequestZone)
 
-	h.sendEvent(MachineEvent{Type: EventZoneAssigned, Zone: "zone-a"})
-	req = h.receiveRequest()
-	c.Assert(req.Type, tc.Equals, RequestProvisionComplete)
+	// Give time for state transition
+	time.Sleep(20 * time.Millisecond)
 	c.Assert(worker.State(), tc.Equals, StateRunning)
 
 	// Send life=Dead with keep-instance=true
