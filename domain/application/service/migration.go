@@ -152,7 +152,7 @@ func (s *MigrationService) GetCharmByApplicationName(ctx context.Context, name s
 	}
 
 	locator := charm.CharmLocator{
-		Name:         ch.ReferenceName,
+		Name:         ch.Metadata.Name,
 		Revision:     ch.Revision,
 		Source:       ch.Source,
 		Architecture: ch.Architecture,

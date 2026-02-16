@@ -636,9 +636,15 @@ func (s *State) AddCharm(ctx context.Context, ch charm.Charm, downloadInfo *char
 
 	var locator charmLocator
 	locatorQuery := `
-SELECT &charmLocator.*
-FROM charm
-WHERE uuid = $entityUUID.uuid;
+SELECT c.uuid,
+       cm.name AS &charmLocator.charm_name,
+       c.reference_name AS &charmLocator.reference_name,
+       c.revision AS &charmLocator.revision,
+       c.source_id AS &charmLocator.source_id,
+       c.architecture_id AS &charmLocator.architecture_id
+FROM charm AS c
+JOIN charm_metadata AS cm ON c.uuid = cm.charm_uuid
+WHERE c.uuid = $entityUUID.uuid;
 	`
 	locatorStmt, err := s.Prepare(locatorQuery, charmUUID, locator)
 	if err != nil {
@@ -696,9 +702,14 @@ func (s *State) ListCharmLocators(ctx context.Context) ([]charm.CharmLocator, er
 	}
 
 	query := `
-SELECT &charmLocator.*
-FROM charm
-WHERE source_id < 2;
+SELECT cm.name AS &charmLocator.charm_name,
+       c.reference_name AS &charmLocator.reference_name,
+       c.revision AS &charmLocator.revision,
+       c.source_id AS &charmLocator.source_id,
+       c.architecture_id AS &charmLocator.architecture_id
+FROM charm AS c
+JOIN charm_metadata AS cm ON c.uuid = cm.charm_uuid
+WHERE c.source_id < 2;
 `
 	stmt, err := s.Prepare(query, charmLocator{})
 	if err != nil {
@@ -733,9 +744,14 @@ func (s *State) ListCharmLocatorsByNames(ctx context.Context, names []string) ([
 	type nameSelector []string
 
 	query := `
-SELECT &charmLocator.*
-FROM charm
-WHERE reference_name IN ($nameSelector[:]) AND source_id < 2;
+SELECT cm.name AS &charmLocator.charm_name,
+       c.reference_name AS &charmLocator.reference_name,
+       c.revision AS &charmLocator.revision,
+       c.source_id AS &charmLocator.source_id,
+       c.architecture_id AS &charmLocator.architecture_id
+FROM charm AS c
+JOIN charm_metadata AS cm ON c.uuid = cm.charm_uuid
+WHERE c.reference_name IN ($nameSelector[:]) AND c.source_id < 2;
 `
 	stmt, err := s.Prepare(query, charmLocator{}, nameSelector(names))
 	if err != nil {
@@ -770,9 +786,14 @@ func (s *State) GetCharmLocatorByCharmID(ctx context.Context, id corecharm.ID) (
 	ident := entityUUID{UUID: id.String()}
 
 	query := `
-SELECT &charmLocator.*
-FROM charm
-WHERE uuid = $entityUUID.uuid;
+SELECT cm.name AS &charmLocator.charm_name,
+       c.reference_name AS &charmLocator.reference_name,
+       c.revision AS &charmLocator.revision,
+       c.source_id AS &charmLocator.source_id,
+       c.architecture_id AS &charmLocator.architecture_id
+FROM charm AS c
+JOIN charm_metadata AS cm ON c.uuid = cm.charm_uuid
+WHERE c.uuid = $entityUUID.uuid;
 `
 	stmt, err := s.Prepare(query, charmLocator{}, ident)
 	if err != nil {
@@ -938,9 +959,14 @@ WHERE uuid = $entityUUID.uuid;`
 
 	var locator charmLocator
 	locatorQuery := `
-SELECT &charmLocator.*
-FROM charm
-WHERE uuid = $entityUUID.uuid;
+SELECT cm.name AS &charmLocator.charm_name,
+       c.reference_name AS &charmLocator.reference_name,
+       c.revision AS &charmLocator.revision,
+       c.source_id AS &charmLocator.source_id,
+       c.architecture_id AS &charmLocator.architecture_id
+FROM charm AS c
+JOIN charm_metadata AS cm ON c.uuid = cm.charm_uuid
+WHERE c.uuid = $entityUUID.uuid;
 	`
 	locatorStmt, err := s.Prepare(locatorQuery, charmUUID, locator)
 	if err != nil {
@@ -1004,12 +1030,14 @@ func (s *State) GetLatestPendingCharmhubCharm(ctx context.Context, name string, 
 
 	query := `
 SELECT
+    cm.name AS &charmLocator.charm_name,
     v.reference_name AS &charmLocator.reference_name,
     v.source_id AS &charmLocator.source_id,
     v.architecture_id AS &charmLocator.architecture_id,
     v.revision AS &charmLocator.revision
 FROM charm AS v
 JOIN charm ON v.uuid = charm.uuid
+JOIN charm_metadata AS cm ON v.uuid = cm.charm_uuid
 LEFT JOIN application ON application.charm_uuid = charm.uuid
 WHERE
     charm.available = FALSE
@@ -1056,7 +1084,7 @@ func decodeCharmLocator(c charmLocator) (charm.CharmLocator, error) {
 	}
 
 	return charm.CharmLocator{
-		Name:         c.ReferenceName,
+		Name:         c.CharmName,
 		Revision:     c.Revision,
 		Source:       source,
 		Architecture: architecture,

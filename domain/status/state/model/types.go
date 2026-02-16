@@ -158,6 +158,7 @@ type relationStatus struct {
 // Note: this has to be public because it's embedded and sqlair can't see
 // the private struct because of reflection.
 type CharmLocatorDetails struct {
+	CharmName           string          `db:"charm_name"`
 	CharmReferenceName  string          `db:"charm_reference_name"`
 	CharmRevision       int             `db:"charm_revision"`
 	CharmSourceID       int             `db:"charm_source_id"`

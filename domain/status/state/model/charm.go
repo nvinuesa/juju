@@ -24,7 +24,7 @@ func decodeCharmLocator(c CharmLocatorDetails) (charm.CharmLocator, error) {
 	}
 
 	return charm.CharmLocator{
-		Name:         c.CharmReferenceName,
+		Name:         c.CharmName,
 		Revision:     c.CharmRevision,
 		Source:       source,
 		Architecture: architecture,

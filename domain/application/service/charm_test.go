@@ -209,7 +209,7 @@ func (s *charmServiceSuite) TestGetCharm(c *tc.C) {
 
 	id := charmtesting.GenCharmID(c)
 
-	s.state.EXPECT().GetCharmID(gomock.Any(), "foo", 42, charm.LocalSource).Return(id, nil)
+	s.state.EXPECT().GetCharmID(gomock.Any(), "bar", 42, charm.LocalSource).Return(id, nil)
 	s.state.EXPECT().GetCharm(gomock.Any(), id).Return(charm.Charm{
 		Metadata: charm.Metadata{
 			Name: "foo",
@@ -218,13 +218,14 @@ func (s *charmServiceSuite) TestGetCharm(c *tc.C) {
 			// allowed.
 			RunAs: "default",
 		},
-		Source:    charm.LocalSource,
-		Revision:  42,
-		Available: true,
+		ReferenceName: "bar",
+		Source:        charm.LocalSource,
+		Revision:      42,
+		Available:     true,
 	}, nil, nil)
 
 	metadata, locator, isAvailable, err := s.service.GetCharm(c.Context(), charm.CharmLocator{
-		Name:     "foo",
+		Name:     "bar",
 		Revision: 42,
 		Source:   charm.LocalSource,
 	})
@@ -237,6 +238,7 @@ func (s *charmServiceSuite) TestGetCharm(c *tc.C) {
 	c.Check(locator, tc.Equals, charm.CharmLocator{
 		Source:   charm.LocalSource,
 		Revision: 42,
+		Name:     "foo",
 	})
 	c.Check(isAvailable, tc.Equals, true)
 }

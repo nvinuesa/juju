@@ -2110,7 +2110,7 @@ FROM v_revision_updater_application_unit
 		return application.RevisionUpdaterApplication{
 			Name: r.Name,
 			CharmLocator: charm.CharmLocator{
-				Name:         r.ReferenceName,
+				Name:         r.CharmName,
 				Revision:     r.Revision,
 				Source:       charm.CharmHubSource,
 				Architecture: charmArch,

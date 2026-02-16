@@ -125,6 +125,7 @@ func (s *migrationServiceSuite) TestGetCharm(c *tc.C) {
 		// Notice that the RunAs field becomes empty string when being returned.
 	})
 	c.Check(locator, tc.Equals, domaincharm.CharmLocator{
+		Name:     "foo",
 		Source:   domaincharm.LocalSource,
 		Revision: 42,
 	})

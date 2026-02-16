@@ -922,7 +922,7 @@ func (s *Service) GetCharmByApplicationUUID(ctx context.Context, id coreapplicat
 	}
 
 	locator := charm.CharmLocator{
-		Name:         ch.ReferenceName,
+		Name:         ch.Metadata.Name,
 		Revision:     ch.Revision,
 		Source:       ch.Source,
 		Architecture: ch.Architecture,

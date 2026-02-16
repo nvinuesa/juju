@@ -693,6 +693,7 @@ type countResult struct {
 // charmLocator is used to get the locator of a charm. The locator is purely
 // to reconstruct the charm URL.
 type charmLocator struct {
+	CharmName      string          `db:"charm_name"`
 	ReferenceName  string          `db:"reference_name"`
 	Revision       int             `db:"revision"`
 	SourceID       int             `db:"source_id"`
@@ -739,6 +740,7 @@ type linkResourceApplication struct {
 type revisionUpdaterApplication struct {
 	UUID                   string          `db:"uuid"`
 	Name                   string          `db:"name"`
+	CharmName              string          `db:"charm_name"`
 	ReferenceName          string          `db:"reference_name"`
 	Revision               int             `db:"revision"`
 	CharmArchitectureID    sql.Null[int64] `db:"charm_architecture_id"`

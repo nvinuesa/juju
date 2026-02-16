@@ -327,7 +327,7 @@ func (s *Service) getCharmAndLocator(ctx context.Context, charmID corecharm.ID) 
 	}
 
 	returnedLocator := charm.CharmLocator{
-		Name:         ch.ReferenceName,
+		Name:         ch.Metadata.Name,
 		Revision:     ch.Revision,
 		Source:       ch.Source,
 		Architecture: ch.Architecture,

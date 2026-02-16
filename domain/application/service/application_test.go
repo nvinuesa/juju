@@ -83,7 +83,7 @@ func (s *applicationServiceSuite) TestGetCharmByApplicationID(c *tc.C) {
 		// Notice that the RunAs field becomes empty string when being returned.
 	})
 	c.Check(locator, tc.DeepEquals, applicationcharm.CharmLocator{
-		Name:         "bar",
+		Name:         "foo",
 		Revision:     42,
 		Source:       applicationcharm.LocalSource,
 		Architecture: architecture.AMD64,
