@@ -57,7 +57,12 @@ func (s *appCharmInfoSuite) TestApplicationCharmInfo(c *tc.C) {
 	}
 
 	charmBase := internalcharm.NewCharmBase(metadata, manifest, config, actions, lxdProfile)
-	locator := charm.CharmLocator{Source: charm.CharmHubSource, Revision: 1, Architecture: architecture.AMD64}
+	locator := charm.CharmLocator{
+		Name:         "foo",
+		Source:       charm.CharmHubSource,
+		Revision:     1,
+		Architecture: architecture.AMD64,
+	}
 
 	id := tc.Must(c, application.NewUUID)
 
@@ -70,11 +75,10 @@ func (s *appCharmInfoSuite) TestApplicationCharmInfo(c *tc.C) {
 	charmInfo, err := api.ApplicationCharmInfo(c.Context(), params.Entity{Tag: names.NewApplicationTag("fuu").String()})
 	c.Assert(err, tc.IsNil)
 
-	// The application name is used in the charm URL, the charm name is
-	// only used as the fallback. This test ensures that the application
-	// name is returned.
+	// The charm name from the locator is used in the charm URL.
+	// The application name is separate from the charm name.
 
-	c.Check(charmInfo.URL, tc.Equals, "ch:amd64/fuu-1")
+	c.Check(charmInfo.URL, tc.Equals, "ch:amd64/foo-1")
 	c.Check(charmInfo.Meta, tc.DeepEquals, &params.CharmMeta{Name: "foo", MinJujuVersion: "0.0.0"})
 	c.Check(charmInfo.Manifest, tc.DeepEquals, &params.CharmManifest{Bases: []params.CharmBase{{Name: "ubuntu", Channel: "22.04/stable"}}})
 	c.Check(charmInfo.Config, tc.DeepEquals, map[string]params.CharmOption{"foo": {Type: "string"}})
@@ -90,7 +94,12 @@ func (s *appCharmInfoSuite) TestApplicationCharmInfoMinimal(c *tc.C) {
 	metadata := &internalcharm.Meta{Name: "foo"}
 
 	charmBase := internalcharm.NewCharmBase(metadata, nil, nil, nil, nil)
-	locator := charm.CharmLocator{Source: charm.CharmHubSource, Revision: 1, Architecture: architecture.AMD64}
+	locator := charm.CharmLocator{
+		Name:         "foo",
+		Source:       charm.CharmHubSource,
+		Revision:     1,
+		Architecture: architecture.AMD64,
+	}
 
 	id := tc.Must(c, application.NewUUID)
 
@@ -103,7 +112,7 @@ func (s *appCharmInfoSuite) TestApplicationCharmInfoMinimal(c *tc.C) {
 	charmInfo, err := api.ApplicationCharmInfo(c.Context(), params.Entity{Tag: names.NewApplicationTag("fuu").String()})
 	c.Assert(err, tc.IsNil)
 
-	c.Check(charmInfo.URL, tc.Equals, "ch:amd64/fuu-1")
+	c.Check(charmInfo.URL, tc.Equals, "ch:amd64/foo-1")
 	c.Check(charmInfo.Meta, tc.DeepEquals, &params.CharmMeta{Name: "foo", MinJujuVersion: "0.0.0"})
 	c.Check(charmInfo.Manifest, tc.IsNil)
 	c.Check(charmInfo.Config, tc.IsNil)

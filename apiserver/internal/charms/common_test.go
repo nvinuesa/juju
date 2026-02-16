@@ -113,12 +113,13 @@ func (s *exportSuite) TestExport(c *tc.C) {
 	charmBase := internalcharm.NewCharmBase(metadata, manifest, config, actions, lxdProfile)
 
 	locator := applicationcharm.CharmLocator{
+		Name:         "foo",
 		Source:       applicationcharm.CharmHubSource,
 		Revision:     42,
 		Architecture: architecture.AMD64,
 	}
 
-	result, err := convertCharm("foo", charmBase, locator)
+	result, err := convertCharm(charmBase, locator)
 	c.Assert(err, tc.ErrorIsNil)
 	c.Check(result, tc.DeepEquals, params.Charm{
 		Revision: 42,

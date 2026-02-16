@@ -158,7 +158,7 @@ func decodeArchitecture(a arch.Arch) (architecture.Architecture, error) {
 }
 
 // CharmURLFromLocator returns the charm URL for the current charm.
-func CharmURLFromLocator(name string, locator charm.CharmLocator) (string, error) {
+func CharmURLFromLocator(locator charm.CharmLocator) (string, error) {
 	schema, err := convertSource(locator.Source)
 	if err != nil {
 		return "", errors.Trace(err)
@@ -171,7 +171,7 @@ func CharmURLFromLocator(name string, locator charm.CharmLocator) (string, error
 
 	url := internalcharm.URL{
 		Schema:       schema,
-		Name:         name,
+		Name:         locator.Name,
 		Revision:     locator.Revision,
 		Architecture: architecture,
 	}

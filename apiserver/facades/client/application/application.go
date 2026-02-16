@@ -734,7 +734,7 @@ func (api *APIBase) GetCharmURLOrigin(ctx context.Context, args params.Applicati
 	} else if err != nil {
 		return params.CharmURLOriginResult{Error: apiservererrors.ServerError(err)}, nil
 	}
-	charmURL, err := apiservercharms.CharmURLFromLocator(charmLocator.Name, charmLocator)
+	charmURL, err := apiservercharms.CharmURLFromLocator(charmLocator)
 	if err != nil {
 		return params.CharmURLOriginResult{Error: apiservererrors.ServerError(err)}, nil
 	}
@@ -2158,7 +2158,7 @@ func (api *APIBase) unitResultForUnit(ctx context.Context, unitName coreunit.Nam
 	} else if err != nil {
 		return nil, err
 	}
-	curl, err := apiservercharms.CharmURLFromLocator(charmLocator.Name, charmLocator)
+	curl, err := apiservercharms.CharmURLFromLocator(charmLocator)
 	if err != nil {
 		return nil, internalerrors.Capture(err)
 	}

@@ -95,7 +95,7 @@ func (a *API) List(ctx context.Context, args params.CharmsList) (params.CharmsLi
 
 	var charmURLs []string
 	for _, aCharm := range list {
-		curl, err := charmscommon.CharmURLFromLocator(aCharm.Name, aCharm)
+		curl, err := charmscommon.CharmURLFromLocator(aCharm)
 		if err != nil {
 			return params.CharmsListResult{}, errors.Trace(err)
 		}

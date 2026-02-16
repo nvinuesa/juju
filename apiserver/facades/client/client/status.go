@@ -506,7 +506,7 @@ func fetchAllApplicationsAndUnits(
 	for name, app := range applications {
 		apps[name] = app
 
-		charmURL, err := charms.CharmURLFromLocator(app.CharmLocator.Name, app.CharmLocator)
+		charmURL, err := charms.CharmURLFromLocator(app.CharmLocator)
 		if err != nil {
 			logger.Warningf(ctx, "failed to get charm URL for %q: %v", app.CharmLocator.Name, err)
 			continue
@@ -621,7 +621,7 @@ func fetchOffers(ctx context.Context, service CrossModelRelationService) (map[st
 	}
 
 	return transform.SliceToMap(modelOffers, func(in *crossmodelrelation.OfferDetail) (string, offerStatus) {
-		charmURL, err := charms.CharmURLFromLocator(in.CharmLocator.Name, in.CharmLocator)
+		charmURL, err := charms.CharmURLFromLocator(in.CharmLocator)
 
 		endpoints := transform.SliceToMap(in.Endpoints, func(in crossmodelrelation.OfferEndpoint) (string, charm.Relation) {
 			return in.Name, charm.Relation{
@@ -888,7 +888,7 @@ func (c *statusContext) processApplication(ctx context.Context, name string, app
 		return params.ApplicationStatus{Err: apiservererrors.ServerError(err)}
 	}
 
-	charmURL, err := charms.CharmURLFromLocator(application.CharmLocator.Name, application.CharmLocator)
+	charmURL, err := charms.CharmURLFromLocator(application.CharmLocator)
 	if err != nil {
 		return params.ApplicationStatus{Err: apiservererrors.ServerError(err)}
 	}
@@ -912,7 +912,7 @@ func (c *statusContext) processApplication(ctx context.Context, name string, app
 	}
 
 	if latestCharm, ok := c.allAppsUnitsCharmBindings.latestCharms[application.CharmLocator.WithoutRevision()]; ok && !latestCharm.IsZero() {
-		processedStatus.CanUpgradeTo, err = charms.CharmURLFromLocator(latestCharm.Name, latestCharm)
+		processedStatus.CanUpgradeTo, err = charms.CharmURLFromLocator(latestCharm)
 		if err != nil {
 			return params.ApplicationStatus{Err: apiservererrors.ServerError(err)}
 		}
@@ -1078,7 +1078,7 @@ func (c *statusContext) processUnit(ctx context.Context, unitName coreunit.Name,
 		result.Machine = unit.MachineName.String()
 	}
 
-	if unitCharm, err := charms.CharmURLFromLocator(unit.CharmLocator.Name, unit.CharmLocator); err == nil && unitCharm != applicationCharm {
+	if unitCharm, err := charms.CharmURLFromLocator(unit.CharmLocator); err == nil && unitCharm != applicationCharm {
 		result.Charm = unitCharm
 	}
 	if unit.WorkloadVersion != nil {

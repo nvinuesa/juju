@@ -75,7 +75,7 @@ func (a *CharmInfoAPI) CharmInfo(ctx context.Context, args params.CharmURL) (par
 		return params.Charm{}, errors.Trace(err)
 	}
 
-	return convertCharm(ch.Meta().Name, ch, charmLocator)
+	return convertCharm(ch, charmLocator)
 }
 
 // ApplicationService is the interface that the ApplicationCharmInfoAPI
@@ -133,7 +133,7 @@ func (a *ApplicationCharmInfoAPI) ApplicationCharmInfo(ctx context.Context, args
 		return params.Charm{}, errors.Trace(err)
 	}
 
-	return convertCharm(appName, ch, locator)
+	return convertCharm(ch, locator)
 }
 
 func convertSource(source applicationcharm.CharmSource) (string, error) {
@@ -169,8 +169,8 @@ func convertApplication(a architecture.Architecture) (string, error) {
 	}
 }
 
-func convertCharm(name string, ch charm.Charm, locator applicationcharm.CharmLocator) (params.Charm, error) {
-	url, err := CharmURLFromLocator(name, locator)
+func convertCharm(ch charm.Charm, locator applicationcharm.CharmLocator) (params.Charm, error) {
+	url, err := CharmURLFromLocator(locator)
 	if err != nil {
 		return params.Charm{}, errors.Trace(err)
 	}

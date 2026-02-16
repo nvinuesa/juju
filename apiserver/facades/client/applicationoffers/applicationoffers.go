@@ -374,7 +374,7 @@ func (api *OffersAPI) applicationOffersFromModel(
 			requiredAccess,
 		)
 
-		charmURL, err := charms.CharmURLFromLocator(appOffer.CharmLocator.Name, appOffer.CharmLocator)
+		charmURL, err := charms.CharmURLFromLocator(appOffer.CharmLocator)
 		if err != nil {
 			return nil, errors.Capture(err)
 		}

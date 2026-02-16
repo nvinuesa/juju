@@ -844,7 +844,7 @@ func (u *UniterAPI) charmURLForApplication(ctx context.Context, tag names.Applic
 	if err != nil {
 		return "", false, internalerrors.Capture(err)
 	}
-	curl, err := apiservercharms.CharmURLFromLocator(charmLocator.Name, charmLocator)
+	curl, err := apiservercharms.CharmURLFromLocator(charmLocator)
 	if err != nil {
 		return "", false, internalerrors.Capture(err)
 	}
@@ -860,7 +860,7 @@ func (u *UniterAPI) charmURLForUnit(ctx context.Context, tag names.UnitTag) (str
 	if err != nil {
 		return "", false, internalerrors.Capture(err)
 	}
-	curl, err := apiservercharms.CharmURLFromLocator(charmLocator.Name, charmLocator)
+	curl, err := apiservercharms.CharmURLFromLocator(charmLocator)
 	if err != nil {
 		return "", false, internalerrors.Capture(err)
 	}
