@@ -143,12 +143,16 @@ VALUES (?, ?,
 
 // addCharm inserts a new charm into the database and returns the UUID.
 func (s *baseSuite) addCharmMetadataWithDescription(c *tc.C, charmUUID corecharm.ID, description string) {
+	s.addCharmMetadataWithNameAndDescription(c, charmUUID, "test-charm", description)
+}
+
+func (s *baseSuite) addCharmMetadataWithNameAndDescription(c *tc.C, charmUUID corecharm.ID, name, description string) {
 	// The UUID is also used as the reference_name as there is a unique
 	// constraint on the reference_name, revision and source_id.
 	s.query(c, `
 INSERT INTO charm_metadata (charm_uuid, name, subordinate, description)
 VALUES (?, ?, false, ?)
-`, charmUUID, charmUUID, description)
+`, charmUUID, name, description)
 }
 
 func (s *baseSuite) addCharmMetadata(c *tc.C, charmUUID corecharm.ID, subordinate bool) {

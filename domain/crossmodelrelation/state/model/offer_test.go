@@ -560,7 +560,7 @@ func (s *modelOfferSuite) setupForGetOfferDetails(c *tc.C) []*crossmodelrelation
 			ApplicationName:        appName,
 			ApplicationDescription: description,
 			CharmLocator: domaincharm.CharmLocator{
-				Name:         charmUUID.String(),
+				Name:         "test-charm",
 				Revision:     42,
 				Source:       domaincharm.CharmHubSource,
 				Architecture: architecture.AMD64,
@@ -606,7 +606,7 @@ func (s *modelOfferSuite) setupOfferWithInterface(c *tc.C, interfaceName string)
 			ApplicationName:        appName,
 			ApplicationDescription: description,
 			CharmLocator: domaincharm.CharmLocator{
-				Name:         charmUUID.String(),
+				Name:         "test-charm",
 				Revision:     42,
 				Source:       domaincharm.CharmHubSource,
 				Architecture: architecture.AMD64,
