@@ -243,7 +243,7 @@ func (a *API) addCharm(ctx context.Context, args params.AddCharmWithOrigin) (cor
 	if _, warnings, err := a.applicationService.AddCharm(ctx, applicationcharm.AddCharmArgs{
 		Charm:         corecharm.NewCharmInfoAdaptor(essentialMetadata),
 		Source:        requestedOrigin.Source,
-		ReferenceName: charmURL.Name,
+		ReferenceName: essentialMetadata.Meta.Name,
 		Revision:      revision,
 		Hash:          essentialMetadata.ResolvedOrigin.Hash,
 		Architecture:  essentialMetadata.ResolvedOrigin.Platform.Architecture,

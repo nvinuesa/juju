@@ -163,7 +163,7 @@ func DeployApplication(
 	}
 
 	applicationArg := applicationservice.AddApplicationArgs{
-		ReferenceName:    args.Charm.locator.Name,
+		ReferenceName:    args.Charm.Meta().Name,
 		DownloadInfo:     downloadInfo,
 		PendingResources: pendingResources,
 		EndpointBindings: args.EndpointBindings,
