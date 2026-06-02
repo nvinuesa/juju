@@ -51,7 +51,7 @@ func NewAPI(
 // from the watcher.
 func (api *API) Watch(ctx context.Context) (params.NotifyWatchResult, error) {
 	var res params.NotifyWatchResult
-	w, err := api.modelMigrationService.WatchForMigration(ctx)
+	w, err := api.modelMigrationService.WatchMigrationPhase(ctx)
 	if err != nil {
 		res.Error = apiservererrors.ServerError(err)
 		return res, nil
@@ -79,10 +79,10 @@ func (api *API) Report(ctx context.Context, info params.MinionReport) error {
 	switch t := tag.(type) {
 	case names.UnitTag:
 		return api.modelMigrationService.ReportFromUnit(
-			ctx, unit.Name(t.Id()), phase)
+			ctx, unit.Name(t.Id()), phase, info.Success)
 	case names.MachineTag:
 		return api.modelMigrationService.ReportFromMachine(
-			ctx, machine.Name(t.Id()), phase)
+			ctx, machine.Name(t.Id()), phase, info.Success)
 	default:
 		return errors.NotSupportedf("reporting minion status for %v", tag)
 	}

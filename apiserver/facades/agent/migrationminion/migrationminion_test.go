@@ -88,7 +88,7 @@ func (s *Suite) TestWatch(c *tc.C) {
 	w := watchertest.NewMockNotifyWatcher(ch)
 	defer workertest.CleanKill(c, w)
 
-	s.modelMigrationService.EXPECT().WatchForMigration(gomock.Any()).Return(w, nil)
+	s.modelMigrationService.EXPECT().WatchMigrationPhase(gomock.Any()).Return(w, nil)
 	s.watcherRegistry.EXPECT().Register(gomock.Any(), gomock.Any()).Return("123", nil)
 	api := s.mustMakeAPI(c)
 	result, err := api.Watch(c.Context())
@@ -100,7 +100,7 @@ func (s *Suite) TestWatch(c *tc.C) {
 func (s *Suite) TestReportMachine(c *tc.C) {
 	defer s.setUpMocks(c).Finish()
 
-	s.modelMigrationService.EXPECT().ReportFromMachine(gomock.Any(), machine.Name("99"), migration.IMPORT).Return(nil)
+	s.modelMigrationService.EXPECT().ReportFromMachine(gomock.Any(), machine.Name("99"), migration.IMPORT, true).Return(nil)
 	s.authorizer = apiservertesting.FakeAuthorizer{
 		Tag: names.NewMachineTag("99"),
 	}
@@ -116,7 +116,7 @@ func (s *Suite) TestReportMachine(c *tc.C) {
 func (s *Suite) TestReportUnit(c *tc.C) {
 	defer s.setUpMocks(c).Finish()
 
-	s.modelMigrationService.EXPECT().ReportFromUnit(gomock.Any(), unit.Name("a/123"), migration.IMPORT).Return(nil)
+	s.modelMigrationService.EXPECT().ReportFromUnit(gomock.Any(), unit.Name("a/123"), migration.IMPORT, true).Return(nil)
 	s.authorizer = apiservertesting.FakeAuthorizer{
 		Tag: names.NewUnitTag("a/123"),
 	}
@@ -144,7 +144,7 @@ func (s *Suite) TestReportInvalidPhase(c *tc.C) {
 func (s *Suite) TestReportNoSuchMigration(c *tc.C) {
 	defer s.setUpMocks(c).Finish()
 
-	s.modelMigrationService.EXPECT().ReportFromMachine(gomock.Any(), machine.Name("99"), migration.QUIESCE).Return(errors.NotFoundf("model"))
+	s.modelMigrationService.EXPECT().ReportFromMachine(gomock.Any(), machine.Name("99"), migration.QUIESCE, false).Return(errors.NotFoundf("model"))
 	api := s.mustMakeAPI(c)
 	err := api.Report(c.Context(), params.MinionReport{
 		MigrationId: "id",

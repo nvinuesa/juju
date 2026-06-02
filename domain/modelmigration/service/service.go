@@ -7,6 +7,7 @@ import (
 	"context"
 
 	"github.com/juju/collections/set"
+	"github.com/juju/names/v6"
 
 	"github.com/juju/juju/core/changestream"
 	coreerrors "github.com/juju/juju/core/errors"
@@ -21,6 +22,7 @@ import (
 	"github.com/juju/juju/domain/modelmigration"
 	"github.com/juju/juju/environs/instances"
 	"github.com/juju/juju/internal/errors"
+	"github.com/juju/juju/internal/uuid"
 )
 
 // InstanceProvider describes the interface that is needed from the cloud provider to
@@ -59,8 +61,15 @@ type Service struct {
 
 	controllerState ControllerState
 	modelState      ModelState
-	watcherFactory  WatcherFactory
-	modelUUID       string
+
+	// watcherFactory creates watchers over the controller database. It backs
+	// all of the migration watchers ([Service.WatchForMigration],
+	// [Service.WatchMigrationPhase], [Service.WatchMinionReports]), whose
+	// source-side model_migration_export* bookkeeping tables live in the
+	// controller database.
+	watcherFactory WatcherFactory
+
+	modelUUID string
 }
 
 // WatcherFactory describes methods for creating watchers used by the
@@ -88,6 +97,44 @@ type ControllerState interface {
 	// table in the model database, indicating that the model import has
 	// completed or been aborted.
 	DeleteModelImportingStatus(ctx context.Context, modelUUID string) error
+
+	// InsertExport records a new export migration attempt for a model,
+	// returning [modelmigration.ErrMigrationAlreadyActive] if the model already
+	// has an active export.
+	InsertExport(ctx context.Context, spec modelmigration.MigrationSpec) error
+
+	// GetActiveExport returns the active (non-ended) export migration for the
+	// model, or [modelmigration.ErrMigrationNotFound] if none exists.
+	GetActiveExport(ctx context.Context, modelUUID string) (modelmigration.Migration, error)
+
+	// GetMigrationMode derives the migration mode for the model.
+	GetMigrationMode(ctx context.Context, modelUUID string) (modelmigration.MigrationMode, error)
+
+	// SetPhase transitions an export migration to a new phase, enforcing valid
+	// phase transitions with optimistic locking.
+	SetPhase(ctx context.Context, migrationUUID string, newPhase migration.Phase) error
+
+	// SetStatusMessage appends a status message to an export migration.
+	SetStatusMessage(ctx context.Context, migrationUUID, message string) error
+
+	// InsertMinionReport records a phase report from a single minion agent.
+	InsertMinionReport(ctx context.Context, migrationUUID string, phase migration.Phase, entityKey string, success bool) error
+
+	// AggregateMinionReports returns the succeeded and failed entity keys
+	// reported for the given migration and phase.
+	AggregateMinionReports(ctx context.Context, migrationUUID string, phase migration.Phase) (modelmigration.MinionReports, error)
+
+	// NamespaceForWatchExport returns the changestream namespace for export
+	// migration start/end changes (keyed by model_uuid).
+	NamespaceForWatchExport() string
+
+	// NamespaceForWatchPhase returns the changestream namespace for export
+	// migration phase transitions (keyed by model_uuid).
+	NamespaceForWatchPhase() string
+
+	// NamespaceForWatchMinionSync returns the changestream namespace for minion
+	// sync report changes (keyed by migration_uuid).
+	NamespaceForWatchMinionSync() string
 }
 
 // ModelState defines the interface required for accessing the underlying state
@@ -113,11 +160,6 @@ type ModelState interface {
 	// table in the model database, indicating that the model import has
 	// completed or been aborted.
 	DeleteModelImportingStatus(ctx context.Context) error
-
-	// GetNamespaceModelMigrating returns the name of the model_migrating
-	// changestream namespace. A change in this namespace indicates that this
-	// model has started or stopped undergoing a migration.
-	GetNamespaceModelMigrating() string
 }
 
 // NewService is responsible for constructing a new [Service] to handle model
@@ -241,106 +283,224 @@ func (s *Service) CheckMachines(
 
 // ModelMigrationMode returns the current migration mode for the model.
 func (s *Service) ModelMigrationMode(ctx context.Context) (modelmigration.MigrationMode, error) {
-	_, span := trace.Start(ctx, trace.NameFromFunc())
+	ctx, span := trace.Start(ctx, trace.NameFromFunc())
 	defer span.End()
-	// TODO(modelmigration): implement migration mode reporting.
-	return modelmigration.MigrationModeNone, nil
+
+	mode, err := s.controllerState.GetMigrationMode(ctx, s.modelUUID)
+	if err != nil {
+		return modelmigration.MigrationModeNone, errors.Capture(err)
+	}
+	return mode, nil
 }
 
-// Migration returns status about migration of this model.
+// Migration returns status about migration of this model. If the model is not
+// currently being migrated, a migration with phase [migration.NONE] is
+// returned.
 func (s *Service) Migration(ctx context.Context) (modelmigration.Migration, error) {
-	_, span := trace.Start(ctx, trace.NameFromFunc())
+	ctx, span := trace.Start(ctx, trace.NameFromFunc())
 	defer span.End()
-	// TODO(modelmigration): implement migration info reporting.
-	return modelmigration.Migration{
-		Phase: migration.NONE,
-	}, nil
+
+	mig, err := s.controllerState.GetActiveExport(ctx, s.modelUUID)
+	if errors.Is(err, modelmigration.ErrMigrationNotFound) {
+		return modelmigration.Migration{Phase: migration.NONE}, nil
+	} else if err != nil {
+		return modelmigration.Migration{}, errors.Capture(err)
+	}
+	return mig, nil
 }
 
-// InitiateMigration kicks off migrating this model to the target controller.
+// InitiateMigration kicks off migrating this model to the target controller,
+// recording a new export migration and returning its UUID. It returns
+// [modelmigration.ErrMigrationAlreadyActive] if the model is already being
+// migrated.
 func (s *Service) InitiateMigration(ctx context.Context, targetInfo migration.TargetInfo, userName string) (string, error) {
-	_, span := trace.Start(ctx, trace.NameFromFunc())
+	ctx, span := trace.Start(ctx, trace.NameFromFunc())
 	defer span.End()
-	// TODO(modelmigration): implement migration info reporting.
-	return "", errors.ConstError("migration is not implemented")
+
+	if err := targetInfo.Validate(); err != nil {
+		return "", errors.Errorf("validating migration target: %w", err)
+	}
+
+	migrationUUID, err := uuid.NewUUID()
+	if err != nil {
+		return "", errors.Capture(err)
+	}
+
+	// userName identifies the operator that started the migration. It is
+	// validated/authorised at the facade layer; the export schema does not
+	// persist the initiating user, so it is not stored here.
+	spec := modelmigration.MigrationSpec{
+		MigrationUUID: migrationUUID.String(),
+		ModelUUID:     s.modelUUID,
+		Target:        targetInfo,
+	}
+	if err := s.controllerState.InsertExport(ctx, spec); err != nil {
+		return "", errors.Capture(err)
+	}
+	return migrationUUID.String(), nil
 }
 
 // WatchForMigration returns a notification watcher that fires when this model
-// undergoes migration.
+// starts or stops undergoing migration. The source-side export bookkeeping lives
+// in the controller database (model_migration_export), keyed by model_uuid; this
+// wakes the migration master to begin driving a migration. It deliberately does
+// not fire on intermediate phase transitions - use WatchMigrationPhase for
+// those.
 func (s *Service) WatchForMigration(ctx context.Context) (watcher.NotifyWatcher, error) {
 	ctx, span := trace.Start(ctx, trace.NameFromFunc())
 	defer span.End()
 
+	return s.watchControllerNamespace(
+		ctx, "watch for model migration", s.controllerState.NamespaceForWatchExport(),
+	)
+}
+
+// WatchMigrationPhase returns a notification watcher that fires on each of this
+// model's migration phase transitions. The phase history lives in the controller
+// database (model_migration_export_phase), keyed by model_uuid; this wakes the
+// migration minion and flag to react to each phase.
+func (s *Service) WatchMigrationPhase(ctx context.Context) (watcher.NotifyWatcher, error) {
+	ctx, span := trace.Start(ctx, trace.NameFromFunc())
+	defer span.End()
+
+	return s.watchControllerNamespace(
+		ctx, "watch for migration phase change", s.controllerState.NamespaceForWatchPhase(),
+	)
+}
+
+// watchControllerNamespace returns a notify watcher over the given controller
+// changestream namespace, scoped to this service's model UUID.
+func (s *Service) watchControllerNamespace(
+	ctx context.Context, summary, namespace string,
+) (watcher.NotifyWatcher, error) {
 	return s.watcherFactory.NewNotifyWatcher(
 		ctx,
-		"watch for model migration",
+		summary,
 		eventsource.PredicateFilter(
-			s.modelState.GetNamespaceModelMigrating(),
+			namespace,
 			changestream.All,
 			eventsource.EqualsPredicate(s.modelUUID),
 		),
 	)
 }
 
-// WatchMigrationPhase returns a notification watcher that fires when this
-// model's migration phase changes.
-func (s *Service) WatchMigrationPhase(ctx context.Context) (watcher.NotifyWatcher, error) {
-	_, span := trace.Start(ctx, trace.NameFromFunc())
-	defer span.End()
-	// TODO(modelmigration): implement migration watcher.
-	return watcher.TODO[struct{}](), nil
-}
-
 // ReportFromUnit accepts a phase report from a migration minion for a unit
 // agent.
-func (s *Service) ReportFromUnit(ctx context.Context, unitName unit.Name, phase migration.Phase) error {
-	_, span := trace.Start(ctx, trace.NameFromFunc())
+func (s *Service) ReportFromUnit(ctx context.Context, unitName unit.Name, phase migration.Phase, success bool) error {
+	ctx, span := trace.Start(ctx, trace.NameFromFunc())
 	defer span.End()
-	// TODO(modelmigration): implement reporting phase from a unit.
-	return errors.ConstError("migration report from a unit is not implemented")
+
+	return s.reportMinion(ctx, names.NewUnitTag(unitName.String()).String(), phase, success)
 }
 
 // ReportFromMachine accepts a phase report from a migration minion for a
 // machine agent.
-func (s *Service) ReportFromMachine(ctx context.Context, machineName machine.Name, phase migration.Phase) error {
-	_, span := trace.Start(ctx, trace.NameFromFunc())
+func (s *Service) ReportFromMachine(ctx context.Context, machineName machine.Name, phase migration.Phase, success bool) error {
+	ctx, span := trace.Start(ctx, trace.NameFromFunc())
 	defer span.End()
-	// TODO(modelmigration): implement reporting phase from a machine.
-	return errors.ConstError("migration report from a machine is not implemented")
+
+	return s.reportMinion(ctx, names.NewMachineTag(machineName.String()).String(), phase, success)
+}
+
+// reportMinion records a single minion report against the model's active export
+// migration, keyed by the agent's tag string.
+func (s *Service) reportMinion(ctx context.Context, entityKey string, phase migration.Phase, success bool) error {
+	mig, err := s.controllerState.GetActiveExport(ctx, s.modelUUID)
+	if err != nil {
+		return errors.Capture(err)
+	}
+	return s.controllerState.InsertMinionReport(ctx, mig.UUID, phase, entityKey, success)
 }
 
 // SetMigrationPhase is called by the migration master to progress migration.
 func (s *Service) SetMigrationPhase(ctx context.Context, phase migration.Phase) error {
-	_, span := trace.Start(ctx, trace.NameFromFunc())
+	ctx, span := trace.Start(ctx, trace.NameFromFunc())
 	defer span.End()
-	// TODO(modelmigration): implement reporting phase from migration master.
-	return errors.ConstError("setting migration phase is not implemented")
+
+	mig, err := s.controllerState.GetActiveExport(ctx, s.modelUUID)
+	if err != nil {
+		return errors.Capture(err)
+	}
+	return s.controllerState.SetPhase(ctx, mig.UUID, phase)
 }
 
 // SetMigrationStatusMessage is called by the migration master to report on
 // migration status.
 func (s *Service) SetMigrationStatusMessage(ctx context.Context, message string) error {
-	_, span := trace.Start(ctx, trace.NameFromFunc())
+	ctx, span := trace.Start(ctx, trace.NameFromFunc())
 	defer span.End()
-	// TODO(modelmigration): implement setting migration status message.
-	return errors.ConstError("setting migration status message is not implemented")
+
+	mig, err := s.controllerState.GetActiveExport(ctx, s.modelUUID)
+	if err != nil {
+		return errors.Capture(err)
+	}
+	return s.controllerState.SetStatusMessage(ctx, mig.UUID, message)
 }
 
 // WatchMinionReports returns a notification watcher that fires when any minion
-// reports a update to their phase.
+// reports an update to their phase for this model's active migration. The
+// minion sync rows live in the controller database, keyed by migration_uuid.
 func (s *Service) WatchMinionReports(ctx context.Context) (watcher.NotifyWatcher, error) {
-	_, span := trace.Start(ctx, trace.NameFromFunc())
+	ctx, span := trace.Start(ctx, trace.NameFromFunc())
 	defer span.End()
-	// TODO(modelmigration): implement watching minion reports.
-	return watcher.TODO[struct{}](), nil
+
+	mig, err := s.controllerState.GetActiveExport(ctx, s.modelUUID)
+	if err != nil {
+		return nil, errors.Capture(err)
+	}
+
+	return s.watcherFactory.NewNotifyWatcher(
+		ctx,
+		"watch for migration minion reports",
+		eventsource.PredicateFilter(
+			s.controllerState.NamespaceForWatchMinionSync(),
+			changestream.All,
+			eventsource.EqualsPredicate(mig.UUID),
+		),
+	)
 }
 
-// MinionReports returns phase information about minions in this model.
+// MinionReports returns phase information about minions in this model for the
+// active migration's current phase.
+//
+// Only the reported agents are aggregated here; the set of agents that have not
+// yet reported (UnknownCount / SomeUnknown*) is computed by the migration
+// master against the model's agent inventory and is intentionally left unset by
+// this method.
 func (s *Service) MinionReports(ctx context.Context) (migration.MinionReports, error) {
-	_, span := trace.Start(ctx, trace.NameFromFunc())
+	ctx, span := trace.Start(ctx, trace.NameFromFunc())
 	defer span.End()
-	// TODO(modelmigration): implement getting minion reports.
-	return migration.MinionReports{}, errors.ConstError("getting minion reports is not implemented")
+
+	mig, err := s.controllerState.GetActiveExport(ctx, s.modelUUID)
+	if err != nil {
+		return migration.MinionReports{}, errors.Capture(err)
+	}
+
+	aggregated, err := s.controllerState.AggregateMinionReports(ctx, mig.UUID, mig.Phase)
+	if err != nil {
+		return migration.MinionReports{}, errors.Capture(err)
+	}
+
+	reports := migration.MinionReports{
+		MigrationId:  mig.UUID,
+		Phase:        mig.Phase,
+		SuccessCount: len(aggregated.Succeeded),
+	}
+	for _, key := range aggregated.Failed {
+		tag, err := names.ParseTag(key)
+		if err != nil {
+			return migration.MinionReports{}, errors.Errorf("parsing reported entity %q: %w", key, err)
+		}
+		switch tag.Kind() {
+		case names.MachineTagKind:
+			reports.FailedMachines = append(reports.FailedMachines, tag.Id())
+		case names.UnitTagKind:
+			reports.FailedUnits = append(reports.FailedUnits, tag.Id())
+		case names.ApplicationTagKind:
+			reports.FailedApplications = append(reports.FailedApplications, tag.Id())
+		}
+	}
+	return reports, nil
 }
 
 // ActivateImport finalises the import of the model by clearing the
