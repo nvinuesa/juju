@@ -460,6 +460,39 @@ func (s *Suite) TestSUCCESS(c *tc.C) {
 	s.stub.CheckCall(c, 4, "Report", "id", migration.SUCCESS, true)
 }
 
+func (s *Suite) TestSUCCESSRepointsAgentEvenWhenReportFails(c *tc.C) {
+	// Even when reporting SUCCESS back to the source controller fails with an
+	// error robustReport cannot recover from (e.g. the source cancelled the
+	// in-flight call while racing ahead to REAP), the agent must still be
+	// repointed at the target controller. Otherwise it is left stranded
+	// talking to a source that no longer has the model.
+	s.client.watcher.changes <- watcher.MigrationStatus{
+		MigrationId:    "id",
+		Phase:          migration.SUCCESS,
+		TargetAPIAddrs: addrs,
+		TargetCACert:   caCert,
+		SourceAPIAddrs: []string{"source-controller:1234"},
+	}
+	// context.Canceled is not an rpc shutdown error, so robustReport returns
+	// it immediately without entering its redial loop.
+	s.stub.SetErrors(context.Canceled)
+
+	w, err := migrationminion.New(s.config)
+	c.Assert(err, tc.ErrorIsNil)
+
+	select {
+	case <-s.agent.configChanged:
+	case <-time.After(coretesting.LongWait):
+		c.Fatal("timed out waiting for agent config to be repointed at target")
+	}
+	workertest.CleanKill(c, w)
+
+	// The report failed, but the agent config still points at the target.
+	c.Assert(s.agent.conf.addrs, tc.DeepEquals, addrs)
+	c.Assert(s.agent.conf.caCert, tc.DeepEquals, caCert)
+	s.stub.CheckCallNames(c, "Watch", "Lockdown", "API open", "API close", "Report")
+}
+
 func (s *Suite) TestSUCCESSCantConnectNotReportForTryAgainError(c *tc.C) {
 	s.client.watcher.changes <- watcher.MigrationStatus{
 		MigrationId:    "id",
