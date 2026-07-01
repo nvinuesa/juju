@@ -466,12 +466,18 @@ func (w *Worker) doSUCCESS(ctx context.Context, status watcher.MigrationStatus) 
 		return errors.Trace(err)
 	}
 
-	// Report first because the config update that's about to happen
-	// will cause the API connection to drop. The SUCCESS phase is the
-	// point of no return anyway, so we must retry this step even if
-	// the api connection dies.
+	// Report to the source controller first, while this agent can still
+	// reach it: the config update below repoints the agent at the target and
+	// drops the source connection. The report is best-effort — SUCCESS is the
+	// point of no return, so the migration completes on the target regardless
+	// of whether this report is acknowledged. If reporting fails (for example
+	// the source tore the connection down while racing ahead to REAP, which
+	// surfaces as a bare context cancellation that robustReport cannot retry),
+	// we must still repoint the agent at the target. Returning early here would
+	// strand the agent talking to a source controller that no longer has the
+	// model.
 	if err := w.robustReport(ctx, status, true); err != nil {
-		return errors.Trace(err)
+		w.config.Logger.Warningf(ctx, "could not report SUCCESS to source controller, repointing agent at target regardless: %v", err)
 	}
 
 	return w.updateAgentConfigForTargetController(ctx, status)
