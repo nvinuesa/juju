@@ -104,6 +104,21 @@ LEFT JOIN user AS cco ON cc.owner_uuid = cco.uuid;
 --- v_model purpose is to provide an easy access mechanism for models in the
 --- system. It will only show models that have been activated so the caller does
 --- not have to worry about retrieving half complete models.
+---
+--- HACK (temporary, for local migration testing): also show models that have
+--- an in-progress model_migration_import claim (phase 'importing' or
+--- 'activating'), even though activated is still false. Without this, the
+--- apiserver's connection gate (isModelAvailable -> CheckModelExists, which
+--- queries this view) rejects EVERY login to a migrating-in model -- including
+--- the migration-minion agents' VALIDATION-phase login -- before
+--- ModelMigrationMode/restrictAPIRoot (apiserver/admin.go) ever get a chance
+--- to run their existing, already-correct "importing mode" login handling
+--- (agent logins allowed, user logins redirected). This is real Task 13 scope
+--- (spec WS10/WS13); this is the minimal slice of it, not a full
+--- implementation: it does not address ordering/idempotency edge cases
+--- (e.g. a model added back to model_migration_import after being fully
+--- activated and later re-imported, which cannot happen today but isn't
+--- asserted against here), so it should be revisited by that workstream.
 CREATE VIEW v_model AS
 SELECT
     uuid,
@@ -130,7 +145,8 @@ SELECT
     controller_uuid,
     is_controller_model
 FROM v_model_all
-WHERE activated = TRUE;
+WHERE activated = TRUE
+   OR uuid IN (SELECT model_uuid FROM model_migration_import);
 
 -- v_model_state exists to provide a simple view over the states that are
 -- needed to calculate a model's status.

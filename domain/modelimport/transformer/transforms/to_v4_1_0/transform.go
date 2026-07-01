@@ -8,43 +8,25 @@ package to_v4_1_0
 import (
 	"context"
 
-	"github.com/juju/juju/domain/export/types/v4_0_11"
+	"github.com/juju/juju/domain/export/types/v4_0_12"
 	"github.com/juju/juju/domain/export/types/v4_1_0"
 	"github.com/juju/juju/domain/modelimport/transformer"
-	"github.com/juju/juju/internal/errors"
 )
 
-// Deltas lists the tables whose schema changed between 4.0.11 and 4.1.0,
+// Deltas lists the tables whose schema changed between 4.0.12 and 4.1.0,
 // plus any new tables in the target that have no source counterpart.
 // Engineers implement this interface in deltas.go; the package will not
 // compile until every method has a receiver.
 type Deltas interface {
-	// Constraint: struct shape changed in 4.1.0.
-	Constraint(ctx context.Context, src []v4_0_11.Constraint) ([]v4_1_0.Constraint, error)
-	// RelationApplicationSetting: struct shape changed in 4.1.0.
-	RelationApplicationSetting(ctx context.Context, src []v4_0_11.RelationApplicationSetting) ([]v4_1_0.RelationApplicationSetting, error)
-	// RelationUnitSetting: struct shape changed in 4.1.0.
-	RelationUnitSetting(ctx context.Context, src []v4_0_11.RelationUnitSetting) ([]v4_1_0.RelationUnitSetting, error)
-	// MachineVirtualSshHostKey: new table in 4.1.0; derive from *v4_0_11.ModelExport.
-	MachineVirtualSshHostKey(ctx context.Context, src *v4_0_11.ModelExport) ([]v4_1_0.MachineVirtualSshHostKey, error)
-	// SshConnectionRequest: new table in 4.1.0; derive from *v4_0_11.ModelExport.
-	SshConnectionRequest(ctx context.Context, src *v4_0_11.ModelExport) ([]v4_1_0.SshConnectionRequest, error)
-	// SshConnectionRequestAddress: new table in 4.1.0; derive from *v4_0_11.ModelExport.
-	SshConnectionRequestAddress(ctx context.Context, src *v4_0_11.ModelExport) ([]v4_1_0.SshConnectionRequestAddress, error)
-	// SshKeyAlgorithmType: new table in 4.1.0; derive from *v4_0_11.ModelExport.
-	SshKeyAlgorithmType(ctx context.Context, src *v4_0_11.ModelExport) ([]v4_1_0.SshKeyAlgorithmType, error)
-	// UnitVirtualSshHostKey: new table in 4.1.0; derive from *v4_0_11.ModelExport.
-	UnitVirtualSshHostKey(ctx context.Context, src *v4_0_11.ModelExport) ([]v4_1_0.UnitVirtualSshHostKey, error)
 }
 
-// NewTransform returns a transformer.TransformationFunc that walks a 4.0.11 payload
+// NewTransform returns a transformer.TransformationFunc that walks a 4.0.12 payload
 // into a 4.1.0 payload. It applies identity copies for unchanged tables
 // and delegates changed/new tables to the supplied Deltas implementation.
-func NewTransform(d Deltas) transformer.TransformationFunc[v4_0_11.ModelExport, v4_1_0.ModelExport] {
-	return func(ctx context.Context, src v4_0_11.ModelExport) (v4_1_0.ModelExport, error) {
+func NewTransform(d Deltas) transformer.TransformationFunc[v4_0_12.ModelExport, v4_1_0.ModelExport] {
+	_ = d // unused while Deltas has no methods
+	return func(ctx context.Context, src v4_0_12.ModelExport) (v4_1_0.ModelExport, error) {
 		dst := v4_1_0.ModelExport{}
-
-		var err error
 
 		dst.AgentBinaryStore = make([]v4_1_0.AgentBinaryStore, len(src.AgentBinaryStore))
 		for i := range src.AgentBinaryStore {
@@ -406,6 +388,11 @@ func NewTransform(d Deltas) transformer.TransformationFunc[v4_0_11.ModelExport, 
 			dst.CharmTerm[i] = v4_1_0.CharmTerm(src.CharmTerm[i])
 		}
 
+		dst.Constraint = make([]v4_1_0.Constraint, len(src.Constraint))
+		for i := range src.Constraint {
+			dst.Constraint[i] = v4_1_0.Constraint(src.Constraint[i])
+		}
+
 		dst.ConstraintSpace = make([]v4_1_0.ConstraintSpace, len(src.ConstraintSpace))
 		for i := range src.ConstraintSpace {
 			dst.ConstraintSpace[i] = v4_1_0.ConstraintSpace(src.ConstraintSpace[i])
@@ -636,6 +623,11 @@ func NewTransform(d Deltas) transformer.TransformationFunc[v4_0_11.ModelExport, 
 			dst.MachineStatusValue[i] = v4_1_0.MachineStatusValue(src.MachineStatusValue[i])
 		}
 
+		dst.MachineVirtualSshHostKey = make([]v4_1_0.MachineVirtualSshHostKey, len(src.MachineVirtualSshHostKey))
+		for i := range src.MachineVirtualSshHostKey {
+			dst.MachineVirtualSshHostKey[i] = v4_1_0.MachineVirtualSshHostKey(src.MachineVirtualSshHostKey[i])
+		}
+
 		dst.MachineVolume = make([]v4_1_0.MachineVolume, len(src.MachineVolume))
 		for i := range src.MachineVolume {
 			dst.MachineVolume[i] = v4_1_0.MachineVolume(src.MachineVolume[i])
@@ -841,6 +833,11 @@ func NewTransform(d Deltas) transformer.TransformationFunc[v4_0_11.ModelExport, 
 			dst.Relation[i] = v4_1_0.Relation(src.Relation[i])
 		}
 
+		dst.RelationApplicationSetting = make([]v4_1_0.RelationApplicationSetting, len(src.RelationApplicationSetting))
+		for i := range src.RelationApplicationSetting {
+			dst.RelationApplicationSetting[i] = v4_1_0.RelationApplicationSetting(src.RelationApplicationSetting[i])
+		}
+
 		dst.RelationApplicationSettingsHash = make([]v4_1_0.RelationApplicationSettingsHash, len(src.RelationApplicationSettingsHash))
 		for i := range src.RelationApplicationSettingsHash {
 			dst.RelationApplicationSettingsHash[i] = v4_1_0.RelationApplicationSettingsHash(src.RelationApplicationSettingsHash[i])
@@ -874,6 +871,11 @@ func NewTransform(d Deltas) transformer.TransformationFunc[v4_0_11.ModelExport, 
 		dst.RelationUnit = make([]v4_1_0.RelationUnit, len(src.RelationUnit))
 		for i := range src.RelationUnit {
 			dst.RelationUnit[i] = v4_1_0.RelationUnit(src.RelationUnit[i])
+		}
+
+		dst.RelationUnitSetting = make([]v4_1_0.RelationUnitSetting, len(src.RelationUnitSetting))
+		for i := range src.RelationUnitSetting {
+			dst.RelationUnitSetting[i] = v4_1_0.RelationUnitSetting(src.RelationUnitSetting[i])
 		}
 
 		dst.RelationUnitSettingArchive = make([]v4_1_0.RelationUnitSettingArchive, len(src.RelationUnitSettingArchive))
@@ -1056,6 +1058,21 @@ func NewTransform(d Deltas) transformer.TransformationFunc[v4_0_11.ModelExport, 
 			dst.Space[i] = v4_1_0.Space(src.Space[i])
 		}
 
+		dst.SshConnectionRequest = make([]v4_1_0.SshConnectionRequest, len(src.SshConnectionRequest))
+		for i := range src.SshConnectionRequest {
+			dst.SshConnectionRequest[i] = v4_1_0.SshConnectionRequest(src.SshConnectionRequest[i])
+		}
+
+		dst.SshConnectionRequestAddress = make([]v4_1_0.SshConnectionRequestAddress, len(src.SshConnectionRequestAddress))
+		for i := range src.SshConnectionRequestAddress {
+			dst.SshConnectionRequestAddress[i] = v4_1_0.SshConnectionRequestAddress(src.SshConnectionRequestAddress[i])
+		}
+
+		dst.SshKeyAlgorithmType = make([]v4_1_0.SshKeyAlgorithmType, len(src.SshKeyAlgorithmType))
+		for i := range src.SshKeyAlgorithmType {
+			dst.SshKeyAlgorithmType[i] = v4_1_0.SshKeyAlgorithmType(src.SshKeyAlgorithmType[i])
+		}
+
 		dst.StorageAttachment = make([]v4_1_0.StorageAttachment, len(src.StorageAttachment))
 		for i := range src.StorageAttachment {
 			dst.StorageAttachment[i] = v4_1_0.StorageAttachment(src.StorageAttachment[i])
@@ -1226,6 +1243,11 @@ func NewTransform(d Deltas) transformer.TransformationFunc[v4_0_11.ModelExport, 
 			dst.UnitStorageDirective[i] = v4_1_0.UnitStorageDirective(src.UnitStorageDirective[i])
 		}
 
+		dst.UnitVirtualSshHostKey = make([]v4_1_0.UnitVirtualSshHostKey, len(src.UnitVirtualSshHostKey))
+		for i := range src.UnitVirtualSshHostKey {
+			dst.UnitVirtualSshHostKey[i] = v4_1_0.UnitVirtualSshHostKey(src.UnitVirtualSshHostKey[i])
+		}
+
 		dst.UnitWorkloadStatus = make([]v4_1_0.UnitWorkloadStatus, len(src.UnitWorkloadStatus))
 		for i := range src.UnitWorkloadStatus {
 			dst.UnitWorkloadStatus[i] = v4_1_0.UnitWorkloadStatus(src.UnitWorkloadStatus[i])
@@ -1244,38 +1266,6 @@ func NewTransform(d Deltas) transformer.TransformationFunc[v4_0_11.ModelExport, 
 		dst.WorkloadStatusValue = make([]v4_1_0.WorkloadStatusValue, len(src.WorkloadStatusValue))
 		for i := range src.WorkloadStatusValue {
 			dst.WorkloadStatusValue[i] = v4_1_0.WorkloadStatusValue(src.WorkloadStatusValue[i])
-		}
-
-		if dst.Constraint, err = d.Constraint(ctx, src.Constraint); err != nil {
-			return v4_1_0.ModelExport{}, errors.Errorf("Constraint delta: %w", err)
-		}
-
-		if dst.RelationApplicationSetting, err = d.RelationApplicationSetting(ctx, src.RelationApplicationSetting); err != nil {
-			return v4_1_0.ModelExport{}, errors.Errorf("RelationApplicationSetting delta: %w", err)
-		}
-
-		if dst.RelationUnitSetting, err = d.RelationUnitSetting(ctx, src.RelationUnitSetting); err != nil {
-			return v4_1_0.ModelExport{}, errors.Errorf("RelationUnitSetting delta: %w", err)
-		}
-
-		if dst.MachineVirtualSshHostKey, err = d.MachineVirtualSshHostKey(ctx, &src); err != nil {
-			return v4_1_0.ModelExport{}, errors.Errorf("MachineVirtualSshHostKey delta: %w", err)
-		}
-
-		if dst.SshConnectionRequest, err = d.SshConnectionRequest(ctx, &src); err != nil {
-			return v4_1_0.ModelExport{}, errors.Errorf("SshConnectionRequest delta: %w", err)
-		}
-
-		if dst.SshConnectionRequestAddress, err = d.SshConnectionRequestAddress(ctx, &src); err != nil {
-			return v4_1_0.ModelExport{}, errors.Errorf("SshConnectionRequestAddress delta: %w", err)
-		}
-
-		if dst.SshKeyAlgorithmType, err = d.SshKeyAlgorithmType(ctx, &src); err != nil {
-			return v4_1_0.ModelExport{}, errors.Errorf("SshKeyAlgorithmType delta: %w", err)
-		}
-
-		if dst.UnitVirtualSshHostKey, err = d.UnitVirtualSshHostKey(ctx, &src); err != nil {
-			return v4_1_0.ModelExport{}, errors.Errorf("UnitVirtualSshHostKey delta: %w", err)
 		}
 
 		return dst, nil

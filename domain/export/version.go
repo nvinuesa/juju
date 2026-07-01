@@ -16,7 +16,7 @@ import (
 // the version currently being worked on has not been released, the generation
 // can be run repeatedly for the same version.
 var exportVersionStrings = []string{
-	"4.0.11",
+	"4.0.12",
 	"4.1.0", // mutable, not released
 }
 
