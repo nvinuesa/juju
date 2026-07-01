@@ -1770,3 +1770,112 @@ func derefString(s *string) string {
 	}
 	return *s
 }
+
+// purgeModelTables are the model-scoped controller-DB tables PurgeExportedModel
+// clears before deleting the model row itself, mirroring
+// domain/removal/state/controller's removeBasicModelData.
+var purgeModelTables = []string{
+	"DELETE FROM model_namespace WHERE model_uuid = $modelUUIDArg.model_uuid",
+	"DELETE FROM model_secret_backend WHERE model_uuid = $modelUUIDArg.model_uuid",
+	"DELETE FROM secret_backend_reference WHERE model_uuid = $modelUUIDArg.model_uuid",
+	"DELETE FROM model_authorized_keys WHERE model_uuid = $modelUUIDArg.model_uuid",
+	"DELETE FROM model_last_login WHERE model_uuid = $modelUUIDArg.model_uuid",
+	"DELETE FROM model_migration_import WHERE model_uuid = $modelUUIDArg.model_uuid",
+}
+
+// PurgeExportedModel permanently removes the given model's controller-DB
+// bookkeeping: it marks the model dead, clears its model-scoped rows
+// (model_namespace, model_secret_backend, secret_backend_reference,
+// model_authorized_keys, model_last_login, model_migration_import) and
+// permission grants, deletes the model row itself, and removes its
+// namespace_list entry so the UUID can never be recreated. All of this runs
+// in a single transaction, so a mid-purge failure leaves the model
+// completely unchanged for a safe retry; a retry after the model row is
+// already gone is a no-op (deleting rows that don't exist matches no rows).
+//
+// This is REAP's source-side purge. It deliberately reimplements the safe
+// half of domain/removal's DeleteModel rather than calling it: that generic
+// path is gated on IsMigratingModel, which only ever queries
+// model_migration_import (a table populated exclusively on a TARGET
+// controller during import, and therefore always empty here). Calling it
+// from the source would fall through to its provider.Destroy(ctx) branch,
+// asking the cloud provider to terminate the model's instances -- exactly
+// wrong for REAP, since by this point those instances belong to the target
+// controller.
+//
+// Known simplification (see spec WS6.c for the full contract): this does not
+// delete the model's own dqlite database file, and it does not stage
+// model_migration_redirect for offline agents to be redirected to the
+// target on reconnect. It is enough to let a model be cleanly migrated from
+// one controller to another; it is not the full durable, crash-staged REAP.
+func (s *State) PurgeExportedModel(ctx context.Context, modelUUID string) error {
+	db, err := s.DB(ctx)
+	if err != nil {
+		return errors.Capture(err)
+	}
+
+	mUUID := modelUUIDArg{ModelUUID: modelUUID}
+
+	markDeadStmt, err := s.Prepare(`
+UPDATE model
+SET    life_id = 2
+WHERE  uuid = $modelUUIDArg.model_uuid
+	`, mUUID)
+	if err != nil {
+		return errors.Capture(err)
+	}
+
+	purgeStmts := make([]*sqlair.Statement, len(purgeModelTables))
+	for i, q := range purgeModelTables {
+		stmt, err := s.Prepare(q, mUUID)
+		if err != nil {
+			return errors.Capture(err)
+		}
+		purgeStmts[i] = stmt
+	}
+
+	deletePermissionsStmt, err := s.Prepare(`
+DELETE FROM permission
+WHERE grant_on = $modelUUIDArg.model_uuid
+	`, mUUID)
+	if err != nil {
+		return errors.Capture(err)
+	}
+
+	deleteModelStmt, err := s.Prepare(`
+DELETE FROM model
+WHERE uuid = $modelUUIDArg.model_uuid
+	`, mUUID)
+	if err != nil {
+		return errors.Capture(err)
+	}
+
+	deleteNamespaceListStmt, err := s.Prepare(`
+DELETE FROM namespace_list
+WHERE namespace = $modelUUIDArg.model_uuid
+	`, mUUID)
+	if err != nil {
+		return errors.Capture(err)
+	}
+
+	return db.Txn(ctx, func(ctx context.Context, tx *sqlair.TX) error {
+		if err := tx.Query(ctx, markDeadStmt, mUUID).Run(); err != nil {
+			return errors.Errorf("marking model %q dead: %w", modelUUID, err)
+		}
+		for i, stmt := range purgeStmts {
+			if err := tx.Query(ctx, stmt, mUUID).Run(); err != nil {
+				return errors.Errorf("purging table %q for model %q: %w", purgeModelTables[i], modelUUID, err)
+			}
+		}
+		if err := tx.Query(ctx, deletePermissionsStmt, mUUID).Run(); err != nil {
+			return errors.Errorf("deleting permissions for model %q: %w", modelUUID, err)
+		}
+		if err := tx.Query(ctx, deleteModelStmt, mUUID).Run(); err != nil {
+			return errors.Errorf("deleting model %q: %w", modelUUID, err)
+		}
+		if err := tx.Query(ctx, deleteNamespaceListStmt, mUUID).Run(); err != nil {
+			return errors.Errorf("deleting namespace list entry for model %q: %w", modelUUID, err)
+		}
+		return nil
+	})
+}

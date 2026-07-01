@@ -17,7 +17,7 @@ import (
 // can be run repeatedly for the same version.
 var exportVersionStrings = []string{
 	"4.0.4",
-	"4.0.6",
+	"4.0.12",
 }
 
 // ExportVersions lists each semantic version for which there is a new export

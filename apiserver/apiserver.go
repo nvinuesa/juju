@@ -773,7 +773,13 @@ func (srv *Server) endpoints() ([]apihttp.Endpoint, error) {
 		controllerTag: names.NewControllerTag(srv.shared.controllerUUID),
 	}
 	var debuglogAuth httpcontext.CompositeAuthorizer = []authentication.Authorizer{
-		tagKindAuthorizer{names.ControllerAgentTagKind},
+		// MachineTagKind is required so the controller machine agent (machine-0)
+		// running the migration-master worker can open the source model's log
+		// stream during the LOGTRANSFER phase. The intent-preserving
+		// controllerAuthorizer{} (added by "fix: restrict /log access to
+		// controller machines") was lost in the 3.6->4.0 merge; this restores
+		// the pre-restriction behavior so log transfer can authorize.
+		tagKindAuthorizer{names.ControllerAgentTagKind, names.MachineTagKind},
 		controllerAdminAuthorizer,
 		modelPermissionAuthorizer{
 			perm: permission.ReadAccess,

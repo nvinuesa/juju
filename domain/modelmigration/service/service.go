@@ -157,6 +157,12 @@ type ControllerState interface {
 	// client connection details used by the target controller to dial back
 	// during model activation.
 	GetSourceControllerInfo(ctx context.Context) (modelmigrationinternal.SourceControllerInfo, error)
+
+	// PurgeExportedModel permanently removes the given model's controller-DB
+	// bookkeeping (marks it dead, clears its model-scoped rows and
+	// permissions, deletes the model row, and removes its namespace_list
+	// entry) without ever touching the cloud provider.
+	PurgeExportedModel(ctx context.Context, modelUUID string) error
 }
 
 // ModelState defines the interface required for accessing the underlying state
@@ -608,10 +614,19 @@ func (s *Service) SetMigrationPhase(ctx context.Context, phase migration.Phase) 
 
 // MarkModelAsGone is called by the migration master during REAP, once the
 // target controller owns the model, to remove the migrated model from this
-// controller. It marks the active export migration as DONE.
+// controller. It purges the model's controller-DB bookkeeping (never
+// touching the cloud provider -- the underlying instances now belong to the
+// target), then marks the active export migration as DONE. The purge runs
+// first: model_migration_export does not FK to model(uuid), so recording
+// export history survives the model row's deletion.
 //
-// TODO(modelmigration): purge the migrated model from the source controller
-// and set up the durable login redirect before completing the export.
+// TODO(modelmigration): this is a minimal purge, not the full durable §6.2/
+// WS6.c contract: it does not delete the model's own dqlite database file,
+// it is not staged/crash-safe beyond ordinary single-transaction atomicity,
+// it does not set up the durable login redirect (model_migration_redirect)
+// so offline agents get redirected to the target on reconnect, and it does
+// not scrub target-auth secrets. Land the full contract before this is
+// production-safe.
 func (s *Service) MarkModelAsGone(ctx context.Context) error {
 	ctx, span := trace.Start(ctx, trace.NameFromFunc())
 	defer span.End()
@@ -619,6 +634,9 @@ func (s *Service) MarkModelAsGone(ctx context.Context) error {
 	mig, err := s.controllerState.GetActiveExport(ctx, s.modelUUID)
 	if err != nil {
 		return errors.Capture(err)
+	}
+	if err := s.controllerState.PurgeExportedModel(ctx, s.modelUUID); err != nil {
+		return errors.Errorf("purging source model %q: %w", s.modelUUID, err)
 	}
 	return s.controllerState.SetPhase(ctx, mig.UUID, migration.DONE)
 }

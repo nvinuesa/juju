@@ -132,6 +132,7 @@ type MockControllerStateMockRecorder struct {
 	namespaceForWatchExportExpects     []*gomock.Call0_1[string]
 	namespaceForWatchMinionSyncExpects []*gomock.Call0_1[string]
 	namespaceForWatchPhaseExpects      []*gomock.Call0_1[string]
+	purgeExportedModelExpects          []*gomock.Call2_1[context.Context, string, error]
 	setPhaseExpects                    []*gomock.Call3_1[context.Context, string, migration.Phase, error]
 	setStatusMessageExpects            []*gomock.Call3_1[context.Context, string, string, error]
 }
@@ -381,6 +382,24 @@ func (mr *MockControllerStateMockRecorder) NamespaceForWatchPhase() *MockControl
 
 // MockControllerStateNamespaceForWatchPhaseCall is the typed call wrapper for NamespaceForWatchPhase.
 type MockControllerStateNamespaceForWatchPhaseCall = gomock.Call0_1[string]
+
+// PurgeExportedModel mocks base method.
+func (m *MockControllerState) PurgeExportedModel(ctx context.Context, modelUUID string) error {
+	m.ctrl.T.Helper()
+	return gomock.Dispatch2_1(&m.recorder.purgeExportedModelExpects, m.ctrl, m, "PurgeExportedModel", ctx, modelUUID)
+}
+
+// PurgeExportedModel indicates an expected call of PurgeExportedModel.
+func (mr *MockControllerStateMockRecorder) PurgeExportedModel(ctx, modelUUID any) *MockControllerStatePurgeExportedModelCall {
+	mr.mock.ctrl.T.Helper()
+	call := gomock.NewCall2_1[context.Context, string, error](mr.mock.ctrl.T, mr.mock, "PurgeExportedModel", gomock.EnsureMatcher(ctx), gomock.EnsureMatcher(modelUUID))
+	mr.purgeExportedModelExpects = append(mr.purgeExportedModelExpects, call)
+	mr.mock.ctrl.Track(call.Call)
+	return call
+}
+
+// MockControllerStatePurgeExportedModelCall is the typed call wrapper for PurgeExportedModel.
+type MockControllerStatePurgeExportedModelCall = gomock.Call2_1[context.Context, string, error]
 
 // SetPhase mocks base method.
 func (m *MockControllerState) SetPhase(ctx context.Context, migrationUUID string, newPhase migration.Phase) error {

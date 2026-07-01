@@ -316,6 +316,67 @@ func (s *stateSuite) TestDeleteModelImportingStatusIdempotent(c *tc.C) {
 	c.Check(count, tc.Equals, 0)
 }
 
+// TestPurgeExportedModel asserts that PurgeExportedModel removes the model
+// row, its permission grants, and its namespace_list entry -- the
+// controller-DB bookkeeping REAP needs gone -- without ever touching
+// anything provider-related (this function has no provider dependency at
+// all, so there is nothing for it to call).
+func (s *stateSuite) TestPurgeExportedModel(c *tc.C) {
+	db := s.DB()
+	st := New(s.TxnRunnerFactory(), clock.WallClock)
+
+	var lifeID int
+	err := db.QueryRowContext(c.Context(),
+		"SELECT life_id FROM model WHERE uuid = ?", s.modelUUID).Scan(&lifeID)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(lifeID, tc.Equals, 0) // alive
+
+	var permCountBefore int
+	err = db.QueryRowContext(c.Context(),
+		"SELECT COUNT(*) FROM permission WHERE grant_on = ?", s.modelUUID).Scan(&permCountBefore)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(permCountBefore > 0, tc.IsTrue)
+
+	var namespaceCountBefore int
+	err = db.QueryRowContext(c.Context(),
+		"SELECT COUNT(*) FROM namespace_list WHERE namespace = ?", s.modelUUID).Scan(&namespaceCountBefore)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(namespaceCountBefore, tc.Equals, 1)
+
+	err = st.PurgeExportedModel(c.Context(), s.modelUUID.String())
+	c.Assert(err, tc.ErrorIsNil)
+
+	var modelCount int
+	err = db.QueryRowContext(c.Context(),
+		"SELECT COUNT(*) FROM model WHERE uuid = ?", s.modelUUID).Scan(&modelCount)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(modelCount, tc.Equals, 0)
+
+	var permCountAfter int
+	err = db.QueryRowContext(c.Context(),
+		"SELECT COUNT(*) FROM permission WHERE grant_on = ?", s.modelUUID).Scan(&permCountAfter)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(permCountAfter, tc.Equals, 0)
+
+	var namespaceCountAfter int
+	err = db.QueryRowContext(c.Context(),
+		"SELECT COUNT(*) FROM namespace_list WHERE namespace = ?", s.modelUUID).Scan(&namespaceCountAfter)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(namespaceCountAfter, tc.Equals, 0)
+}
+
+// TestPurgeExportedModelIdempotent asserts that purging an already-purged
+// model is a harmless no-op, matching the retry-safety contract REAP needs.
+func (s *stateSuite) TestPurgeExportedModelIdempotent(c *tc.C) {
+	st := New(s.TxnRunnerFactory(), clock.WallClock)
+
+	err := st.PurgeExportedModel(c.Context(), s.modelUUID.String())
+	c.Assert(err, tc.ErrorIsNil)
+
+	err = st.PurgeExportedModel(c.Context(), s.modelUUID.String())
+	c.Assert(err, tc.ErrorIsNil)
+}
+
 func (s *stateSuite) TestGetControllerTargetVersion(c *tc.C) {
 	st := New(s.TxnRunnerFactory(), clock.WallClock)
 

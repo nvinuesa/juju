@@ -706,6 +706,7 @@ func (s *serviceSuite) TestMarkModelAsGone(c *tc.C) {
 	gomock.InOrder(
 		s.controllerState.EXPECT().GetActiveExport(gomock.Any(), s.modelUUID).Return(
 			modelmigrationinternal.Migration{UUID: migUUID}, nil),
+		s.controllerState.EXPECT().PurgeExportedModel(gomock.Any(), s.modelUUID).Return(nil),
 		s.controllerState.EXPECT().SetPhase(gomock.Any(), migUUID, migration.DONE).Return(nil),
 	)
 
@@ -723,6 +724,23 @@ func (s *serviceSuite) TestMarkModelAsGoneNoActiveMigration(c *tc.C) {
 
 	err := s.service().MarkModelAsGone(c.Context())
 	c.Assert(err, tc.ErrorIs, modelmigrationerrors.ErrMigrationNotFound)
+}
+
+// TestMarkModelAsGonePurgeFails asserts that a failure to purge the source
+// model aborts before the migration is recorded as DONE, so a retry can try
+// the purge again.
+func (s *serviceSuite) TestMarkModelAsGonePurgeFails(c *tc.C) {
+	defer s.setupMocks(c).Finish()
+
+	migUUID := tc.Must(c, uuid.NewUUID).String()
+	gomock.InOrder(
+		s.controllerState.EXPECT().GetActiveExport(gomock.Any(), s.modelUUID).Return(
+			modelmigrationinternal.Migration{UUID: migUUID}, nil),
+		s.controllerState.EXPECT().PurgeExportedModel(gomock.Any(), s.modelUUID).Return(errors.New("boom")),
+	)
+
+	err := s.service().MarkModelAsGone(c.Context())
+	c.Assert(err, tc.ErrorMatches, ".*boom.*")
 }
 
 // TestSetMigrationStatusMessage asserts the message is recorded against the
