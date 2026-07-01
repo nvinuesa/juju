@@ -119,6 +119,12 @@ type ControllerState interface {
 	// model, or [modelmigrationerrors.ErrMigrationNotFound] if none exists.
 	GetActiveExport(ctx context.Context, modelUUID string) (modelmigrationinternal.Migration, error)
 
+	// GetMigrationStatus returns the latest migration status for a model
+	// using only safe columns (no credentials, addresses, or CA certs).
+	// Includes terminal migrations so callers can report the outcome of
+	// a completed or failed migration.
+	GetMigrationStatus(ctx context.Context, modelUUID string) (modelmigrationinternal.MigrationStatusInfo, error)
+
 	// GetActiveExportUUID returns the UUID of the active export migration for
 	// the model, or [modelmigrationerrors.ErrMigrationNotFound] if none exists.
 	GetActiveExportUUID(ctx context.Context, modelUUID string) (string, error)
@@ -349,6 +355,49 @@ func (s *Service) Migration(ctx context.Context) (modelmigration.Migration, erro
 		return modelmigration.Migration{}, errors.Capture(err)
 	}
 	return decodeMigration(mig)
+}
+
+// MigrationStatus returns the credential-free status of the latest migration
+// for this model. Unlike [Service.Migration], it does not return target
+// credentials, addresses, or CA certificates. If no migration has ever been
+// attempted for the model, a MigrationStatusInfo with phase [migration.NONE]
+// is returned.
+func (s *Service) MigrationStatus(ctx context.Context) (modelmigration.MigrationStatusInfo, error) {
+	return s.MigrationStatusForModel(ctx, s.modelUUID)
+}
+
+// MigrationStatusForModel returns the credential-free status of the latest
+// migration for the given model UUID. Unlike [Service.MigrationStatus], this
+// method takes an explicit model UUID so it can be called from a
+// controller-scoped service context where s.modelUUID is the controller
+// model, not the user's model. If no migration has ever been attempted for
+// the model, a MigrationStatusInfo with phase [migration.NONE] is returned.
+func (s *Service) MigrationStatusForModel(ctx context.Context, modelUUID string) (modelmigration.MigrationStatusInfo, error) {
+	ctx, span := trace.Start(ctx, trace.NameFromFunc())
+	defer span.End()
+
+	info, err := s.controllerState.GetMigrationStatus(ctx, modelUUID)
+	if errors.Is(err, modelmigrationerrors.ErrMigrationNotFound) {
+		return modelmigration.MigrationStatusInfo{Phase: migration.NONE}, nil
+	} else if err != nil {
+		return modelmigration.MigrationStatusInfo{}, errors.Capture(err)
+	}
+
+	phase, err := migration.PhaseFromPersistedID(info.PhaseID)
+	if err != nil {
+		return modelmigration.MigrationStatusInfo{}, errors.Capture(err)
+	}
+
+	return modelmigration.MigrationStatusInfo{
+		MigrationUUID:         info.MigrationUUID,
+		Phase:                 phase,
+		PhaseChangedTime:      info.UpdatedAt,
+		StartTime:             info.StartTime,
+		StatusMessage:         info.StatusMessage,
+		StatusMessageTime:     info.StatusMessageRecordedAt,
+		TargetControllerUUID:  info.TargetControllerUUID,
+		TargetControllerAlias: info.TargetControllerAlias,
+	}, nil
 }
 
 // GetControllerModelInfo reads the controller-database records scoped to this

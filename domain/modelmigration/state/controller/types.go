@@ -66,6 +66,23 @@ type migrationStatus struct {
 	RecordedAt    time.Time `db:"recorded_at"`
 }
 
+// migrationStatusView is the safe-column projection for the read-only
+// migration status path. It deliberately does not include target credentials,
+// addresses, or CA certificates. Those are never queried by
+// [State.GetMigrationStatus].
+type migrationStatusView struct {
+	MigrationUUID           string    `db:"uuid"`
+	ModelUUID                string    `db:"model_uuid"`
+	PhaseID                  int       `db:"current_phase_id"`
+	UpdatedAt                time.Time `db:"updated_at"`
+	StartTime                time.Time `db:"start_time"`
+	PhaseName                string    `db:"phase_name"`
+	StatusMessage            string    `db:"status_message"`
+	StatusMessageRecordedAt  *time.Time `db:"status_recorded_at"`
+	TargetControllerUUID     string    `db:"target_controller_uuid"`
+	TargetControllerAlias    *string   `db:"target_controller_alias"`
+}
+
 // migrationMinionSync maps a model_migration_export_minion_sync row.
 type migrationMinionSync struct {
 	MigrationUUID string    `db:"migration_uuid"`

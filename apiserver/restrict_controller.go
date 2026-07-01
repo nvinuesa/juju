@@ -19,6 +19,7 @@ var controllerFacadeNames = set.NewStrings(
 	"Cloud",
 	"Controller",
 	"CrossController",
+	"MigrationStatus",
 	"MigrationTarget",
 	"ModelManager",
 	"ModelSummaryWatcher",

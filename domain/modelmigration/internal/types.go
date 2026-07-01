@@ -40,6 +40,24 @@ type Migration struct {
 	Target           TargetInfo
 }
 
+// MigrationStatusInfo is the safe, credential-free status snapshot for the
+// read-only migration status path. It is returned by GetMigrationStatus and
+// intentionally does not include target addresses, CA certificates, passwords,
+// macaroons, or tokens. Those columns are never queried by the status read
+// path.
+type MigrationStatusInfo struct {
+	MigrationUUID           string
+	ModelUUID               string
+	PhaseID                 int
+	PhaseName               string
+	UpdatedAt               time.Time
+	StartTime               time.Time
+	StatusMessage           string
+	StatusMessageRecordedAt time.Time
+	TargetControllerUUID    string
+	TargetControllerAlias   string
+}
+
 // TargetInfo carries target connection details as persisted by state.
 type TargetInfo struct {
 	ControllerUUID  string

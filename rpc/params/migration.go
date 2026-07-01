@@ -425,6 +425,37 @@ type MasterMigrationStatus struct {
 	PhaseChangedTime time.Time     `json:"phase-changed-time"`
 }
 
+// MigrationStatusResult is the credential-free migration status returned to
+// CLI clients by the MigrationStatus facade. It intentionally does not carry
+// target controller addresses, CA certificates, passwords, macaroons, or
+// tokens.
+type MigrationStatusResult struct {
+	// MigrationId is the unique identifier of the migration.
+	MigrationId string `json:"migration-id"`
+
+	// Phase is the current migration phase name (e.g. "IMPORT", "DONE").
+	Phase string `json:"phase"`
+
+	// PhaseChangedTime is when the migration entered the current phase.
+	PhaseChangedTime time.Time `json:"phase-changed-time"`
+
+	// StartTime is when the migration was initiated.
+	StartTime time.Time `json:"start-time"`
+
+	// StatusMessage is the last human-readable progress message set by
+	// the migrationmaster worker.
+	StatusMessage string `json:"status-message,omitempty"`
+
+	// StatusMessageTime is when the status message was recorded.
+	StatusMessageTime time.Time `json:"status-message-time,omitempty"`
+
+	// TargetControllerUUID is the UUID of the target controller.
+	TargetControllerUUID string `json:"target-controller-uuid"`
+
+	// TargetControllerAlias is the alias of the target controller.
+	TargetControllerAlias string `json:"target-controller-alias,omitempty"`
+}
+
 // MigrationModelInfo is used to report basic model information to the
 // migrationmaster worker.
 type MigrationModelInfo struct {

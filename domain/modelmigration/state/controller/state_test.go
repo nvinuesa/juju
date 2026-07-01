@@ -724,6 +724,41 @@ func (s *stateSuite) TestSetPhaseFullSuccessCycle(c *tc.C) {
 	c.Assert(err, tc.ErrorIs, modelmigrationerrors.ErrMigrationNotFound)
 }
 
+// TestGetMigrationStatus asserts the read-only status projection joins the
+// phase name, status message, and target controller alias correctly.
+func (s *stateSuite) TestGetMigrationStatus(c *tc.C) {
+	st := New(s.TxnRunnerFactory(), clock.WallClock)
+
+	spec := s.newMigrationSpec()
+	err := st.InsertExport(c.Context(), spec)
+	c.Assert(err, tc.ErrorIsNil)
+
+	err = st.SetPhase(c.Context(), spec.MigrationUUID, migration.IMPORT)
+	c.Assert(err, tc.ErrorIsNil)
+
+	err = st.SetStatusMessage(c.Context(), spec.MigrationUUID, "transferring model data")
+	c.Assert(err, tc.ErrorIsNil)
+
+	status, err := st.GetMigrationStatus(c.Context(), s.modelUUID.String())
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(status.MigrationUUID, tc.Equals, spec.MigrationUUID)
+	c.Check(status.ModelUUID, tc.Equals, s.modelUUID.String())
+	c.Check(status.PhaseID, tc.Equals, 2)
+	c.Check(status.PhaseName, tc.Equals, "import")
+	c.Check(status.StatusMessage, tc.Equals, "transferring model data")
+	c.Check(status.TargetControllerUUID, tc.Equals, spec.TargetControllerUUID)
+	c.Check(status.TargetControllerAlias, tc.Equals, "target-controller")
+}
+
+// TestGetMigrationStatusNotFound asserts a missing export is reported as
+// [modelmigrationerrors.ErrMigrationNotFound].
+func (s *stateSuite) TestGetMigrationStatusNotFound(c *tc.C) {
+	st := New(s.TxnRunnerFactory(), clock.WallClock)
+
+	_, err := st.GetMigrationStatus(c.Context(), s.modelUUID.String())
+	c.Assert(err, tc.ErrorIs, modelmigrationerrors.ErrMigrationNotFound)
+}
+
 // TestSetStatusMessage asserts the current status message is updated in place.
 func (s *stateSuite) TestSetStatusMessage(c *tc.C) {
 	db := s.DB()

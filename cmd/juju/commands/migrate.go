@@ -75,7 +75,7 @@ for details of how to do this.
 
 The ` + "`migrate`" + ` command only starts a model migration -- it does not wait
 for its completion. The progress of a migration can be tracked using
-the ` + "`status`" + ` command and by consulting the logs.
+the ` + "`migration-status`" + ` command and by consulting the logs.
 
 Once the migration is complete, the model's machine and unit agents
 will be connected to the new controller. The model will no longer be
@@ -97,6 +97,7 @@ func (c *migrateCommand) Info() *cmd.Info {
 		SeeAlso: []string{
 			"login",
 			"controllers",
+			"migration-status",
 			"status",
 		},
 	})

@@ -535,6 +535,76 @@ WHERE  controller_uuid = $entityUUID.uuid
 	}, nil
 }
 
+// GetMigrationStatus returns the latest migration status for a model using
+// only safe columns. It never reads target credentials, addresses, or CA
+// certificates — only the phase, timestamps, status message, target
+// controller UUID and alias. The query includes terminal migrations so the
+// caller can report the outcome of a completed or failed migration.
+//
+// If no migration has ever been attempted for the model,
+// [modelmigrationerrors.ErrMigrationNotFound] is returned.
+func (s *State) GetMigrationStatus(ctx context.Context, modelUUID string) (modelmigrationinternal.MigrationStatusInfo, error) {
+	db, err := s.DB(ctx)
+	if err != nil {
+		return modelmigrationinternal.MigrationStatusInfo{}, errors.Capture(err)
+	}
+
+	mUUID := modelUUIDArg{ModelUUID: modelUUID}
+
+	selectStmt, err := s.Prepare(`
+SELECT e.uuid                  AS &migrationStatusView.uuid,
+       e.model_uuid             AS &migrationStatusView.model_uuid,
+       e.current_phase_id       AS &migrationStatusView.current_phase_id,
+       e.updated_at             AS &migrationStatusView.updated_at,
+       e.start_time             AS &migrationStatusView.start_time,
+       p.name                   AS &migrationStatusView.phase_name,
+       st.message               AS &migrationStatusView.status_message,
+       st.recorded_at           AS &migrationStatusView.status_recorded_at,
+       e.target_controller_uuid AS &migrationStatusView.target_controller_uuid,
+       ec.alias                 AS &migrationStatusView.target_controller_alias
+FROM   model_migration_export AS e
+JOIN   model_migration_phase AS p ON p.id = e.current_phase_id
+LEFT JOIN model_migration_export_status AS st ON st.migration_uuid = e.uuid
+LEFT JOIN external_controller AS ec ON ec.uuid = e.target_controller_uuid
+WHERE  e.model_uuid = $modelUUIDArg.model_uuid
+ORDER BY e.updated_at DESC
+LIMIT 1
+`, mUUID, migrationStatusView{})
+	if err != nil {
+		return modelmigrationinternal.MigrationStatusInfo{}, errors.Capture(err)
+	}
+
+	var view migrationStatusView
+	err = db.Txn(ctx, func(ctx context.Context, tx *sqlair.TX) error {
+		err := tx.Query(ctx, selectStmt, mUUID).Get(&view)
+		if errors.Is(err, sqlair.ErrNoRows) {
+			return errors.Errorf("no migration for model %q: %w", modelUUID, modelmigrationerrors.ErrMigrationNotFound)
+		}
+		return errors.Capture(err)
+	})
+	if err != nil {
+		return modelmigrationinternal.MigrationStatusInfo{}, errors.Capture(err)
+	}
+
+	result := modelmigrationinternal.MigrationStatusInfo{
+		MigrationUUID:        view.MigrationUUID,
+		ModelUUID:            view.ModelUUID,
+		PhaseID:              view.PhaseID,
+		PhaseName:            view.PhaseName,
+		UpdatedAt:            view.UpdatedAt,
+		StartTime:            view.StartTime,
+		StatusMessage:        view.StatusMessage,
+		TargetControllerUUID: view.TargetControllerUUID,
+	}
+	if view.TargetControllerAlias != nil {
+		result.TargetControllerAlias = *view.TargetControllerAlias
+	}
+	if view.StatusMessageRecordedAt != nil {
+		result.StatusMessageRecordedAt = *view.StatusMessageRecordedAt
+	}
+	return result, nil
+}
+
 // SetPhase transitions the export migration to a new phase. The transition is
 // validated against [migration.Phase.CanTransitionTo] inside the transaction
 // and applied with optimistic locking on the previously-observed phase, so a

@@ -426,6 +426,7 @@ func registerCommands(r commandRegistry) {
 	r.Register(model.NewModelCredentialCommand())
 
 	r.Register(newMigrateCommand())
+	r.Register(newMigrationStatusCommand())
 	r.Register(model.NewExportBundleCommand())
 
 	if featureflag.Enabled(featureflag.DeveloperMode) {

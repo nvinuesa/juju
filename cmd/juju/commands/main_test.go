@@ -292,6 +292,7 @@ var commandNames = []string{
 	"logout",
 	"machines",
 	"migrate",
+	"migration-status",
 	"model-config",
 	"model-constraints",
 	"model-default",

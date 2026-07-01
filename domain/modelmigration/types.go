@@ -50,6 +50,21 @@ type Migration struct {
 	Target           migration.TargetInfo
 }
 
+// MigrationStatusInfo is the credential-free status snapshot for the read-only
+// migration status path. It is returned by [Service.MigrationStatus] and
+// intentionally does not include target addresses, CA certificates,
+// passwords, macaroons, or tokens.
+type MigrationStatusInfo struct {
+	MigrationUUID         string
+	Phase                 migration.Phase
+	PhaseChangedTime      time.Time
+	StartTime             time.Time
+	StatusMessage         string
+	StatusMessageTime     time.Time
+	TargetControllerUUID  string
+	TargetControllerAlias string
+}
+
 // ControllerModelInfo aggregates the controller-database records scoped to a
 // single migrating model, in target-portable semantic form. Source-local
 // integer IDs and un-translated source UUID foreign keys are never present:

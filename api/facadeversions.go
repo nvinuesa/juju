@@ -75,6 +75,7 @@ var facadeVersions = facades.FacadeVersions{
 	"MigrationFlag":          {1},
 	"MigrationMaster":        {4, 5},
 	"MigrationMinion":        {1},
+	"MigrationStatus":        {1},
 	"MigrationStatusWatcher": {1},
 	// Note that this version of Juju does not register version 8 of the
 	// MigrationTarget facade; it is the SerializedModelV2 import facade
