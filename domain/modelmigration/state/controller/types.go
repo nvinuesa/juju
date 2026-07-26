@@ -376,6 +376,12 @@ type importOfferArg struct {
 	OfferUUID     string `db:"offer_uuid"`
 }
 
+// importClaimUUID holds a model_migration_import claim UUID, for callers that
+// know only the model UUID and must resolve the claim it holds.
+type importClaimUUID struct {
+	UUID string `db:"uuid"`
+}
+
 // migrationExportOffer maps a model_migration_export_offer row, capturing the
 // UUIDs of offers hosted by the source model before its DB is purged.
 type migrationExportOffer struct {

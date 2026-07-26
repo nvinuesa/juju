@@ -95,6 +95,29 @@ func (s *Service) ImportOfferPermissions(
 	return s.controllerState.ImportOfferPermissions(ctx, modelUUID.String(), claimUUID, offerUUIDs)
 }
 
+// RecordImportedOffers records offer UUIDs against whichever import claim the
+// model currently holds, resolving the claim UUID itself.
+//
+// This is the legacy (v4-v7) import path's equivalent of
+// [Service.ImportOfferPermissions]: that path never learns its claim UUID,
+// because the claim is created deep inside model creation. Both paths must
+// record their offers, because offer permissions are granted on the offer UUID
+// and nothing else in the controller database links an offer to its model - so
+// an aborted import that skipped this would leave its offer-permission rows
+// behind unreachable.
+func (s *Service) RecordImportedOffers(
+	ctx context.Context, modelUUID coremodel.UUID, offerUUIDs []string,
+) error {
+	ctx, span := trace.Start(ctx, trace.NameFromFunc())
+	defer span.End()
+
+	if err := modelUUID.Validate(); err != nil {
+		return errors.Errorf("validating model uuid: %w", err)
+	}
+
+	return s.controllerState.RecordImportedOffers(ctx, modelUUID.String(), offerUUIDs)
+}
+
 // GetImportedOfferUUIDs returns the offer UUIDs recorded in
 // model_migration_import_offer for the import claim of the given model.
 // Returns nil (not an error) when no offer rows exist. Used by abort

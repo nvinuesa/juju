@@ -125,6 +125,53 @@ func (s *stateSuite) TestImportOfferPermissions(c *tc.C) {
 	c.Assert(err, tc.ErrorIs, modelmigrationerrors.ErrImportNotImporting)
 }
 
+// TestRecordImportedOffers verifies that the legacy import path can record its
+// offers knowing only the model UUID, that re-recording is idempotent, and that
+// the write is fenced by the claim phase like every other import write.
+//
+// The legacy path never learns its claim UUID - the claim is created deep
+// inside model creation - so it needs this claim-resolving entry point. Without
+// it, an aborted legacy import would leave offer-scoped permission rows behind
+// unreachable: they are granted on the offer UUID, and the offers live in the
+// model database that abort drops.
+func (s *stateSuite) TestRecordImportedOffers(c *tc.C) {
+	st := New(s.TxnRunnerFactory(), clock.WallClock)
+
+	claimUUID := uuid.MustNewUUID().String()
+	_, err := st.BeginImport(c.Context(), s.modelUUID.String(), claimUUID, uuid.MustNewUUID().String())
+	c.Assert(err, tc.ErrorIsNil)
+
+	offerUUID1 := uuid.MustNewUUID().String()
+	offerUUID2 := uuid.MustNewUUID().String()
+	err = st.RecordImportedOffers(c.Context(), s.modelUUID.String(), []string{offerUUID1, offerUUID2})
+	c.Assert(err, tc.ErrorIsNil)
+
+	// The rows are attached to the claim the model already holds, so abort
+	// compensation finds them by model UUID alone.
+	recorded, err := st.GetImportedOfferUUIDs(c.Context(), s.modelUUID.String())
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(recorded, tc.SameContents, []string{offerUUID1, offerUUID2})
+
+	// Idempotent: a retried import must not fail on the unique key.
+	err = st.RecordImportedOffers(c.Context(), s.modelUUID.String(), []string{offerUUID1, offerUUID2})
+	c.Assert(err, tc.ErrorIsNil)
+	recorded, err = st.GetImportedOfferUUIDs(c.Context(), s.modelUUID.String())
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(recorded, tc.HasLen, 2)
+
+	// No offers is a no-op, not an error.
+	err = st.RecordImportedOffers(c.Context(), s.modelUUID.String(), nil)
+	c.Assert(err, tc.ErrorIsNil)
+
+	// Fenced like every other import write.
+	_, err = s.DB().ExecContext(c.Context(),
+		"UPDATE model_migration_import SET phase_type_id = 2 WHERE uuid = ?", claimUUID)
+	c.Assert(err, tc.ErrorIsNil)
+
+	err = st.RecordImportedOffers(c.Context(), s.modelUUID.String(), []string{uuid.MustNewUUID().String()})
+	c.Assert(err, tc.ErrorIs, modelmigrationerrors.ErrImportNotImporting)
+}
+
 // TestEnsureExternalControllerExists verifies insert-if-absent,
 // no-op-if-identical and fail-on-mismatch semantics.
 func (s *stateSuite) TestEnsureExternalControllerExists(c *tc.C) {

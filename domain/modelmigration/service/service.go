@@ -200,6 +200,10 @@ type ControllerState interface {
 	// importing-phase assertion for modelUUID.
 	ImportOfferPermissions(ctx context.Context, modelUUID, claimUUID string, offerUUIDs []string) error
 
+	// RecordImportedOffers records offer UUIDs against whichever import claim
+	// the model currently holds, resolving the claim UUID itself.
+	RecordImportedOffers(ctx context.Context, modelUUID string, offerUUIDs []string) error
+
 	// EnsureExternalControllerExists compares-or-inserts a single third-party
 	// controller's connection details, failing with
 	// [modelmigrationerrors.ErrExternalControllerMismatch] on a mismatch

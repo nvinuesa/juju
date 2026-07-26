@@ -25,6 +25,7 @@ import (
 	modelagent "github.com/juju/juju/domain/modelagent/modelmigration"
 	modelconfig "github.com/juju/juju/domain/modelconfig/modelmigration"
 	modelconfigservice "github.com/juju/juju/domain/modelconfig/service"
+	migration "github.com/juju/juju/domain/modelmigration/modelmigration"
 	network "github.com/juju/juju/domain/network/modelmigration"
 	operation "github.com/juju/juju/domain/operation/modelmigration"
 	port "github.com/juju/juju/domain/port/modelmigration"
@@ -98,6 +99,9 @@ func ImportOperations(
 	crossmodelrelation.RegisterImport(coordinator, clock, logger.Child("crossmodelrelation"))
 	relation.RegisterImport(coordinator, clock, logger.Child("relation"))
 	access.RegisterOfferAccessImport(coordinator, clock, logger.Child("offeraccess"))
+	// Must follow the offer access import: the ledger records the offers whose
+	// permission rows were just written, so an abort can find them again.
+	migration.RegisterImportOfferLedger(coordinator, clock, logger.Child("offerledger"))
 	status.RegisterImport(coordinator, clock, logger.Child("status"))
 	resource.RegisterImport(coordinator, clock, logger.Child("resource"))
 	port.RegisterImport(coordinator, logger.Child("port"))

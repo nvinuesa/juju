@@ -151,6 +151,7 @@ type MockControllerStateMockRecorder struct {
 	namespaceForWatchImportClaimExpects      []*gomock.Call0_1[string]
 	namespaceForWatchMinionSyncExpects       []*gomock.Call0_1[string]
 	namespaceForWatchPhaseExpects            []*gomock.Call0_1[string]
+	recordImportedOffersExpects              []*gomock.Call3_1[context.Context, string, []string, error]
 	secretBackendExistsExpects               []*gomock.Call2_2[context.Context, string, bool, error]
 	setImportPhaseActivatingExpects          []*gomock.Call2_1[context.Context, string, error]
 	setPhaseExpects                          []*gomock.Call3_1[context.Context, string, migration.Phase, error]
@@ -727,6 +728,24 @@ func (mr *MockControllerStateMockRecorder) NamespaceForWatchPhase() *MockControl
 
 // MockControllerStateNamespaceForWatchPhaseCall is the typed call wrapper for NamespaceForWatchPhase.
 type MockControllerStateNamespaceForWatchPhaseCall = gomock.Call0_1[string]
+
+// RecordImportedOffers mocks base method.
+func (m *MockControllerState) RecordImportedOffers(ctx context.Context, modelUUID string, offerUUIDs []string) error {
+	m.ctrl.T.Helper()
+	return gomock.Dispatch3_1(&m.recorder.recordImportedOffersExpects, m.ctrl, m, "RecordImportedOffers", ctx, modelUUID, offerUUIDs)
+}
+
+// RecordImportedOffers indicates an expected call of RecordImportedOffers.
+func (mr *MockControllerStateMockRecorder) RecordImportedOffers(ctx, modelUUID, offerUUIDs any) *MockControllerStateRecordImportedOffersCall {
+	mr.mock.ctrl.T.Helper()
+	call := gomock.NewCall3_1[context.Context, string, []string, error](mr.mock.ctrl.T, mr.mock, "RecordImportedOffers", gomock.EnsureMatcher(ctx), gomock.EnsureMatcher(modelUUID), gomock.EnsureMatcher(offerUUIDs))
+	mr.recordImportedOffersExpects = append(mr.recordImportedOffersExpects, call)
+	mr.mock.ctrl.Track(call.Call)
+	return call
+}
+
+// MockControllerStateRecordImportedOffersCall is the typed call wrapper for RecordImportedOffers.
+type MockControllerStateRecordImportedOffersCall = gomock.Call3_1[context.Context, string, []string, error]
 
 // SecretBackendExists mocks base method.
 func (m *MockControllerState) SecretBackendExists(ctx context.Context, name string) (bool, error) {

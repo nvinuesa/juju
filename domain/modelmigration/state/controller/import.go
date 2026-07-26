@@ -182,6 +182,69 @@ VALUES ($importOfferArg.migration_uuid, $importOfferArg.offer_uuid)
 	})
 }
 
+// RecordImportedOffers records offer UUIDs into model_migration_import_offer
+// for whichever import claim the model currently holds, resolving the claim
+// UUID itself.
+//
+// This is the entry point for the legacy (v4-v7) import path, which does not
+// carry the claim UUID around the way the v8 path does: the legacy claim is
+// created deep inside model creation, and its UUID is never surfaced to the
+// import operations.
+//
+// Recording the offers matters because offer permissions are granted on the
+// *offer* UUID, not the model UUID. Nothing else in the controller database
+// links an offer back to its model - the offers themselves live in the model
+// database, which abort drops - so without this ledger an aborted import
+// leaves its offer-permission rows behind with no way to find them.
+//
+// It is idempotent: re-recording the same offers for the same claim is a no-op.
+func (s *State) RecordImportedOffers(ctx context.Context, modelUUID string, offerUUIDs []string) error {
+	if len(offerUUIDs) == 0 {
+		return nil
+	}
+
+	db, err := s.DB(ctx)
+	if err != nil {
+		return errors.Capture(err)
+	}
+
+	arg := modelUUIDArg{ModelUUID: modelUUID}
+	claimStmt, err := s.Prepare(`
+SELECT uuid AS &importClaimUUID.uuid
+FROM   model_migration_import
+WHERE  model_uuid = $modelUUIDArg.model_uuid
+`, importClaimUUID{}, arg)
+	if err != nil {
+		return errors.Capture(err)
+	}
+	insertStmt, err := s.Prepare(`
+INSERT INTO model_migration_import_offer (migration_uuid, offer_uuid)
+VALUES ($importOfferArg.migration_uuid, $importOfferArg.offer_uuid)
+ON CONFLICT (migration_uuid, offer_uuid) DO NOTHING
+`, importOfferArg{})
+	if err != nil {
+		return errors.Capture(err)
+	}
+
+	return db.Txn(ctx, func(ctx context.Context, tx *sqlair.TX) error {
+		if err := s.ensureImportingState(ctx, tx, modelUUID); err != nil {
+			return errors.Capture(err)
+		}
+		var claim importClaimUUID
+		if err := tx.Query(ctx, claimStmt, arg).Get(&claim); err != nil {
+			return errors.Errorf("resolving import claim for model %q: %w", modelUUID, err)
+		}
+		args := make([]importOfferArg, len(offerUUIDs))
+		for i, offerUUID := range offerUUIDs {
+			args[i] = importOfferArg{MigrationUUID: claim.UUID, OfferUUID: offerUUID}
+		}
+		if err := tx.Query(ctx, insertStmt, args).Run(); err != nil {
+			return errors.Errorf("recording import offers for model %q: %w", modelUUID, err)
+		}
+		return nil
+	})
+}
+
 // GetImportedOfferUUIDs returns the offer UUIDs recorded in
 // model_migration_import_offer for the import claim of the given model. It
 // returns nil (not an error) when no offer rows exist. Used by abort
