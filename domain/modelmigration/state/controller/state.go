@@ -953,13 +953,13 @@ INSERT INTO model_migration_export_phase (*) VALUES ($migrationPhaseEntry.*)
 	})
 }
 
-// GetMigrationMode derives the migration mode for the model: exporting if it
-// has an active export migration, importing if a target import claim exists,
-// otherwise none.
-func (s *State) GetMigrationMode(ctx context.Context, modelUUID string) (modelmigration.MigrationMode, error) {
+// GetMigrationActivity reports whether the model has an active export
+// migration and whether it has a target-side import claim, both read in one
+// transaction so the pair cannot be a stale mix of the two sides.
+func (s *State) GetMigrationActivity(ctx context.Context, modelUUID string) (modelmigration.MigrationActivity, error) {
 	db, err := s.DB(ctx)
 	if err != nil {
-		return modelmigration.MigrationModeNone, errors.Capture(err)
+		return modelmigration.MigrationActivity{}, errors.Capture(err)
 	}
 
 	mUUID := modelUUIDArg{ModelUUID: modelUUID}
@@ -974,7 +974,7 @@ AND    current_phase_id NOT IN (
        $terminalPhaseIDArgs.abort_done_id)
 `, mUUID, terminalIDs, countResult{})
 	if err != nil {
-		return modelmigration.MigrationModeNone, errors.Capture(err)
+		return modelmigration.MigrationActivity{}, errors.Capture(err)
 	}
 	importStmt, err := s.Prepare(`
 SELECT COUNT(*) AS &countResult.count
@@ -982,34 +982,50 @@ FROM   model_migration_import
 WHERE  model_uuid = $modelUUIDArg.model_uuid
 `, mUUID, countResult{})
 	if err != nil {
-		return modelmigration.MigrationModeNone, errors.Capture(err)
+		return modelmigration.MigrationActivity{}, errors.Capture(err)
 	}
 
-	var mode modelmigration.MigrationMode
+	var activity modelmigration.MigrationActivity
 	err = db.Txn(ctx, func(ctx context.Context, tx *sqlair.TX) error {
 		var exportCount countResult
 		if err := tx.Query(ctx, exportStmt, mUUID, terminalIDs).Get(&exportCount); err != nil {
 			return errors.Errorf("counting active exports for model %q: %w", modelUUID, err)
 		}
-		if exportCount.Count > 0 {
-			mode = modelmigration.MigrationModeExporting
-			return nil
-		}
 		var importCount countResult
 		if err := tx.Query(ctx, importStmt, mUUID).Get(&importCount); err != nil {
 			return errors.Errorf("counting imports for model %q: %w", modelUUID, err)
 		}
-		if importCount.Count > 0 {
-			mode = modelmigration.MigrationModeImporting
-			return nil
+		activity = modelmigration.MigrationActivity{
+			Exporting: exportCount.Count > 0,
+			Importing: importCount.Count > 0,
 		}
-		mode = modelmigration.MigrationModeNone
 		return nil
 	})
 	if err != nil {
+		return modelmigration.MigrationActivity{}, errors.Capture(err)
+	}
+	return activity, nil
+}
+
+// GetMigrationMode derives the migration mode for the model: exporting if it
+// has an active export migration, importing if a target import claim exists,
+// otherwise none.
+//
+// Exporting wins when both are somehow present. Callers that must not resolve
+// that ambiguity silently should use [State.GetMigrationActivity] instead.
+func (s *State) GetMigrationMode(ctx context.Context, modelUUID string) (modelmigration.MigrationMode, error) {
+	activity, err := s.GetMigrationActivity(ctx, modelUUID)
+	if err != nil {
 		return modelmigration.MigrationModeNone, errors.Capture(err)
 	}
-	return mode, nil
+	switch {
+	case activity.Exporting:
+		return modelmigration.MigrationModeExporting, nil
+	case activity.Importing:
+		return modelmigration.MigrationModeImporting, nil
+	default:
+		return modelmigration.MigrationModeNone, nil
+	}
 }
 
 // addressesMatch reports whether the persisted addresses equal the supplied

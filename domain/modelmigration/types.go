@@ -45,6 +45,39 @@ const (
 	MigrationModeImporting = MigrationMode("importing")
 )
 
+// MigrationActivity reports what a model is doing with respect to migration in
+// both directions at once, read in a single transaction.
+//
+// [MigrationMode] collapses this to one value, resolving exporting first. That
+// is the right answer for callers that just need a mode, but it cannot express
+// "both", so a caller that must not silently pick one by query order - the
+// migration master, which owns the model's fortress and would otherwise have to
+// guess whether it is the source or the target - needs the pair.
+type MigrationActivity struct {
+	// Exporting reports whether the model has a non-terminal export migration,
+	// meaning this controller is the source.
+	Exporting bool
+
+	// Importing reports whether the model has a target-side import claim in any
+	// phase, meaning this controller is the target and the model is not yet
+	// usable.
+	Importing bool
+}
+
+// Migrating reports whether the model is involved in a migration at all, in
+// either direction.
+func (a MigrationActivity) Migrating() bool {
+	return a.Exporting || a.Importing
+}
+
+// Conflicted reports whether the model appears to be both the source and the
+// target of a migration. This must never happen: a model being imported is not
+// usable, so no export can be started for it. A caller that sees this must fail
+// closed rather than choose a role.
+func (a MigrationActivity) Conflicted() bool {
+	return a.Exporting && a.Importing
+}
+
 type Migration struct {
 	UUID             string
 	Phase            migration.Phase

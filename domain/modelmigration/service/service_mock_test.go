@@ -139,6 +139,7 @@ type MockControllerStateMockRecorder struct {
 	getDisabledUsersExpects                  []*gomock.Call2_2[context.Context, []string, []string, error]
 	getImportClaimExpects                    []*gomock.Call2_2[context.Context, string, modelmigration0.ImportClaim, error]
 	getImportedOfferUUIDsExpects             []*gomock.Call2_2[context.Context, string, []string, error]
+	getMigrationActivityExpects              []*gomock.Call2_2[context.Context, string, modelmigration0.MigrationActivity, error]
 	getMigrationModeExpects                  []*gomock.Call2_2[context.Context, string, modelmigration0.MigrationMode, error]
 	getModelUsersForRedirectExpects          []*gomock.Call2_2[context.Context, string, []internal.RedirectUserAccess, error]
 	getSourceControllerInfoExpects           []*gomock.Call1_2[context.Context, internal.SourceControllerInfo, error]
@@ -510,6 +511,24 @@ func (mr *MockControllerStateMockRecorder) GetImportedOfferUUIDs(ctx, modelUUID 
 
 // MockControllerStateGetImportedOfferUUIDsCall is the typed call wrapper for GetImportedOfferUUIDs.
 type MockControllerStateGetImportedOfferUUIDsCall = gomock.Call2_2[context.Context, string, []string, error]
+
+// GetMigrationActivity mocks base method.
+func (m *MockControllerState) GetMigrationActivity(ctx context.Context, modelUUID string) (modelmigration0.MigrationActivity, error) {
+	m.ctrl.T.Helper()
+	return gomock.Dispatch2_2(&m.recorder.getMigrationActivityExpects, m.ctrl, m, "GetMigrationActivity", ctx, modelUUID)
+}
+
+// GetMigrationActivity indicates an expected call of GetMigrationActivity.
+func (mr *MockControllerStateMockRecorder) GetMigrationActivity(ctx, modelUUID any) *MockControllerStateGetMigrationActivityCall {
+	mr.mock.ctrl.T.Helper()
+	call := gomock.NewCall2_2[context.Context, string, modelmigration0.MigrationActivity, error](mr.mock.ctrl.T, mr.mock, "GetMigrationActivity", gomock.EnsureMatcher(ctx), gomock.EnsureMatcher(modelUUID))
+	mr.getMigrationActivityExpects = append(mr.getMigrationActivityExpects, call)
+	mr.mock.ctrl.Track(call.Call)
+	return call
+}
+
+// MockControllerStateGetMigrationActivityCall is the typed call wrapper for GetMigrationActivity.
+type MockControllerStateGetMigrationActivityCall = gomock.Call2_2[context.Context, string, modelmigration0.MigrationActivity, error]
 
 // GetMigrationMode mocks base method.
 func (m *MockControllerState) GetMigrationMode(ctx context.Context, modelUUID string) (modelmigration0.MigrationMode, error) {

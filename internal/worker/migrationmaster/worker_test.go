@@ -175,7 +175,8 @@ var (
 		},
 	}
 	watchStatusLockdownCalls = []testhelpers.StubCall{
-		{FuncName: "modelMigrationService.WatchForMigration", Args: nil},
+		{FuncName: "modelMigrationService.WatchMigrationActivity", Args: nil},
+		{FuncName: "modelMigrationService.MigrationActivity", Args: nil},
 		{FuncName: "modelMigrationService.Migration", Args: nil},
 		{FuncName: "guard.Lockdown", Args: nil},
 	}
@@ -461,7 +462,8 @@ func (s *Suite) TestPreviouslyAbortedMigration(c *tc.C) {
 	defer workertest.CleanKill(c, w)
 
 	s.waitForStubCalls(c, []string{
-		"modelMigrationService.WatchForMigration",
+		"modelMigrationService.WatchMigrationActivity",
+		"modelMigrationService.MigrationActivity",
 		"modelMigrationService.Migration",
 		"guard.Unlock",
 	})
@@ -471,7 +473,8 @@ func (s *Suite) TestPreviouslyCompletedMigration(c *tc.C) {
 	s.modelMigrationService.queueStatus(s.makeStatus(coremigration.DONE))
 	s.checkWorkerReturns(c, migrationmaster.ErrMigrated)
 	s.stub.CheckCalls(c, []testhelpers.StubCall{
-		{FuncName: "modelMigrationService.WatchForMigration", Args: nil},
+		{FuncName: "modelMigrationService.WatchMigrationActivity", Args: nil},
+		{FuncName: "modelMigrationService.MigrationActivity", Args: nil},
 		{FuncName: "modelMigrationService.Migration", Args: nil},
 	})
 }
@@ -487,7 +490,8 @@ func (s *Suite) TestStatusError(c *tc.C) {
 
 	s.checkWorkerErr(c, "retrieving migration status: splat")
 	s.stub.CheckCalls(c, []testhelpers.StubCall{
-		{FuncName: "modelMigrationService.WatchForMigration", Args: nil},
+		{FuncName: "modelMigrationService.WatchMigrationActivity", Args: nil},
+		{FuncName: "modelMigrationService.MigrationActivity", Args: nil},
 		{FuncName: "modelMigrationService.Migration", Args: nil},
 	})
 }
@@ -502,7 +506,8 @@ func (s *Suite) TestStatusNone(c *tc.C) {
 	defer workertest.CleanKill(c, w)
 
 	s.waitForStubCalls(c, []string{
-		"modelMigrationService.WatchForMigration",
+		"modelMigrationService.WatchMigrationActivity",
+		"modelMigrationService.MigrationActivity",
 		"modelMigrationService.Migration",
 		"guard.Unlock",
 	})
@@ -516,7 +521,8 @@ func (s *Suite) TestUnlockError(c *tc.C) {
 
 	s.checkWorkerErr(c, "pow")
 	s.stub.CheckCalls(c, []testhelpers.StubCall{
-		{FuncName: "modelMigrationService.WatchForMigration", Args: nil},
+		{FuncName: "modelMigrationService.WatchMigrationActivity", Args: nil},
+		{FuncName: "modelMigrationService.MigrationActivity", Args: nil},
 		{FuncName: "modelMigrationService.Migration", Args: nil},
 		{FuncName: "guard.Unlock", Args: nil},
 	})
@@ -530,6 +536,86 @@ func (s *Suite) TestLockdownError(c *tc.C) {
 
 	s.checkWorkerErr(c, "biff")
 	s.stub.CheckCalls(c, watchStatusLockdownCalls)
+}
+
+// TestImportClaimLocksDownAndWaits asserts that when this controller is the
+// *target* of an import, the worker shuts the model's fortress and keeps
+// waiting rather than unlocking it or trying to run a source phase machine.
+//
+// This worker is the model's only fortress guard owner, so if it unlocked here
+// - as it used to, because it saw no active export - the model's workers would
+// be free to run against a half-imported model.
+func (s *Suite) TestImportClaimLocksDownAndWaits(c *tc.C) {
+	s.modelMigrationService.activity = &modelmigration.MigrationActivity{Importing: true}
+	s.modelMigrationService.triggerWatcher()
+
+	w, err := migrationmaster.New(s.config)
+	c.Assert(err, tc.ErrorIsNil)
+	defer workertest.CleanKill(c, w)
+
+	s.waitForStubCalls(c, []string{
+		"modelMigrationService.WatchMigrationActivity",
+		"modelMigrationService.MigrationActivity",
+		"guard.Lockdown",
+	})
+
+	// The worker must still be waiting: no export status was ever read, so no
+	// phase machine was entered.
+	workertest.CheckAlive(c, w)
+	for _, call := range s.stub.Calls() {
+		c.Check(call.FuncName, tc.Not(tc.Equals), "modelMigrationService.Migration")
+		c.Check(call.FuncName, tc.Not(tc.Equals), "guard.Unlock")
+	}
+}
+
+// TestImportClaimReleasedUnlocks asserts the fortress is opened once the import
+// claim is gone. Claim deletion is the moment an imported model becomes usable,
+// so this is what lets its workers finally start.
+func (s *Suite) TestImportClaimReleasedUnlocks(c *tc.C) {
+	s.modelMigrationService.activity = &modelmigration.MigrationActivity{Importing: true}
+	s.modelMigrationService.triggerWatcher()
+
+	w, err := migrationmaster.New(s.config)
+	c.Assert(err, tc.ErrorIsNil)
+	defer workertest.CleanKill(c, w)
+
+	s.waitForStubCalls(c, []string{
+		"modelMigrationService.WatchMigrationActivity",
+		"modelMigrationService.MigrationActivity",
+		"guard.Lockdown",
+	})
+
+	// Release the claim: the model is now neither importing nor exporting.
+	s.modelMigrationService.activity = &modelmigration.MigrationActivity{}
+	s.modelMigrationService.triggerWatcher()
+
+	s.waitForStubCalls(c, []string{
+		"modelMigrationService.WatchMigrationActivity",
+		"modelMigrationService.MigrationActivity",
+		"guard.Lockdown",
+		"modelMigrationService.MigrationActivity",
+		"guard.Unlock",
+	})
+}
+
+// TestExportAndImportClaimConflictFailsClosed asserts that a model which
+// appears to be both the source and the target of a migration holds the
+// fortress shut and reports, rather than picking a role by query order. This
+// must never happen, but choosing wrongly would either unfreeze a half-imported
+// model or run a phase machine against one.
+func (s *Suite) TestExportAndImportClaimConflictFailsClosed(c *tc.C) {
+	s.modelMigrationService.activity = &modelmigration.MigrationActivity{
+		Exporting: true,
+		Importing: true,
+	}
+	s.modelMigrationService.triggerWatcher()
+
+	s.checkWorkerErr(c, ".*has both an active export and an import claim; refusing to run")
+	s.stub.CheckCalls(c, []testhelpers.StubCall{
+		{FuncName: "modelMigrationService.WatchMigrationActivity", Args: nil},
+		{FuncName: "modelMigrationService.MigrationActivity", Args: nil},
+		{FuncName: "guard.Lockdown", Args: nil},
+	})
 }
 
 func (s *Suite) TestQUIESCEMinionWaitWatchError(c *tc.C) {
@@ -1462,6 +1548,8 @@ type stubModelMigrationService struct {
 	watchErr       error
 	status         []coremigration.MigrationStatus
 	statusErr      error
+	activity       *modelmigration.MigrationActivity
+	activityErr    error
 
 	minionReportsChanges  chan struct{}
 	minionReportsWatchErr error
@@ -1484,12 +1572,27 @@ func (s *stubModelMigrationService) queueStatus(status coremigration.MigrationSt
 	s.triggerWatcher()
 }
 
-func (s *stubModelMigrationService) WatchForMigration(ctx context.Context) (watcher.NotifyWatcher, error) {
-	s.stub.AddCall("modelMigrationService.WatchForMigration")
+func (s *stubModelMigrationService) WatchMigrationActivity(ctx context.Context) (watcher.NotifyWatcher, error) {
+	s.stub.AddCall("modelMigrationService.WatchMigrationActivity")
 	if s.watchErr != nil {
 		return nil, s.watchErr
 	}
 	return newMockWatcher(s.watcherChanges), nil
+}
+
+// MigrationActivity reports the role this model plays in a migration. By
+// default the stub acts as a migration source, which is what the phase-machine
+// tests exercise; importing and conflicted are set explicitly by the guard
+// tests.
+func (s *stubModelMigrationService) MigrationActivity(ctx context.Context) (modelmigration.MigrationActivity, error) {
+	s.stub.AddCall("modelMigrationService.MigrationActivity")
+	if s.activityErr != nil {
+		return modelmigration.MigrationActivity{}, s.activityErr
+	}
+	if s.activity != nil {
+		return *s.activity, nil
+	}
+	return modelmigration.MigrationActivity{Exporting: true}, nil
 }
 
 func (s *stubModelMigrationService) Migration(ctx context.Context) (modelmigration.Migration, error) {

@@ -124,6 +124,10 @@ type ControllerState interface {
 	// GetMigrationMode derives the migration mode for the model.
 	GetMigrationMode(ctx context.Context, modelUUID string) (modelmigration.MigrationMode, error)
 
+	// GetMigrationActivity reports whether the model has an active export and
+	// whether it has a target-side import claim, read in one transaction.
+	GetMigrationActivity(ctx context.Context, modelUUID string) (modelmigration.MigrationActivity, error)
+
 	// SetPhase transitions an export migration to a new phase, enforcing valid
 	// phase transitions with optimistic locking.
 	SetPhase(ctx context.Context, migrationUUID string, newPhase migration.Phase) error
@@ -700,33 +704,46 @@ func (s *Service) WatchMigrationPhase(ctx context.Context) (watcher.NotifyWatche
 }
 
 // WatchMigrationActivity returns a notification watcher that fires whenever
-// this model's migration activity changes in either direction: an export phase
-// transition on the source side, or an import claim being created, changing
-// phase, or being deleted on the target side.
+// anything about this model's migration changes, in either direction: an export
+// starting or ending, an export phase transition, or an import claim being
+// created, changing phase, or being deleted.
 //
-// It is the watcher behind [Service.MigrationPhase], and exists because
-// [Service.WatchMigrationPhase] observes exports only. A target import is
-// invisible to it, so on its own it would never fire when an imported model
-// becomes usable. Claim deletion is exactly that moment, so watching both
-// namespaces is what lets the migration flag unfreeze a target model.
+// It exists because the existing watchers observe exports only. A target import
+// is invisible to them, so neither would ever fire when an imported model
+// becomes usable - claim deletion is exactly that moment. Both the migration
+// flag and the migration master's guard loop need to see it.
+//
+// It deliberately covers all three namespaces rather than the minimum each
+// caller needs. Every caller re-reads state on each event, so a spurious wakeup
+// costs one query, whereas a missed one leaves a model frozen or a fortress
+// wrongly open.
 func (s *Service) WatchMigrationActivity(ctx context.Context) (watcher.NotifyWatcher, error) {
 	ctx, span := trace.Start(ctx, trace.NameFromFunc())
 	defer span.End()
 
+	forModel := func(namespace string) eventsource.FilterOption {
+		return eventsource.PredicateFilter(
+			namespace, changestream.All, eventsource.EqualsPredicate(s.modelUUID),
+		)
+	}
 	return s.watcherFactory.NewNotifyWatcher(
 		ctx,
 		"watch for migration activity",
-		eventsource.PredicateFilter(
-			s.controllerState.NamespaceForWatchPhase(),
-			changestream.All,
-			eventsource.EqualsPredicate(s.modelUUID),
-		),
-		eventsource.PredicateFilter(
-			s.controllerState.NamespaceForWatchImportClaim(),
-			changestream.All,
-			eventsource.EqualsPredicate(s.modelUUID),
-		),
+		forModel(s.controllerState.NamespaceForWatchExport()),
+		forModel(s.controllerState.NamespaceForWatchPhase()),
+		forModel(s.controllerState.NamespaceForWatchImportClaim()),
 	)
+}
+
+// MigrationActivity reports whether this model is currently the source of an
+// export, the target of an import, or neither. See
+// [modelmigration.MigrationActivity] for why the pair is exposed rather than a
+// single mode.
+func (s *Service) MigrationActivity(ctx context.Context) (modelmigration.MigrationActivity, error) {
+	ctx, span := trace.Start(ctx, trace.NameFromFunc())
+	defer span.End()
+
+	return s.controllerState.GetMigrationActivity(ctx, s.modelUUID)
 }
 
 func (s *Service) watchControllerNamespace(

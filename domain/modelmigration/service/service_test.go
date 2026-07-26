@@ -475,9 +475,10 @@ func (s *serviceSuite) TestWatchMigrationActivityWatchesBothSides(c *tc.C) {
 
 	otherUUID := tc.Must(c, uuid.NewUUID).String()
 	ch := make(chan struct{}, 1)
+	s.controllerState.EXPECT().NamespaceForWatchExport().Return("model_migration_export")
 	s.controllerState.EXPECT().NamespaceForWatchPhase().Return("model_migration_export_phase")
 	s.controllerState.EXPECT().NamespaceForWatchImportClaim().Return("model_migration_import")
-	s.watcherFactory.EXPECT().NewNotifyWatcher(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+	s.watcherFactory.EXPECT().NewNotifyWatcher(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, _ string, fo eventsource.FilterOption, extra ...eventsource.FilterOption) (watcher.Watcher[struct{}], error) {
 			for _, f := range append([]eventsource.FilterOption{fo}, extra...) {
 				namespaces = append(namespaces, f.Namespace())
@@ -495,7 +496,7 @@ func (s *serviceSuite) TestWatchMigrationActivityWatchesBothSides(c *tc.C) {
 	defer workertest.CleanKill(c, w)
 
 	c.Check(namespaces, tc.SameContents, []string{
-		"model_migration_export_phase", "model_migration_import",
+		"model_migration_export", "model_migration_export_phase", "model_migration_import",
 	})
 	for _, ns := range namespaces {
 		c.Check(matchesUUID[ns], tc.IsTrue)

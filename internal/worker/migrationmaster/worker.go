@@ -79,9 +79,14 @@ type CharmService interface {
 // worker uses to drive the source side of a migration: the export lifecycle,
 // phase and status reporting, and minion reports.
 type ModelMigrationService interface {
-	// WatchForMigration returns a notification watcher that fires when this
-	// model starts or stops undergoing migration.
-	WatchForMigration(context.Context) (watcher.NotifyWatcher, error)
+	// WatchMigrationActivity returns a notification watcher that fires when
+	// this model starts or stops migrating in either direction, including when
+	// a target-side import claim appears or is released.
+	WatchMigrationActivity(context.Context) (watcher.NotifyWatcher, error)
+
+	// MigrationActivity reports whether this model is the source of an export,
+	// the target of an import, or neither.
+	MigrationActivity(context.Context) (modelmigration.MigrationActivity, error)
 
 	// Migration returns status about migration of this model. If the model is
 	// not currently being migrated, a migration with phase
@@ -304,11 +309,8 @@ func (w *Worker) run() error {
 		return errors.Trace(err)
 	}
 
-	err = w.config.Guard.Lockdown(ctx)
-	if errors.Cause(err) == fortress.ErrAborted {
-		return w.catacomb.ErrDying()
-	} else if err != nil {
-		return errors.Trace(err)
+	if err := w.lockdown(ctx); err != nil {
+		return err
 	}
 
 	controllerConfig, err := w.config.ControllerConfigService.ControllerConfig(ctx)
@@ -818,10 +820,30 @@ func (w *Worker) removeImportedModel(ctx context.Context, targetInfo coremigrati
 	return errors.Trace(err)
 }
 
+// waitForActiveMigration blocks until this model has an export migration for
+// this worker to drive, holding the model's fortress in the right state
+// meanwhile.
+//
+// This worker is the model's only fortress guard owner, and the fortress does
+// not safely support a second one, so it is responsible for both migration
+// roles even though it only *drives* the source role:
+//
+//   - source (active export): return the migration so run() can lock down and
+//     enter the phase machine, exactly as before;
+//   - target (live import claim): lock down and keep waiting. The model is being
+//     imported into this controller and is not usable until the claim is
+//     released, and there is no source phase machine here to run;
+//   - neither: unlock, so the model's workers may run.
+//
+// Locking down for a target import is defence in depth. The migration flag is
+// the load-bearing gate, and it is correct from the first read because the
+// claim is written before the model row is activated and the fortress starts
+// locked. This adds the drain-and-hold half: guests that are already running
+// are made to finish before the import proceeds.
 func (w *Worker) waitForActiveMigration(ctx context.Context) (coremigration.MigrationStatus, error) {
 	var empty coremigration.MigrationStatus
 
-	watcher, err := w.config.ModelMigrationService.WatchForMigration(ctx)
+	watcher, err := w.config.ModelMigrationService.WatchMigrationActivity(ctx)
 	if err != nil {
 		return empty, errors.Annotate(err, "watching for migration")
 	}
@@ -837,33 +859,73 @@ func (w *Worker) waitForActiveMigration(ctx context.Context) (coremigration.Migr
 		case <-watcher.Changes():
 		}
 
-		mig, err := w.config.ModelMigrationService.Migration(ctx)
-		switch {
-		case err != nil:
-			return empty, errors.Annotate(err, "retrieving migration status")
-		case mig.Phase == coremigration.NONE:
-			// There's never been a migration.
-		case mig.Phase.IsTerminal():
-			// No migration in progress.
-			if modelHasMigrated(mig.Phase) {
-				return empty, ErrMigrated
-			}
-		default:
-			// Migration is in progress.
-			return coremigration.MigrationStatus{
-				MigrationId:      mig.UUID,
-				ModelUUID:        w.config.ModelUUID,
-				Phase:            mig.Phase,
-				PhaseChangedTime: mig.PhaseChangedTime,
-				TargetInfo:       mig.Target,
-			}, nil
+		activity, err := w.config.ModelMigrationService.MigrationActivity(ctx)
+		if err != nil {
+			return empty, errors.Annotate(err, "retrieving migration activity")
 		}
 
-		// While waiting for a migration, ensure the fortress is open.
+		// A model cannot be both the source and the target of a migration: one
+		// being imported is not usable, so no export can be started for it.
+		// Refuse to pick a role by query order - hold the fortress shut and
+		// report, so the model stays frozen while an operator works out what
+		// happened.
+		if activity.Conflicted() {
+			if err := w.lockdown(ctx); err != nil {
+				return empty, errors.Trace(err)
+			}
+			return empty, errors.Errorf(
+				"model %s has both an active export and an import claim; refusing to run",
+				w.config.ModelUUID)
+		}
+
+		// This controller is the target of an import. Keep the model frozen and
+		// keep waiting: only the claim's own lifecycle can release it.
+		if activity.Importing {
+			if err := w.lockdown(ctx); err != nil {
+				return empty, errors.Trace(err)
+			}
+			continue
+		}
+
+		if activity.Exporting {
+			mig, err := w.config.ModelMigrationService.Migration(ctx)
+			switch {
+			case err != nil:
+				return empty, errors.Annotate(err, "retrieving migration status")
+			case mig.Phase == coremigration.NONE:
+				// There's never been a migration.
+			case mig.Phase.IsTerminal():
+				// No migration in progress.
+				if modelHasMigrated(mig.Phase) {
+					return empty, ErrMigrated
+				}
+			default:
+				// Migration is in progress.
+				return coremigration.MigrationStatus{
+					MigrationId:      mig.UUID,
+					ModelUUID:        w.config.ModelUUID,
+					Phase:            mig.Phase,
+					PhaseChangedTime: mig.PhaseChangedTime,
+					TargetInfo:       mig.Target,
+				}, nil
+			}
+		}
+
+		// Neither exporting nor importing: the model is idle, so open up.
 		if err := w.config.Guard.Unlock(ctx); err != nil {
 			return empty, errors.Trace(err)
 		}
 	}
+}
+
+// lockdown shuts the model's fortress and waits for any guests to finish,
+// translating a fortress abort into the worker's own dying error.
+func (w *Worker) lockdown(ctx context.Context) error {
+	err := w.config.Guard.Lockdown(ctx)
+	if errors.Cause(err) == fortress.ErrAborted {
+		return w.catacomb.ErrDying()
+	}
+	return errors.Trace(err)
 }
 
 // Possible values for waitForMinion's waitPolicy argument.
