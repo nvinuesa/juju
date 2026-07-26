@@ -38,11 +38,17 @@ INSERT INTO model_migration_import_phase_type VALUES
 (1, 'activating'),
 (2, 'aborting');
 
+-- source_controller_version is written atomically with the transition to the
+-- activating phase, and is the mark of a claim that reached activation through
+-- the commit protocol. A claim in the activating phase without it was written
+-- by an older development build, where activation could begin before the source
+-- had committed, and must not be completed automatically.
 CREATE TABLE model_migration_import (
     uuid TEXT NOT NULL PRIMARY KEY,
     model_uuid TEXT NOT NULL,
     source_migration_uuid TEXT NOT NULL,
     phase_type_id INT NOT NULL DEFAULT 0,
+    source_controller_version TEXT,
     updated_at TEXT NOT NULL DEFAULT (DATETIME('now', 'utc')),
     CONSTRAINT fk_model_migration_import_phase_type
     FOREIGN KEY (phase_type_id)

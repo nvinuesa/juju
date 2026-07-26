@@ -289,7 +289,9 @@ WHERE  mi.model_uuid = $modelUUIDArg.model_uuid
 // It is idempotent when the claim is already activating and returns
 // [modelmigrationerrors.ErrActivationAborting] when the claim is aborting,
 // [modelmigrationerrors.ErrImportNotFound] when no claim exists.
-func (s *State) SetImportPhaseActivating(ctx context.Context, modelUUID string) error {
+func (s *State) SetImportPhaseActivating(
+	ctx context.Context, modelUUID, sourceControllerVersion string,
+) error {
 	db, err := s.DB(ctx)
 	if err != nil {
 		return errors.Capture(err)
@@ -300,13 +302,15 @@ func (s *State) SetImportPhaseActivating(ctx context.Context, modelUUID string) 
 		Target: string(modelmigration.ImportPhaseActivating),
 		Source: string(modelmigration.ImportPhaseImporting),
 	}
+	version := sourceControllerVersionArg{Version: sourceControllerVersion}
 	updateStmt, err := s.Prepare(`
 UPDATE model_migration_import
 SET    phase_type_id = (SELECT id FROM model_migration_import_phase_type WHERE type = $importPhaseNames.target),
+       source_controller_version = $sourceControllerVersionArg.source_controller_version,
        updated_at    = DATETIME('now', 'utc')
 WHERE  model_uuid = $modelUUIDArg.model_uuid
 AND    phase_type_id = (SELECT id FROM model_migration_import_phase_type WHERE type = $importPhaseNames.source)
-`, mUUID, phases)
+`, mUUID, phases, version)
 	if err != nil {
 		return errors.Capture(err)
 	}
@@ -325,7 +329,7 @@ AND    phase_type_id = (SELECT id FROM model_migration_import_phase_type WHERE t
 
 		// Phase is importing; CAS to activating.
 		var outcome sqlair.Outcome
-		if err := tx.Query(ctx, updateStmt, mUUID, phases).Get(&outcome); err != nil {
+		if err := tx.Query(ctx, updateStmt, mUUID, phases, version).Get(&outcome); err != nil {
 			return errors.Errorf("transitioning import to activating: %w", err)
 		}
 		affected, err := outcome.Result().RowsAffected()

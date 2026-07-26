@@ -455,3 +455,9 @@ type modelDatabaseDeletion struct {
 	Namespace string    `db:"namespace"`
 	CreatedAt time.Time `db:"created_at"`
 }
+
+// sourceControllerVersionArg carries the source controller's version, written
+// atomically with the transition to the activating phase.
+type sourceControllerVersionArg struct {
+	Version string `db:"source_controller_version"`
+}

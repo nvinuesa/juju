@@ -153,7 +153,7 @@ type MockControllerStateMockRecorder struct {
 	namespaceForWatchPhaseExpects            []*gomock.Call0_1[string]
 	recordImportedOffersExpects              []*gomock.Call3_1[context.Context, string, []string, error]
 	secretBackendExistsExpects               []*gomock.Call2_2[context.Context, string, bool, error]
-	setImportPhaseActivatingExpects          []*gomock.Call2_1[context.Context, string, error]
+	setImportPhaseActivatingExpects          []*gomock.Call3_1[context.Context, string, string, error]
 	setPhaseExpects                          []*gomock.Call3_1[context.Context, string, migration.Phase, error]
 	setStatusMessageExpects                  []*gomock.Call3_1[context.Context, string, string, error]
 	stageModelRedirectExpects                []*gomock.Call5_1[context.Context, string, string, internal.RedirectionTarget, []internal.RedirectUserAccess, error]
@@ -766,22 +766,22 @@ func (mr *MockControllerStateMockRecorder) SecretBackendExists(ctx, name any) *M
 type MockControllerStateSecretBackendExistsCall = gomock.Call2_2[context.Context, string, bool, error]
 
 // SetImportPhaseActivating mocks base method.
-func (m *MockControllerState) SetImportPhaseActivating(ctx context.Context, modelUUID string) error {
+func (m *MockControllerState) SetImportPhaseActivating(ctx context.Context, modelUUID, sourceControllerVersion string) error {
 	m.ctrl.T.Helper()
-	return gomock.Dispatch2_1(&m.recorder.setImportPhaseActivatingExpects, m.ctrl, m, "SetImportPhaseActivating", ctx, modelUUID)
+	return gomock.Dispatch3_1(&m.recorder.setImportPhaseActivatingExpects, m.ctrl, m, "SetImportPhaseActivating", ctx, modelUUID, sourceControllerVersion)
 }
 
 // SetImportPhaseActivating indicates an expected call of SetImportPhaseActivating.
-func (mr *MockControllerStateMockRecorder) SetImportPhaseActivating(ctx, modelUUID any) *MockControllerStateSetImportPhaseActivatingCall {
+func (mr *MockControllerStateMockRecorder) SetImportPhaseActivating(ctx, modelUUID, sourceControllerVersion any) *MockControllerStateSetImportPhaseActivatingCall {
 	mr.mock.ctrl.T.Helper()
-	call := gomock.NewCall2_1[context.Context, string, error](mr.mock.ctrl.T, mr.mock, "SetImportPhaseActivating", gomock.EnsureMatcher(ctx), gomock.EnsureMatcher(modelUUID))
+	call := gomock.NewCall3_1[context.Context, string, string, error](mr.mock.ctrl.T, mr.mock, "SetImportPhaseActivating", gomock.EnsureMatcher(ctx), gomock.EnsureMatcher(modelUUID), gomock.EnsureMatcher(sourceControllerVersion))
 	mr.setImportPhaseActivatingExpects = append(mr.setImportPhaseActivatingExpects, call)
 	mr.mock.ctrl.Track(call.Call)
 	return call
 }
 
 // MockControllerStateSetImportPhaseActivatingCall is the typed call wrapper for SetImportPhaseActivating.
-type MockControllerStateSetImportPhaseActivatingCall = gomock.Call2_1[context.Context, string, error]
+type MockControllerStateSetImportPhaseActivatingCall = gomock.Call3_1[context.Context, string, string, error]
 
 // SetPhase mocks base method.
 func (m *MockControllerState) SetPhase(ctx context.Context, migrationUUID string, newPhase migration.Phase) error {
@@ -853,6 +853,7 @@ type MockModelStateMockRecorder struct {
 	getMigrationAgentsExpects         []*gomock.Call1_2[context.Context, internal.MigrationAgents, error]
 	getModelTargetAgentVersionExpects []*gomock.Call1_2[context.Context, string, error]
 	getOfferUUIDsExpects              []*gomock.Call1_2[context.Context, []string, error]
+	isModelImportingExpects           []*gomock.Call1_2[context.Context, bool, error]
 	setModelTargetAgentVersionExpects []*gomock.Call3_1[context.Context, string, string, error]
 }
 
@@ -975,6 +976,24 @@ func (mr *MockModelStateMockRecorder) GetOfferUUIDs(ctx any) *MockModelStateGetO
 
 // MockModelStateGetOfferUUIDsCall is the typed call wrapper for GetOfferUUIDs.
 type MockModelStateGetOfferUUIDsCall = gomock.Call1_2[context.Context, []string, error]
+
+// IsModelImporting mocks base method.
+func (m *MockModelState) IsModelImporting(ctx context.Context) (bool, error) {
+	m.ctrl.T.Helper()
+	return gomock.Dispatch1_2(&m.recorder.isModelImportingExpects, m.ctrl, m, "IsModelImporting", ctx)
+}
+
+// IsModelImporting indicates an expected call of IsModelImporting.
+func (mr *MockModelStateMockRecorder) IsModelImporting(ctx any) *MockModelStateIsModelImportingCall {
+	mr.mock.ctrl.T.Helper()
+	call := gomock.NewCall1_2[context.Context, bool, error](mr.mock.ctrl.T, mr.mock, "IsModelImporting", gomock.EnsureMatcher(ctx))
+	mr.isModelImportingExpects = append(mr.isModelImportingExpects, call)
+	mr.mock.ctrl.Track(call.Call)
+	return call
+}
+
+// MockModelStateIsModelImportingCall is the typed call wrapper for IsModelImporting.
+type MockModelStateIsModelImportingCall = gomock.Call1_2[context.Context, bool, error]
 
 // SetModelTargetAgentVersion mocks base method.
 func (m *MockModelState) SetModelTargetAgentVersion(ctx context.Context, preCondition, toVersion string) error {

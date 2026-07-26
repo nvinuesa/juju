@@ -36,7 +36,9 @@ func (s *Service) GetImportClaim(ctx context.Context, modelUUID coremodel.UUID) 
 // SetImportPhaseActivating transitions the model's import claim from the
 // importing phase to the activating phase. It is idempotent when the claim is
 // already activating.
-func (s *Service) SetImportPhaseActivating(ctx context.Context, modelUUID coremodel.UUID) error {
+func (s *Service) SetImportPhaseActivating(
+	ctx context.Context, modelUUID coremodel.UUID, sourceControllerVersion string,
+) error {
 	ctx, span := trace.Start(ctx, trace.NameFromFunc())
 	defer span.End()
 
@@ -44,7 +46,7 @@ func (s *Service) SetImportPhaseActivating(ctx context.Context, modelUUID coremo
 		return errors.Errorf("validating model uuid: %w", err)
 	}
 
-	return s.controllerState.SetImportPhaseActivating(ctx, modelUUID.String())
+	return s.controllerState.SetImportPhaseActivating(ctx, modelUUID.String(), sourceControllerVersion)
 }
 
 // DeleteActivatedImport removes the model's import claim and its FK-dependent
@@ -124,6 +126,16 @@ func (s *Service) GetControllerTargetVersion(ctx context.Context) (string, error
 	defer span.End()
 
 	return s.controllerState.GetControllerTargetVersion(ctx)
+}
+
+// IsModelImporting reports whether the model database still carries its import
+// gate. Used to confirm that a model with no import claim really was released
+// by a completed commit, rather than never imported at all.
+func (s *Service) IsModelImporting(ctx context.Context) (bool, error) {
+	ctx, span := trace.Start(ctx, trace.NameFromFunc())
+	defer span.End()
+
+	return s.modelState.IsModelImporting(ctx)
 }
 
 // DeleteModelImportingStatus clears the model-database import gate, making the

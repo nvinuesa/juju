@@ -10,6 +10,7 @@ import (
 	"github.com/juju/clock"
 	"github.com/juju/tc"
 
+	coreerrors "github.com/juju/juju/core/errors"
 	coremodel "github.com/juju/juju/core/model"
 	coremodelmigration "github.com/juju/juju/core/modelmigration"
 	jujuversion "github.com/juju/juju/core/version"
@@ -88,7 +89,12 @@ func (g activationDomainServicesGetter) ServicesForModel(
 			modelUUID.String(),
 			nil,
 			nil,
-			nil,
+			// The provider does not support resource adoption, so
+			// AdoptResources is a successful no-op. Adoption itself is the
+			// provider's concern, not the commit protocol's.
+			func(context.Context) (modelmigrationservice.ResourceProvider, error) {
+				return nil, coreerrors.NotSupported
+			},
 			g.deps.Logger,
 		),
 		model: modelservice.NewWatchableService(
@@ -275,7 +281,7 @@ func (s *controllerImportSuite) TestActivateModelRetryFromActivating(c *tc.C) {
 	modelUUID, deps := s.importForActivation(c, "1.0.0")
 
 	claimSt := migrationclaimstate.New(s.TxnRunnerFactory(), clock.WallClock)
-	err := claimSt.SetImportPhaseActivating(c.Context(), modelUUID.String())
+	err := claimSt.SetImportPhaseActivating(c.Context(), modelUUID.String(), "")
 	c.Assert(err, tc.ErrorIsNil)
 
 	err = s.activateModel(c, deps, migration.ActivateModelArgs{ModelUUID: modelUUID})

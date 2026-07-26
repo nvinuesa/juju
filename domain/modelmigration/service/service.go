@@ -227,7 +227,7 @@ type ControllerState interface {
 	// importing phase to the activating phase. It is idempotent when the
 	// claim is already activating and returns
 	// [modelmigrationerrors.ErrActivationAborting] when the claim is aborting.
-	SetImportPhaseActivating(ctx context.Context, modelUUID string) error
+	SetImportPhaseActivating(ctx context.Context, modelUUID, sourceControllerVersion string) error
 
 	// DeleteActivatedImport removes the model's import claim and its
 	// FK-dependent companion rows, asserting the claim is in the activating
@@ -280,6 +280,10 @@ type ModelState interface {
 	// GetControllerUUID returns the UUID of the controller that owns this
 	// model.
 	GetControllerUUID(context.Context) (string, error)
+
+	// IsModelImporting reports whether the model database still carries its
+	// import gate.
+	IsModelImporting(ctx context.Context) (bool, error)
 	// GetAllInstanceIDs returns all instance IDs from the current model as
 	// juju/collections set.
 	GetAllInstanceIDs(ctx context.Context) (set.Strings, error)

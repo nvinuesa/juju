@@ -44,9 +44,9 @@ func (s *serviceSuite) TestSetImportPhaseActivating(c *tc.C) {
 	defer s.setupMocks(c).Finish()
 
 	modelUUID := tc.Must(c, coremodel.NewUUID)
-	s.controllerState.EXPECT().SetImportPhaseActivating(gomock.Any(), modelUUID.String()).Return(nil)
+	s.controllerState.EXPECT().SetImportPhaseActivating(gomock.Any(), modelUUID.String(), "4.1.0").Return(nil)
 
-	err := s.service(c).SetImportPhaseActivating(c.Context(), modelUUID)
+	err := s.service(c).SetImportPhaseActivating(c.Context(), modelUUID, "4.1.0")
 	c.Assert(err, tc.ErrorIsNil)
 }
 
@@ -55,7 +55,7 @@ func (s *serviceSuite) TestSetImportPhaseActivating(c *tc.C) {
 func (s *serviceSuite) TestSetImportPhaseActivatingInvalidModelUUID(c *tc.C) {
 	defer s.setupMocks(c).Finish()
 
-	err := s.service(c).SetImportPhaseActivating(c.Context(), coremodel.UUID("not-a-uuid"))
+	err := s.service(c).SetImportPhaseActivating(c.Context(), coremodel.UUID("not-a-uuid"), "4.1.0")
 	c.Assert(err, tc.ErrorIs, coreerrors.NotValid)
 }
 

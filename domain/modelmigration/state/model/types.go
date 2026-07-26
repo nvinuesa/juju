@@ -49,3 +49,8 @@ type setAgentVersionTarget struct {
 	TargetVersion   string `db:"target_version"`
 	PreviousVersion string `db:"previous_version"`
 }
+
+// count holds a COUNT(*) projection.
+type count struct {
+	Count int `db:"count"`
+}

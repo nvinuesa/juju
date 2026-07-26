@@ -295,7 +295,7 @@ func (s *stateSuite) TestSetImportPhaseActivating(c *tc.C) {
 	st := New(s.TxnRunnerFactory(), clock.WallClock)
 
 	// No claim: ErrImportNotFound.
-	err := st.SetImportPhaseActivating(c.Context(), s.modelUUID.String())
+	err := st.SetImportPhaseActivating(c.Context(), s.modelUUID.String(), "4.1.0")
 	c.Assert(err, tc.ErrorIs, modelmigrationerrors.ErrImportNotFound)
 
 	claimUUID := uuid.MustNewUUID().String()
@@ -303,12 +303,12 @@ func (s *stateSuite) TestSetImportPhaseActivating(c *tc.C) {
 	c.Assert(err, tc.ErrorIsNil)
 
 	// importing → activating.
-	err = st.SetImportPhaseActivating(c.Context(), s.modelUUID.String())
+	err = st.SetImportPhaseActivating(c.Context(), s.modelUUID.String(), "4.1.0")
 	c.Assert(err, tc.ErrorIsNil)
 	c.Check(s.phaseOf(c, s.modelUUID.String()), tc.Equals, "activating")
 
 	// Idempotent: already activating is a no-op success.
-	err = st.SetImportPhaseActivating(c.Context(), s.modelUUID.String())
+	err = st.SetImportPhaseActivating(c.Context(), s.modelUUID.String(), "4.1.0")
 	c.Assert(err, tc.ErrorIsNil)
 	c.Check(s.phaseOf(c, s.modelUUID.String()), tc.Equals, "activating")
 
@@ -316,7 +316,7 @@ func (s *stateSuite) TestSetImportPhaseActivating(c *tc.C) {
 	_, err = s.DB().ExecContext(c.Context(),
 		"UPDATE model_migration_import SET phase_type_id = 2 WHERE uuid = ?", claimUUID)
 	c.Assert(err, tc.ErrorIsNil)
-	err = st.SetImportPhaseActivating(c.Context(), s.modelUUID.String())
+	err = st.SetImportPhaseActivating(c.Context(), s.modelUUID.String(), "4.1.0")
 	c.Assert(err, tc.ErrorIs, modelmigrationerrors.ErrActivationAborting)
 }
 
@@ -350,7 +350,7 @@ func (s *stateSuite) TestDeleteActivatedImport(c *tc.C) {
 	err = st.DeleteActivatedImport(c.Context(), s.modelUUID.String())
 	c.Assert(err, tc.ErrorIs, modelmigrationerrors.ErrPhaseTransitionInvalid)
 
-	err = st.SetImportPhaseActivating(c.Context(), s.modelUUID.String())
+	err = st.SetImportPhaseActivating(c.Context(), s.modelUUID.String(), "4.1.0")
 	c.Assert(err, tc.ErrorIsNil)
 
 	err = st.DeleteActivatedImport(c.Context(), s.modelUUID.String())

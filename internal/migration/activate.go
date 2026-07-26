@@ -71,7 +71,7 @@ func activateModel(ctx context.Context, domainServices services.DomainServices, 
 		case modelmigration.ImportPhaseAborting:
 			return errors.Errorf("model %q: %w", modelUUIDStr, modelmigrationerrors.ErrActivationAborting)
 		case modelmigration.ImportPhaseImporting:
-			if err := domainServices.ModelMigration().SetImportPhaseActivating(ctx, modelUUID); err != nil {
+			if err := domainServices.ModelMigration().SetImportPhaseActivating(ctx, modelUUID, ""); err != nil {
 				return errors.Errorf(
 					"transitioning import claim to activating for model %q: %w",
 					modelUUIDStr, err,
