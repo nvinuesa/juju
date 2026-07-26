@@ -38,6 +38,7 @@ func (s *modelSuite) TestRemoveModelNoForceSuccess(c *tc.C) {
 
 	cExp := s.controllerState.EXPECT()
 	cExp.ModelExists(gomock.Any(), mUUID.String()).Return(true, nil)
+	cExp.IsMigratingModel(gomock.Any(), mUUID.String()).Return(false, nil)
 	cExp.EnsureModelNotAlive(gomock.Any(), mUUID.String(), false).Return(nil)
 
 	mExp := s.modelState.EXPECT()
@@ -82,6 +83,7 @@ func (s *modelSuite) TestRemoveModelRetrySchedulesRemovalJobs(c *tc.C) {
 
 	cExp := s.controllerState.EXPECT()
 	cExp.ModelExists(gomock.Any(), mUUID.String()).Return(true, nil).Times(2)
+	cExp.IsMigratingModel(gomock.Any(), mUUID.String()).Return(false, nil).Times(2)
 	cExp.EnsureModelNotAlive(gomock.Any(), mUUID.String(), false).Return(nil).Times(2)
 
 	mExp := s.modelState.EXPECT()
@@ -133,6 +135,7 @@ func (s *modelSuite) TestRemoveModelRetryWithForceSchedulesRemovalJobs(c *tc.C) 
 
 	cExp := s.controllerState.EXPECT()
 	cExp.ModelExists(gomock.Any(), mUUID.String()).Return(true, nil).Times(2)
+	cExp.IsMigratingModel(gomock.Any(), mUUID.String()).Return(false, nil).Times(2)
 	cExp.EnsureModelNotAlive(gomock.Any(), mUUID.String(), false).Return(nil)
 	cExp.EnsureModelNotAlive(gomock.Any(), mUUID.String(), true).Return(nil)
 
@@ -188,6 +191,50 @@ func (s *modelSuite) TestRemoveModelControllerModel(c *tc.C) {
 	c.Assert(err, tc.ErrorIs, removalerrors.ForceRequired)
 }
 
+// TestRemoveModelWhileMigratingAbortsImport asserts that destroying a model
+// that is mid-import aborts the import instead of running generic removal.
+//
+// Only the abort path proves the model database is gone before releasing the
+// model UUID; generic removal would race the import's remaining writes and skip
+// that proof. Juju 3.6 accepted a plain destroy-model for a model stuck
+// importing, so the gesture is kept and simply routed to the code that knows
+// how to do it.
+func (s *modelSuite) TestRemoveModelWhileMigratingAbortsImport(c *tc.C) {
+	defer s.setupMocks(c).Finish()
+
+	mUUID := tc.Must0(c, coremodel.NewUUID)
+
+	s.modelState.EXPECT().IsControllerModel(gomock.Any(), mUUID.String()).Return(false, nil)
+
+	cExp := s.controllerState.EXPECT()
+	cExp.IsMigratingModel(gomock.Any(), mUUID.String()).Return(true, nil)
+	cExp.MarkMigratingModelAsDead(gomock.Any(), mUUID.String()).Return(nil)
+
+	_, err := s.newService(c).RemoveModel(c.Context(), mUUID, false, 0)
+	c.Assert(err, tc.ErrorIsNil)
+}
+
+// TestRemoveModelWhileActivatingIsRefused asserts that a model whose import has
+// crossed activation is not torn down by destroy-model. Activation is the point
+// of no return: the source has committed, so the model must be allowed to
+// finish becoming this controller's, after which it is an ordinary model that
+// destroys normally.
+func (s *modelSuite) TestRemoveModelWhileActivatingIsRefused(c *tc.C) {
+	defer s.setupMocks(c).Finish()
+
+	mUUID := tc.Must0(c, coremodel.NewUUID)
+
+	s.modelState.EXPECT().IsControllerModel(gomock.Any(), mUUID.String()).Return(false, nil)
+
+	cExp := s.controllerState.EXPECT()
+	cExp.IsMigratingModel(gomock.Any(), mUUID.String()).Return(true, nil)
+	cExp.MarkMigratingModelAsDead(gomock.Any(), mUUID.String()).Return(
+		removalerrors.MigrationImportPastImporting)
+
+	_, err := s.newService(c).RemoveModel(c.Context(), mUUID, false, 0)
+	c.Assert(err, tc.ErrorIs, removalerrors.MigrationImportPastImporting)
+}
+
 func (s *modelSuite) TestRemoveModelNoForceSuccessControllerModel(c *tc.C) {
 	defer s.setupMocks(c).Finish()
 
@@ -198,6 +245,7 @@ func (s *modelSuite) TestRemoveModelNoForceSuccessControllerModel(c *tc.C) {
 
 	cExp := s.controllerState.EXPECT()
 	cExp.ModelExists(gomock.Any(), mUUID.String()).Return(true, nil)
+	cExp.IsMigratingModel(gomock.Any(), mUUID.String()).Return(false, nil)
 	cExp.EnsureModelNotAlive(gomock.Any(), mUUID.String(), true).Return(nil)
 
 	mExp := s.modelState.EXPECT()
@@ -235,6 +283,7 @@ func (s *modelSuite) TestRemoveModelForceNoWaitSuccess(c *tc.C) {
 
 	cExp := s.controllerState.EXPECT()
 	cExp.ModelExists(gomock.Any(), mUUID.String()).Return(true, nil)
+	cExp.IsMigratingModel(gomock.Any(), mUUID.String()).Return(false, nil)
 	cExp.EnsureModelNotAlive(gomock.Any(), mUUID.String(), true).Return(nil)
 
 	mExp := s.modelState.EXPECT()
@@ -258,6 +307,7 @@ func (s *modelSuite) TestRemoveModelForceWaitSuccess(c *tc.C) {
 
 	cExp := s.controllerState.EXPECT()
 	cExp.ModelExists(gomock.Any(), mUUID.String()).Return(true, nil)
+	cExp.IsMigratingModel(gomock.Any(), mUUID.String()).Return(false, nil)
 	cExp.EnsureModelNotAlive(gomock.Any(), mUUID.String(), true).Return(nil)
 
 	mExp := s.modelState.EXPECT()
@@ -287,6 +337,7 @@ func (s *modelSuite) TestRemoveModelNoForceSuccessWithRemoteApplicationOfferer(c
 
 	cExp := s.controllerState.EXPECT()
 	cExp.ModelExists(gomock.Any(), mUUID.String()).Return(true, nil)
+	cExp.IsMigratingModel(gomock.Any(), mUUID.String()).Return(false, nil)
 	cExp.EnsureModelNotAlive(gomock.Any(), mUUID.String(), false).Return(nil)
 
 	mExp := s.modelState.EXPECT()
@@ -332,6 +383,7 @@ func (s *modelSuite) TestRemoveModelIgnoresApplicationErrorWithoutRemoteOffererF
 
 	cExp := s.controllerState.EXPECT()
 	cExp.ModelExists(gomock.Any(), mUUID.String()).Return(true, nil)
+	cExp.IsMigratingModel(gomock.Any(), mUUID.String()).Return(false, nil)
 	cExp.EnsureModelNotAlive(gomock.Any(), mUUID.String(), false).Return(nil)
 
 	mExp := s.modelState.EXPECT()
@@ -362,6 +414,7 @@ func (s *modelSuite) TestRemoveModelNotFoundInModelButInController(c *tc.C) {
 
 	cExp := s.controllerState.EXPECT()
 	cExp.ModelExists(gomock.Any(), mUUID.String()).Return(true, nil)
+	cExp.IsMigratingModel(gomock.Any(), mUUID.String()).Return(false, nil)
 	cExp.EnsureModelNotAlive(gomock.Any(), mUUID.String(), false).Return(nil)
 
 	mExp := s.modelState.EXPECT()
@@ -384,6 +437,7 @@ func (s *modelSuite) TestRemoveModelNotFoundInControllerButInModel(c *tc.C) {
 
 	cExp := s.controllerState.EXPECT()
 	cExp.ModelExists(gomock.Any(), mUUID.String()).Return(false, nil)
+	cExp.IsMigratingModel(gomock.Any(), mUUID.String()).Return(false, nil)
 	cExp.EnsureModelNotAlive(gomock.Any(), mUUID.String(), false).Return(nil)
 
 	mExp := s.modelState.EXPECT()
@@ -403,6 +457,7 @@ func (s *modelSuite) TestRemoveModelNotFoundInBothControllerAndModel(c *tc.C) {
 
 	cExp := s.controllerState.EXPECT()
 	cExp.ModelExists(gomock.Any(), mUUID.String()).Return(false, nil)
+	cExp.IsMigratingModel(gomock.Any(), mUUID.String()).Return(false, nil)
 	cExp.EnsureModelNotAlive(gomock.Any(), mUUID.String(), false).Return(nil)
 
 	mExp := s.modelState.EXPECT()

@@ -87,4 +87,20 @@ const (
 	// StorageInstanceStillAttached indicates that the storage instance cannot
 	// be removed without force as it still has attachments.
 	StorageInstanceStillAttached = errors.ConstError("storage instance still attached")
+
+	// MigrationImportPastImporting indicates that a model's migration import
+	// claim has reached the activating phase, so the migrating-model abort path
+	// must not tear the model down: activation has crossed the point of no
+	// return and cleanup is owned by the migration activation finalizer, which
+	// preserves the durable claim and the model database until cleanup is
+	// provably complete. (An importing claim is aborted normally; an aborting
+	// claim is a retried abort and is also accepted.)
+	MigrationImportPastImporting = errors.ConstError("model migration import is past the importing phase")
+
+	// MigrationImportActive indicates that generic model removal was attempted
+	// on a model that holds a migration import claim. Such a model is mid-import
+	// and must be torn down through the migration abort path, which owns the
+	// protocol that proves the model database is gone before releasing the model
+	// UUID. Generic removal would race the import's writes and skip that proof.
+	MigrationImportActive = errors.ConstError("model has an active migration import claim")
 )

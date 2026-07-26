@@ -98,6 +98,24 @@ func (s *Service) RemoveModel(
 		)
 	}
 
+	// A model that is mid-import is destroyed by aborting the import, not by
+	// generic removal. Only the abort path proves the model database is gone
+	// before releasing the model UUID; generic removal would race the import's
+	// remaining writes and skip that proof. Juju 3.6 accepted a plain
+	// destroy-model for a model stuck importing, so this keeps that gesture
+	// working and simply routes it to the code that knows how to do it.
+	if migrating, err := s.controllerState.IsMigratingModel(ctx, modelUUID.String()); err != nil {
+		return "", errors.Errorf("checking model %q migration status: %w", modelUUID, err)
+	} else if migrating {
+		// MarkMigratingModelAsDead takes the claim's abort lock and refuses a
+		// claim that has already crossed activation, so a committed model is
+		// never torn down here.
+		if err := s.controllerState.MarkMigratingModelAsDead(ctx, modelUUID.String()); err != nil {
+			return "", errors.Errorf("aborting migration import for model %q: %w", modelUUID, err)
+		}
+		return "", nil
+	}
+
 	return s.removeModel(ctx, modelUUID, force, wait)
 }
 
