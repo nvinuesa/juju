@@ -392,6 +392,14 @@ type configSetterOnly interface {
 	// to run a controller
 	SetControllerAgentInfo(info controller.ControllerAgentInfo)
 
+	// SetControllerTag sets the controller tag this agent serves. Used by
+	// restore when the controller identity is replaced.
+	SetControllerTag(names.ControllerTag)
+
+	// SetModelTag sets the model tag this agent belongs to. Used by
+	// restore when the controller-model identity is replaced.
+	SetModelTag(names.ModelTag)
+
 	// SetLoggingConfig sets the logging config value for the agent.
 	SetLoggingConfig(string)
 
@@ -928,6 +936,16 @@ func (c *configInternal) SetControllerAgentInfo(info controller.ControllerAgentI
 	if c.statePassword == "" && c.apiDetails != nil {
 		c.statePassword = c.apiDetails.password
 	}
+}
+
+// SetControllerTag implements configSetterOnly.
+func (c *configInternal) SetControllerTag(controller names.ControllerTag) {
+	c.controller = controller
+}
+
+// SetModelTag implements configSetterOnly.
+func (c *configInternal) SetModelTag(model names.ModelTag) {
+	c.model = model
 }
 
 func (c *configInternal) APIAddresses() ([]string, error) {

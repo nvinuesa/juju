@@ -316,6 +316,13 @@ jujuagentd: musl-install-if-missing dqlite-install-if-missing
 ## jujuagentd: Install jujuagentd without updating dependencies
 	${run_cgo_install}
 
+.PHONY: restore-backup
+restore-backup: PACKAGE = github.com/juju/juju/cmd/restore-backup
+restore-backup: EXTRA_BUILD_TAGS += dqlite libsqlite3
+restore-backup: musl-install-if-missing dqlite-install-if-missing
+## restore-backup: Install restore-backup with Dqlite support
+	${run_cgo_install}
+
 .PHONY: dqlite-repl
 dqlite-repl: PACKAGE = github.com/juju/juju/scripts/dqlite/cmd
 dqlite-repl: EXTRA_BUILD_TAGS += dqlite libsqlite3
@@ -797,4 +804,3 @@ docs-%:
 ## docs-run: Build and serve the documentation
 ## docs-clean: Clean the docs build artifacts
 	cd docs && $(MAKE) -f Makefile $* ALLFILES='*.md **/*.md'
-

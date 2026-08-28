@@ -106,13 +106,19 @@ func (formatter_2_0) unmarshal(data []byte) (*configInternal, error) {
 	if err != nil {
 		return nil, err
 	}
-	controllerTag, err := names.ParseControllerTag(format.Controller)
-	if err != nil {
-		return nil, errors.Trace(err)
+	var controllerTag names.ControllerTag
+	if format.Controller != "" {
+		controllerTag, err = names.ParseControllerTag(format.Controller)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
 	}
-	modelTag, err := names.ParseModelTag(format.Model)
-	if err != nil {
-		return nil, errors.Trace(err)
+	var modelTag names.ModelTag
+	if format.Model != "" {
+		modelTag, err = names.ParseModelTag(format.Model)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
 	}
 	config := &configInternal{
 		tag: tag,

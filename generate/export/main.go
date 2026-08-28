@@ -149,6 +149,12 @@ func generate(ctx context.Context, runner *txnRunner) error {
 		return err
 	}
 
+	// The restore importers are generated from the same schema as the export
+	// payloads; they are the write-mirror of the export state.
+	if err := generateRestoreImport(ctx, runner, versionToken, semanticVersion, modelRestoreSkipTables, "model", "ModelExport"); err != nil {
+		return err
+	}
+
 	return generateTransforms(exportVersionStrings(export.ExportVersions))
 }
 
@@ -204,7 +210,13 @@ func generateController(ctx context.Context, runner *txnRunner) error {
 		return err
 	}
 
-	return writeControllerServiceFile(versionToken, semanticVersion)
+	if err := writeControllerServiceFile(versionToken, semanticVersion); err != nil {
+		return err
+	}
+
+	// The restore importers are generated from the same schema as the export
+	// payloads; they are the write-mirror of the export state.
+	return generateRestoreImport(ctx, runner, versionToken, semanticVersion, controllerRestoreSkipTables, "controller", "ControllerExport")
 }
 
 func exportVersionStrings(versions []semversion.Number) []string {
@@ -318,6 +330,10 @@ func generateStruct(tableName string, columns []column) (string, []string, error
 	var imports []string
 	for _, col := range columns {
 		goType, imp := sqliteTypeToGoType(col.Type, col.NotNull)
+		if tableName == "bakery_config" ||
+			tableName == "macaroon_root_key" && col.Name == "root_key" {
+			goType = "Binary"
+		}
 		if imp != "" {
 			imports = append(imports, imp)
 		}
@@ -774,4 +790,195 @@ func writeControllerServiceFile(versionToken, semanticVersion string) error {
 	testFilePath := filepath.Join(dir, "controller_export_test.go")
 	fmt.Printf("writing to %s\n", testFilePath)
 	return os.WriteFile(testFilePath, testFormatted, 0644)
+}
+
+// controllerRestoreSkipTables are controller-DB tables the generated
+// restore-import importer must not populate from the source payload:
+//
+//   - schema: the target schema/migration history is preserved; the source
+//     schema rows are never imported.
+//   - changelog tables: the target changestream starts fresh; both
+//     change_log and change_log_witness are cleared at the end of restore.
+//   - namespace_list: made authoritative at the end of restore, not imported.
+//   - target-local node/config tables: controller node 0, its addresses,
+//     password, agent version, SSH host key, and runtime config are captured
+//     from the target and overlaid after import; the source rows describe a
+//     different controller.
+//   - object-store backend/drain: rejected by preflight (any S3 backend or
+//     active drain makes the source archive unsupported), and the seeded
+//     file-backend row is target-side; object_store_placement is rewritten
+//     to node 0 by the overlay. The object_store_metadata rows are NOT
+//     skipped: they are source logical data FK-referenced by model blobs and
+//     controller placement, so they must be bulk-imported.
+//   - secret backend tables: source rows are rejected by preflight unless
+//     every backend is a builtin (origin_id 0); builtins stay target-side.
+//
+// NOTE: this list is the restore import-exclusion contract. The overlay
+// applies target-local values for the skipped tables.
+var controllerRestoreSkipTables = map[string]bool{
+	"schema":                         true,
+	"change_log":                     true,
+	"change_log_witness":             true,
+	"change_log_edit_type":           true,
+	"change_log_namespace":           true,
+	"namespace_list":                 true,
+	"controller":                     true,
+	"controller_config":              true,
+	"controller_node":                true,
+	"controller_node_agent_version":  true,
+	"controller_node_password":       true,
+	"controller_api_address":         true,
+	"controller_ssh_host_key":        true,
+	"object_store_backend":           true,
+	"object_store_backend_s3_config": true,
+	"object_store_drain_info":        true,
+	"object_store_drain_phase_type":  true,
+	"object_store_placement":         true,
+	"secret_backend":                 true,
+	"secret_backend_config":          true,
+	"secret_backend_reference":       true,
+	"secret_backend_rotation":        true,
+	"model_secret_backend":           true,
+}
+
+// modelRestoreSkipTables are model-DB tables the generated restore importer
+// must not populate from the source payload:
+//
+//   - changelog tables: the target changestream starts fresh.
+//   - object_store_placement: rewritten to node 0 by the model overlay; the
+//     object_store_metadata rows are NOT skipped: they are source logical
+//     data FK-referenced by charms/resources/agent binaries.
+//
+// Unlike the migration model importer, the bootstrap identity tables (model,
+// model_life, agent_version, model_migrating) ARE imported: restore replaces
+// the temporary controller model and creates fresh model databases from
+// source content. model_agent is also imported so the model overlay can
+// merge the target-local password hash onto the restored row.
+//
+// NOTE: model DBs are created fresh per namespace, so every other table is a
+// clean bulk insert.
+var modelRestoreSkipTables = map[string]bool{
+	"change_log":             true,
+	"change_log_witness":     true,
+	"change_log_edit_type":   true,
+	"change_log_namespace":   true,
+	"object_store_placement": true,
+}
+
+// restoreImportTableData describes one table to bulk-import.
+type restoreImportTableData struct {
+	StructName string
+	TableName  string
+	Seeded     bool
+}
+
+// generateRestoreImport emits the restore import state into
+// domain/restoreimport/state/<dirName>/import.go plus its smoke test. The
+// importer bulk-inserts all tables except skipped ones; seeded tables are
+// inserted with ON CONFLICT DO NOTHING, non-seeded tables are wiped first.
+func generateRestoreImport(ctx context.Context, runner *txnRunner, versionToken, semanticVersion string, skip map[string]bool, dirName, payloadType string) error {
+	tableNames, err := getTableNames(ctx, runner)
+	if err != nil {
+		return err
+	}
+	seeded, err := getSeededTables(ctx, runner, tableNames)
+	if err != nil {
+		return err
+	}
+
+	var tables []restoreImportTableData
+	for _, tableName := range tableNames {
+		if tableName == "sqlite_sequence" {
+			continue
+		}
+		if skip[tableName] {
+			continue
+		}
+		tables = append(tables, restoreImportTableData{
+			StructName: toCamelCase(tableName),
+			TableName:  tableName,
+			Seeded:     seeded[tableName],
+		})
+	}
+
+	return writeRestoreImportFiles(filepath.Join("domain", "restoreimport", "state", dirName),
+		dirName, versionToken, semanticVersion, payloadType, tables)
+}
+
+// getSeededTables reports which tables have rows in the freshly applied
+// schema (i.e. are seeded by DDL).
+func getSeededTables(ctx context.Context, runner *txnRunner, tableNames []string) (map[string]bool, error) {
+	var seeded map[string]bool
+	err := runner.StdTxn(ctx, func(ctx context.Context, tx *sql.Tx) error {
+		seeded = make(map[string]bool)
+		for _, tableName := range tableNames {
+			var count int
+			query := fmt.Sprintf("SELECT COUNT(*) FROM %q", tableName)
+			if err := tx.QueryRowContext(ctx, query).Scan(&count); err != nil {
+				return err
+			}
+			if count > 0 {
+				seeded[tableName] = true
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return seeded, nil
+}
+
+// writeRestoreImportFiles renders the restore import state file and its
+// smoke test into the package directory at the given repo-relative path.
+func writeRestoreImportFiles(dir, packageName, versionToken, semanticVersion, payloadType string, tables []restoreImportTableData) error {
+	_, filename, _, _ := runtime.Caller(0)
+	currentDir := filepath.Dir(filename)
+	repoRoot := filepath.Dir(filepath.Dir(currentDir))
+	targetDir := filepath.Join(repoRoot, dir)
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		return err
+	}
+
+	data := struct {
+		Package         string
+		VersionToken    string
+		SemanticVersion string
+		PayloadType     string
+		Tables          []restoreImportTableData
+	}{
+		Package:         packageName,
+		VersionToken:    versionToken,
+		SemanticVersion: semanticVersion,
+		PayloadType:     payloadType,
+		Tables:          tables,
+	}
+
+	if err := renderRestoreImportTemplate(filepath.Join(currentDir, "restoreimport.tmpl"), filepath.Join(targetDir, "import.go"), "restoreimport", data); err != nil {
+		return err
+	}
+	if err := renderRestoreImportTemplate(filepath.Join(currentDir, "restoreimport_test.tmpl"), filepath.Join(targetDir, "import_test.go"), "restoreimport_test", data); err != nil {
+		return err
+	}
+	return nil
+}
+
+// renderRestoreImportTemplate executes a template file and writes the
+// gofmt-formatted result to the output path.
+func renderRestoreImportTemplate(tmplPath, outPath, name string, data any) error {
+	tmplBytes, err := os.ReadFile(tmplPath)
+	if err != nil {
+		return err
+	}
+	t := template.Must(template.New(name).Parse(string(tmplBytes)))
+	var out bytes.Buffer
+	if err := t.Execute(&out, data); err != nil {
+		return err
+	}
+	formatted, err := format.Source(out.Bytes())
+	if err != nil {
+		return err
+	}
+	fmt.Printf("writing to %s\n", outPath)
+	return os.WriteFile(outPath, formatted, 0644)
 }

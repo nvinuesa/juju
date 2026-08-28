@@ -70,6 +70,7 @@ TEST_NAMES="actions \
             ovs_maas \
             refresh \
             relations \
+            restore_backup \
             resources \
             secrets_iaas \
             secrets_k8s \

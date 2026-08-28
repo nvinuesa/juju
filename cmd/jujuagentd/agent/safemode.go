@@ -113,7 +113,7 @@ func (a *safeModeAgentCommand) Init(args []string) error {
 
 // Run instantiates a MachineAgent and runs it.
 func (a *safeModeAgentCommand) Run(c *cmd.Context) error {
-	if err := ensuringJujudNotRunning(a.agentTag); err != nil {
+	if err := EnsureJujudNotRunning(a.agentTag); err != nil {
 		if errors.Is(err, errors.AlreadyExists) {
 			fmt.Fprint(os.Stderr, safeModeJujudWarning)
 			return nil
@@ -374,7 +374,7 @@ func (a *SafeModeMachineAgent) executeRebootOrShutdown(action params.RebootActio
 	return internalworker.ErrRebootMachine
 }
 
-func ensuringJujudNotRunning(tag names.Tag) error {
+func EnsureJujudNotRunning(tag names.Tag) error {
 	cmd := exec.Command("systemctl", "check", fmt.Sprintf("%s-machine-%s.service", jujunames.JujuAgentd, tag.Id()))
 	output, err := cmd.CombinedOutput()
 	if err != nil {

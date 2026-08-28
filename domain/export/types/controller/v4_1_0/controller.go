@@ -38,14 +38,14 @@ type AutocertCacheEncoding struct {
 }
 
 type BakeryConfig struct {
-	LocalUsersPrivateKey              string `db:"local_users_private_key" json:"local_users_private_key" yaml:"local_users_private_key"`
-	LocalUsersPublicKey               string `db:"local_users_public_key" json:"local_users_public_key" yaml:"local_users_public_key"`
-	LocalUsersThirdPartyPrivateKey    string `db:"local_users_third_party_private_key" json:"local_users_third_party_private_key" yaml:"local_users_third_party_private_key"`
-	LocalUsersThirdPartyPublicKey     string `db:"local_users_third_party_public_key" json:"local_users_third_party_public_key" yaml:"local_users_third_party_public_key"`
-	ExternalUsersThirdPartyPrivateKey string `db:"external_users_third_party_private_key" json:"external_users_third_party_private_key" yaml:"external_users_third_party_private_key"`
-	ExternalUsersThirdPartyPublicKey  string `db:"external_users_third_party_public_key" json:"external_users_third_party_public_key" yaml:"external_users_third_party_public_key"`
-	OffersThirdPartyPrivateKey        string `db:"offers_third_party_private_key" json:"offers_third_party_private_key" yaml:"offers_third_party_private_key"`
-	OffersThirdPartyPublicKey         string `db:"offers_third_party_public_key" json:"offers_third_party_public_key" yaml:"offers_third_party_public_key"`
+	LocalUsersPrivateKey              Binary `db:"local_users_private_key" json:"local_users_private_key" yaml:"local_users_private_key"`
+	LocalUsersPublicKey               Binary `db:"local_users_public_key" json:"local_users_public_key" yaml:"local_users_public_key"`
+	LocalUsersThirdPartyPrivateKey    Binary `db:"local_users_third_party_private_key" json:"local_users_third_party_private_key" yaml:"local_users_third_party_private_key"`
+	LocalUsersThirdPartyPublicKey     Binary `db:"local_users_third_party_public_key" json:"local_users_third_party_public_key" yaml:"local_users_third_party_public_key"`
+	ExternalUsersThirdPartyPrivateKey Binary `db:"external_users_third_party_private_key" json:"external_users_third_party_private_key" yaml:"external_users_third_party_private_key"`
+	ExternalUsersThirdPartyPublicKey  Binary `db:"external_users_third_party_public_key" json:"external_users_third_party_public_key" yaml:"external_users_third_party_public_key"`
+	OffersThirdPartyPrivateKey        Binary `db:"offers_third_party_private_key" json:"offers_third_party_private_key" yaml:"offers_third_party_private_key"`
+	OffersThirdPartyPublicKey         Binary `db:"offers_third_party_public_key" json:"offers_third_party_public_key" yaml:"offers_third_party_public_key"`
 }
 
 type ChangeLog struct {
@@ -267,7 +267,7 @@ type MacaroonRootKey struct {
 	ID        string    `db:"id" json:"id" yaml:"id"`
 	CreatedAt time.Time `db:"created_at" json:"created_at" yaml:"created_at"`
 	ExpiresAt time.Time `db:"expires_at" json:"expires_at" yaml:"expires_at"`
-	RootKey   string    `db:"root_key" json:"root_key" yaml:"root_key"`
+	RootKey   Binary    `db:"root_key" json:"root_key" yaml:"root_key"`
 }
 
 type Model struct {
