@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -340,4 +341,98 @@ func checkManifest(data []byte, digests map[string]entryDigest) error {
 		}
 	}
 	return nil
+}
+
+// UnpackObjectsBundle streams the archive once and unpacks only the
+// object blob bundle (root.tar) into destDir, applying the same entry
+// hardening as the metadata read: directories and regular files only, no
+// absolute paths, parent traversal, duplicates or links. Files land with
+// owner-only permissions; archived executables, agent configs and raw
+// database files are never executed or trusted.
+func UnpackObjectsBundle(ctx context.Context, archivePath, destDir string) error {
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return errors.Errorf("opening archive: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return errors.Errorf("reading archive: %w", err)
+	}
+
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return errors.Errorf("reading archive: %w", err)
+		}
+		if (hdr.Typeflag == tar.TypeReg || hdr.Typeflag == tar.TypeRegA) &&
+			path.Clean(hdr.Name) == contentDir+"/root.tar" {
+			return errors.Capture(unpackTar(ctx, tr, destDir))
+		}
+	}
+	return errors.Errorf("archive is missing %s/root.tar", contentDir)
+}
+
+// unpackTar writes the entries of an uncompressed tar stream into
+// destDir. Entry names are validated before any path is constructed.
+func unpackTar(ctx context.Context, r io.Reader, destDir string) error {
+	tr := tar.NewReader(r)
+	seen := make(map[string]struct{})
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return errors.Errorf("reading object bundle: %w", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return errors.Capture(err)
+		}
+		if strings.HasPrefix(hdr.Name, "/") || slices.Contains(strings.Split(hdr.Name, "/"), "..") {
+			return errors.Errorf("object bundle contains unsafe path %q", hdr.Name)
+		}
+		name := path.Clean(hdr.Name)
+		if _, dup := seen[name]; dup {
+			return errors.Errorf("object bundle contains duplicate path %q", name)
+		}
+		seen[name] = struct{}{}
+
+		target := filepath.Join(destDir, filepath.FromSlash(name))
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0o700); err != nil {
+				return errors.Errorf("creating directory %q: %w", name, err)
+			}
+		case tar.TypeReg, tar.TypeRegA:
+			if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+				return errors.Errorf("creating directory for %q: %w", name, err)
+			}
+			out, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+			if err != nil {
+				return errors.Errorf("creating file %q: %w", name, err)
+			}
+			if _, err := io.Copy(out, tr); err != nil {
+				_ = out.Close()
+				return errors.Errorf("writing file %q: %w", name, err)
+			}
+			if err := out.Close(); err != nil {
+				return errors.Errorf("writing file %q: %w", name, err)
+			}
+		default:
+			// Symlinks (k8s controllers run their tools binaries from
+			// charm-bin symlinks) and other special entries are not
+			// consumed: recovery installs only referenced object-store
+			// blobs, which are regular files under the objectstore
+			// namespace directories. Skip them and keep unpacking the
+			// rest of the bundle: returning here would silently
+			// truncate every entry after the first special file.
+			continue
+		}
+	}
 }

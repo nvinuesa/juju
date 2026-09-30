@@ -4,6 +4,8 @@
 package recovery
 
 import (
+	"time"
+
 	"github.com/juju/juju/core/semversion"
 	"github.com/juju/juju/internal/errors"
 )
@@ -91,6 +93,10 @@ type ArchiveInfo struct {
 	// the remaining controller machines load as dead rows.
 	HANodes int64
 
+	// BackupFinished is when the source backup completed, telling the
+	// operator how much state drift to expect.
+	BackupFinished time.Time
+
 	// CloudName is the name of the controller model's cloud.
 	CloudName string
 
@@ -156,4 +162,28 @@ func (i *ArchiveInfo) CheckProviderFamily(targetCloudType string) error {
 				"recovery requires the same provider family", i.CloudType, targetCloudType)
 	}
 	return nil
+}
+
+// MachinePatch carries the replacement machine's physical facts, known to
+// bootstrap because it just created them.
+type MachinePatch struct {
+	// MachineName is the name of the archived controller machine the
+	// replacement maps onto. It is resolved from the loaded dump by the
+	// recovery stage; the caller need not set it.
+	MachineName string
+
+	// InstanceID is the replacement's actual provider instance ID.
+	InstanceID string
+
+	// DisplayName is the replacement's provider display name.
+	DisplayName string
+
+	// Arch is the replacement's architecture.
+	Arch string
+
+	// MemMB, Cores and RootDiskMB are the replacement's observed
+	// hardware. Zero values leave the archived observations in place.
+	MemMB      uint64
+	Cores      uint64
+	RootDiskMB uint64
 }

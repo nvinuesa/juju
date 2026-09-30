@@ -311,3 +311,18 @@ func withManifest(c *tc.C, files map[string][]byte) map[string][]byte {
 	files["juju-backup/manifest.json"] = data
 	return files
 }
+
+// rootTar renders the archive's root.tar bundle with one object blob.
+func rootTar(c *tc.C) []byte {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	content := []byte("blob content")
+	c.Assert(tw.WriteHeader(&tar.Header{
+		Name: "var/lib/juju/objectstore/some-ns/somehash", Mode: 0o600,
+		Size: int64(len(content)), Typeflag: tar.TypeReg,
+	}), tc.ErrorIsNil)
+	_, err := tw.Write(content)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Assert(tw.Close(), tc.ErrorIsNil)
+	return buf.Bytes()
+}
