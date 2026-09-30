@@ -4,6 +4,8 @@
 package restore
 
 import (
+	"time"
+
 	"github.com/juju/juju/core/semversion"
 )
 
@@ -50,6 +52,10 @@ type ArchiveInfo struct {
 	// always produces a single-node replacement; values above one mean
 	// the remaining controller machines load as dead rows.
 	HANodes int64
+
+	// BackupFinished is when the source backup completed, telling the
+	// operator how much state drift to expect.
+	BackupFinished time.Time
 
 	// CloudName is the name of the controller model's cloud.
 	CloudName string

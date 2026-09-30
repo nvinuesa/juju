@@ -56,9 +56,14 @@ func metadataJSON(agentVersion string) string {
 // "lxd", 2 is "kubernetes"; model type 0 is "iaas", 1 is "caas".
 func controllerDump(models ...[3]string) string {
 	out := "payload:\n" +
+		"  controller:\n" +
+		"  - uuid: " + testControllerUUID + "\n" +
+		"    model_uuid: " + testControllerModelUUID + "\n" +
+		"    target_version: 4.1.0\n" +
+		"    api_port: \"17070\"\n" +
 		"  cloud:\n" +
-		"  - uuid: cloud-lxd\n    name: lxd\n    cloud_type_id: 1\n" +
-		"  - uuid: cloud-k8s\n    name: myk8s\n    cloud_type_id: 2\n" +
+		"  - uuid: cloud-lxd\n    name: lxd\n    cloud_type_id: 1\n    endpoint: ''\n    skip_tls_verify: false\n" +
+		"  - uuid: cloud-k8s\n    name: myk8s\n    cloud_type_id: 2\n    endpoint: ''\n    skip_tls_verify: false\n" +
 		"  cloud_type:\n" +
 		"  - id: 1\n    type: lxd\n" +
 		"  - id: 2\n    type: kubernetes\n" +
@@ -70,7 +75,8 @@ func controllerDump(models ...[3]string) string {
 		"  model:\n"
 	for _, m := range models {
 		out += fmt.Sprintf(
-			"  - uuid: %s\n    name: %s\n    cloud_uuid: %s\n    model_type_id: %s\n",
+			"  - uuid: %s\n    name: %s\n    cloud_uuid: %s\n    model_type_id: %s\n"+
+				"    activated: true\n    life_id: 0\n    qualifier: ''\n",
 			m[0], m[1], m[2], "0")
 	}
 	return out
@@ -109,7 +115,7 @@ func makeArchive(c *tc.C, files map[string][]byte) []byte {
 	return buf.Bytes()
 }
 
-func (s *validateSuite) writeArchive(c *tc.C, files map[string][]byte) (string, string) {
+func writeArchive(c *tc.C, files map[string][]byte) (string, string) {
 	archive := makeArchive(c, files)
 	sum := sha256.Sum256(archive)
 	path := filepath.Join(c.MkDir(), "juju-backup.tar.gz")
@@ -133,7 +139,7 @@ func validFiles() map[string][]byte {
 }
 
 func (s *validateSuite) TestValidateArchive(c *tc.C) {
-	path, sum := s.writeArchive(c, validFiles())
+	path, sum := writeArchive(c, validFiles())
 
 	info, err := restore.ValidateArchive(c.Context(), path, sum)
 	c.Assert(err, tc.ErrorIsNil)
@@ -155,7 +161,7 @@ func (s *validateSuite) TestValidateArchive(c *tc.C) {
 }
 
 func (s *validateSuite) TestValidateArchiveChecksumMismatch(c *tc.C) {
-	path, _ := s.writeArchive(c, validFiles())
+	path, _ := writeArchive(c, validFiles())
 
 	_, err := restore.ValidateArchive(c.Context(), path, "deadbeef")
 	c.Assert(err, tc.ErrorMatches, "archive checksum mismatch: expected sha256 .deadbeef., archive is .*")
@@ -164,7 +170,7 @@ func (s *validateSuite) TestValidateArchiveChecksumMismatch(c *tc.C) {
 func (s *validateSuite) TestValidateArchiveMissingMetadata(c *tc.C) {
 	files := validFiles()
 	delete(files, "juju-backup/metadata.json")
-	path, sum := s.writeArchive(c, files)
+	path, sum := writeArchive(c, files)
 
 	_, err := restore.ValidateArchive(c.Context(), path, sum)
 	c.Assert(err, tc.ErrorMatches, "archive is missing juju-backup/metadata.json")
@@ -173,7 +179,7 @@ func (s *validateSuite) TestValidateArchiveMissingMetadata(c *tc.C) {
 func (s *validateSuite) TestValidateArchiveMissingControllerDump(c *tc.C) {
 	files := validFiles()
 	delete(files, "juju-backup/dump/controller.yaml")
-	path, sum := s.writeArchive(c, files)
+	path, sum := writeArchive(c, files)
 
 	_, err := restore.ValidateArchive(c.Context(), path, sum)
 	c.Assert(err, tc.ErrorMatches, "archive is missing juju-backup/dump/controller.yaml")
@@ -182,7 +188,7 @@ func (s *validateSuite) TestValidateArchiveMissingControllerDump(c *tc.C) {
 func (s *validateSuite) TestValidateArchiveMissingModelDump(c *tc.C) {
 	files := validFiles()
 	delete(files, "juju-backup/dump/models/"+testModelAUUID+".yaml")
-	path, sum := s.writeArchive(c, files)
+	path, sum := writeArchive(c, files)
 
 	_, err := restore.ValidateArchive(c.Context(), path, sum)
 	c.Assert(err, tc.ErrorMatches,
@@ -192,7 +198,7 @@ func (s *validateSuite) TestValidateArchiveMissingModelDump(c *tc.C) {
 func (s *validateSuite) TestValidateArchiveUnknownModelDump(c *tc.C) {
 	files := validFiles()
 	files["juju-backup/dump/models/00000000-0000-0000-0000-000000000000.yaml"] = []byte("payload: {}\n")
-	path, sum := s.writeArchive(c, files)
+	path, sum := writeArchive(c, files)
 
 	_, err := restore.ValidateArchive(c.Context(), path, sum)
 	c.Assert(err, tc.ErrorMatches,
@@ -202,7 +208,7 @@ func (s *validateSuite) TestValidateArchiveUnknownModelDump(c *tc.C) {
 func (s *validateSuite) TestValidateArchiveRejectsTraversal(c *tc.C) {
 	files := validFiles()
 	files["juju-backup/../escape"] = []byte("x")
-	path, _ := s.writeArchive(c, files)
+	path, _ := writeArchive(c, files)
 
 	_, err := restore.ValidateArchive(c.Context(), path, "")
 	c.Assert(err, tc.ErrorMatches, "archive contains unsafe path .*")
@@ -211,7 +217,7 @@ func (s *validateSuite) TestValidateArchiveRejectsTraversal(c *tc.C) {
 func (s *validateSuite) TestValidateArchiveRejectsAbsolutePath(c *tc.C) {
 	files := validFiles()
 	files["/abs/path"] = []byte("x")
-	path, _ := s.writeArchive(c, files)
+	path, _ := writeArchive(c, files)
 
 	_, err := restore.ValidateArchive(c.Context(), path, "")
 	c.Assert(err, tc.ErrorMatches, "archive contains unsafe path .*")
@@ -221,7 +227,7 @@ func (s *validateSuite) TestValidateArchiveRejectsDuplicate(c *tc.C) {
 	// The second entry cleans to the same path as metadata.json.
 	files := validFiles()
 	files["juju-backup/./metadata.json"] = []byte(metadataJSON("4.1.0"))
-	path, _ := s.writeArchive(c, files)
+	path, _ := writeArchive(c, files)
 
 	_, err := restore.ValidateArchive(c.Context(), path, "")
 	c.Assert(err, tc.ErrorMatches, "archive contains duplicate path .*")

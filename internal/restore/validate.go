@@ -63,7 +63,18 @@ func ValidateArchive(ctx context.Context, archivePath, expectedSHA256 string) (*
 	if err != nil {
 		return nil, errors.Capture(err)
 	}
+	info, err := parseArchiveInfo(contents)
+	if err != nil {
+		return nil, errors.Capture(err)
+	}
+	info.Checksum = checksum
+	info.Size = size
+	return info, nil
+}
 
+// parseArchiveInfo builds the archive summary from extracted contents:
+// metadata, controller dump and the model dump inventory.
+func parseArchiveInfo(contents *archiveContents) (*ArchiveInfo, error) {
 	meta, err := corebackups.NewMetadataJSONReader(bytes.NewReader(contents.metadata))
 	if err != nil {
 		return nil, errors.Errorf("parsing %s: %w", metadataPath, err)
@@ -82,8 +93,9 @@ func ValidateArchive(ctx context.Context, archivePath, expectedSHA256 string) (*
 	if err != nil {
 		return nil, errors.Capture(err)
 	}
-	info.Checksum = checksum
-	info.Size = size
+	if meta.Finished != nil {
+		info.BackupFinished = *meta.Finished
+	}
 	return info, nil
 }
 
