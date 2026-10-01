@@ -56,6 +56,10 @@ const (
 	// an interrupted one.
 	FileNameRecoveryComplete = "recovery/bootstrap-complete"
 
+	// FileNameRecoveryStarted records that Kubernetes recovery has begun.
+	// Agent config files may already exist before the first recovery attempt.
+	FileNameRecoveryStarted = "recovery/bootstrap-started"
+
 	// curlCommand is the base curl command used to download tools.
 	curlCommand = "curl -sSf"
 

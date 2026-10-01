@@ -348,9 +348,10 @@ func (s *bootstrapSuite) TestControllerSpecRecoveryBootstrapGate(c *tc.C) {
 	c.Assert(apiServer.Args, tc.HasLen, 2)
 
 	startup := apiServer.Args[1]
-	// A completed recovery is detected via the marker file, not
-	// agent.conf (which bootstrap-state writes as its first step).
-	c.Check(startup, tc.Contains, "if test -e $JUJU_DATA_DIR/recovery/bootstrap-complete; then :; elif test -e $JUJU_DATA_DIR/agents/controller-0/agent.conf")
+	// Dedicated markers tolerate config seeded by init containers while
+	// refusing a restart after interrupted recovery.
+	c.Check(startup, tc.Contains, "if test -e $JUJU_DATA_DIR/recovery/bootstrap-complete; then :; elif test -e $JUJU_DATA_DIR/recovery/bootstrap-started")
+	c.Check(startup, tc.Contains, "touch $JUJU_DATA_DIR/recovery/bootstrap-started")
 	c.Check(startup, tc.Contains, `echo "recovery was interrupted; destroy the controller and re-run juju recover" >&2`)
 	c.Check(startup, tc.Contains, "$JUJU_TOOLS_DIR/jujuagentd bootstrap-state --data-dir $JUJU_DATA_DIR --debug --timeout 10m0s")
 	c.Check(startup, tc.Contains, "test -e $JUJU_DATA_DIR/recovery/bootstrap-complete || exit 1")

@@ -433,6 +433,14 @@ to create a new model to deploy %sworkloads.
 	}()
 
 	bootstrapCtx := environscmd.BootstrapContext(stdCtx, ctx)
+	var recoveryParams *bootstrap.RecoveryParams
+	if c.recoveryInfo != nil {
+		recoveryParams = &bootstrap.RecoveryParams{
+			SourcePath: c.RecoveryPath, SHA256: c.RecoverySHA256,
+			ControllerUUID: c.recoveryInfo.ControllerUUID, ControllerName: c.recoveryInfo.ControllerName,
+			ControllerModelUUID: c.recoveryInfo.ControllerModelUUID, Models: recoveryModels(c.recoveryInfo),
+		}
+	}
 	bootstrapPrepareParams := bootstrap.PrepareParams{
 		ModelConfig:      bootstrapCfg.bootstrapModel,
 		ControllerConfig: bootstrapCfg.controller,
@@ -450,12 +458,16 @@ to create a new model to deploy %sworkloads.
 		},
 		CredentialName: credentials.name,
 		AdminSecret:    bootstrapCfg.bootstrap.AdminSecret,
+		Recovery:       recoveryParams,
 	}
 	environ, err := bootstrapPrepareController(
 		isCAASController, bootstrapCtx, store, bootstrapPrepareParams,
 	)
 	if err != nil {
 		return errors.Trace(err)
+	}
+	if isCAASController && recoveryParams != nil && recoveryParams.SubstrateReport != nil {
+		cloud.HostCloudRegion = recoveryParams.SubstrateReport.HostCloudRegion
 	}
 
 	// Validate the storage provider config.
@@ -495,6 +507,7 @@ to create a new model to deploy %sworkloads.
 	}
 
 	bootstrapParams := bootstrap.BootstrapParams{
+		Recovery:                      recoveryParams,
 		ControllerName:                c.controllerName,
 		BootstrapBase:                 bootstrapBase,
 		SupportedBootstrapBases:       supportedBootstrapBases,
@@ -526,16 +539,6 @@ to create a new model to deploy %sworkloads.
 			AddressesDelay: bootstrapCfg.bootstrap.BootstrapAddressesDelay,
 		},
 		Force: c.Force,
-	}
-	if c.recoveryInfo != nil {
-		bootstrapParams.Recovery = &bootstrap.RecoveryParams{
-			SourcePath:          c.RecoveryPath,
-			SHA256:              c.RecoverySHA256,
-			ControllerUUID:      c.recoveryInfo.ControllerUUID,
-			ControllerName:      c.recoveryInfo.ControllerName,
-			ControllerModelUUID: c.recoveryInfo.ControllerModelUUID,
-			Models:              recoveryModels(c.recoveryInfo),
-		}
 	}
 
 	if err := store.SetCurrentModel(c.controllerName, ""); err != nil {

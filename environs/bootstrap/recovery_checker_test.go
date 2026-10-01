@@ -80,3 +80,52 @@ func (s *recoveryCheckerSuite) TestBootstrapCAASRecoveryInvokesSubstrateChecker(
 	c.Assert(err, tc.ErrorMatches, "substrate check ran")
 	c.Check(env.checkCalled, tc.IsTrue)
 }
+
+type preparableRecoveryEnviron struct {
+	recoveryEnviron
+	standardCalled bool
+	params         environs.RecoverySubstrateParams
+	report         *environs.RecoverySubstrateReport
+	err            error
+}
+
+func (e *preparableRecoveryEnviron) PrepareForBootstrap(environs.BootstrapContext, string) error {
+	e.standardCalled = true
+	return errors.New("normal preparation refuses surviving models")
+}
+
+func (e *preparableRecoveryEnviron) PrepareForRecovery(_ environs.BootstrapContext, params environs.RecoverySubstrateParams) (*environs.RecoverySubstrateReport, error) {
+	e.params = params
+	return e.report, e.err
+}
+
+func (s *recoveryCheckerSuite) TestRecoveryPreparationPreservesWorkloadNamespaces(c *tc.C) {
+	report := &environs.RecoverySubstrateReport{MissingWorkloads: []string{"workload/app"}}
+	env := &preparableRecoveryEnviron{report: report}
+	args := recoveryBootstrapArgs()
+	ctx := environscmd.BootstrapContext(c.Context(), cmdtesting.Context(c))
+	err := prepareControllerEnvironment(ctx, env, PrepareParams{Recovery: args.Recovery}, true)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(env.standardCalled, tc.IsFalse)
+	c.Check(env.params.ControllerUUID, tc.Equals, args.Recovery.ControllerUUID)
+	c.Check(env.params.ControllerName, tc.Equals, args.Recovery.ControllerName)
+	c.Check(env.params.ControllerModelUUID, tc.Equals, args.Recovery.ControllerModelUUID)
+	c.Check(args.Recovery.SubstrateReport, tc.Equals, report)
+}
+
+func (s *recoveryCheckerSuite) TestRecoveryPreparationRefusesUnfencedSource(c *tc.C) {
+	env := &preparableRecoveryEnviron{err: errors.New("source controller is not fenced")}
+	args := recoveryBootstrapArgs()
+	ctx := environscmd.BootstrapContext(c.Context(), cmdtesting.Context(c))
+	err := prepareControllerEnvironment(ctx, env, PrepareParams{Recovery: args.Recovery}, true)
+	c.Check(err, tc.ErrorMatches, "source controller is not fenced")
+	c.Check(env.standardCalled, tc.IsFalse)
+	c.Check(args.Recovery.SubstrateReport, tc.IsNil)
+}
+
+func (s *recoveryCheckerSuite) TestRecoveryPreparationRequiresProviderCapability(c *tc.C) {
+	args := recoveryBootstrapArgs()
+	ctx := environscmd.BootstrapContext(c.Context(), cmdtesting.Context(c))
+	err := prepareControllerEnvironment(ctx, &recoveryEnviron{}, PrepareParams{Recovery: args.Recovery}, true)
+	c.Check(err, tc.ErrorMatches, ".*recovery preparation.*not supported")
+}

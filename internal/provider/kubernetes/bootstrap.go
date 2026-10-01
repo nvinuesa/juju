@@ -1593,14 +1593,12 @@ func (c *controllerStack) buildContainerSpecForController() (*core.PodSpec, erro
 	var bootstrapSetup string
 	switch {
 	case c.pcfg.Bootstrap != nil && c.pcfg.Bootstrap.RecoveryArchivePath != "":
-		// bootstrap-state creates agent.conf as its first step, long
-		// before the recovery databases are loaded. Gate the agent on
-		// the completion marker instead: if the pod restarted partway
-		// through, refuse to run against the half-loaded database.
-		bootstrapSetup = fmt.Sprintf(
-			`if test -e %[1]s; then :; elif test -e %[2]s; then echo "recovery was interrupted; destroy the controller and re-run juju recover" >&2; exit 1; else %[3]s; test -e %[1]s || exit 1; fi`,
+		// Init containers may seed agent.conf before recovery begins. Use
+		// dedicated markers to distinguish the first attempt from a restart
+		// after interrupted recovery, before the databases are fully loaded.
+		bootstrapSetup = recoveryBootstrapCommand(
 			recoveryMarkerPath,
-			agentConfigPath,
+			path.Join("$JUJU_DATA_DIR", cloudconfig.FileNameRecoveryStarted),
 			bootstrapStateCmd,
 		)
 	case isLocalControllerCharmPath(c.pcfg.Bootstrap.ControllerCharmPath):
@@ -1628,6 +1626,13 @@ func (c *controllerStack) buildContainerSpecForController() (*core.PodSpec, erro
 	)
 
 	return c.buildContainerSpecForCommands(setupCmd, machineCmd, jujudEnv)
+}
+
+func recoveryBootstrapCommand(completeMarker, startedMarker, bootstrapCmd string) string {
+	return fmt.Sprintf(
+		`if test -e %[1]s; then :; elif test -e %[2]s; then echo "recovery was interrupted; destroy the controller and re-run juju recover" >&2; exit 1; else mkdir -p %[4]s && touch %[2]s && %[3]s && test -e %[1]s || exit 1; fi`,
+		completeMarker, startedMarker, bootstrapCmd, path.Dir(startedMarker),
+	)
 }
 
 func (c *controllerStack) buildContainerSpecForCommands(setupCmd, machineCmd string, jujudEnv map[string]string) (*core.PodSpec, error) {

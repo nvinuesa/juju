@@ -57,6 +57,9 @@ type PrepareParams struct {
 
 	// AdminSecret contains the password for the admin user.
 	AdminSecret string
+
+	// Recovery supplies archived identities for recovery-specific preparation.
+	Recovery *RecoveryParams
 }
 
 // Validate validates the PrepareParams.
@@ -140,13 +143,32 @@ func PrepareController(
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	if err := env.PrepareForBootstrap(ctx, args.ControllerName); err != nil {
+	if err := prepareControllerEnvironment(ctx, env, args, isCAASController); err != nil {
 		return nil, errors.Trace(err)
 	}
 	if err := do(); err != nil {
 		return nil, errors.Trace(err)
 	}
 	return env, nil
+}
+
+func prepareControllerEnvironment(ctx environs.BootstrapContext, env environs.BootstrapEnviron, args PrepareParams, isCAAS bool) error {
+	if !isCAAS || args.Recovery == nil {
+		return env.PrepareForBootstrap(ctx, args.ControllerName)
+	}
+	preparer, ok := env.(environs.RecoveryControllerPreparer)
+	if !ok {
+		return errors.NotSupportedf("recovery preparation for provider %q", args.Cloud.Type)
+	}
+	report, err := preparer.PrepareForRecovery(ctx, environs.RecoverySubstrateParams{
+		ControllerUUID: args.Recovery.ControllerUUID, ControllerName: args.Recovery.ControllerName,
+		ControllerModelUUID: args.Recovery.ControllerModelUUID, Models: args.Recovery.Models,
+	})
+	if err != nil {
+		return errors.Trace(err)
+	}
+	args.Recovery.SubstrateReport = report
+	return nil
 }
 
 // decorateAndWriteInfo decorates the info struct with information
