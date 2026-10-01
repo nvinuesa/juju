@@ -115,6 +115,16 @@ func environIsCAAS(environ environs.BootstrapEnviron) bool {
 	return ok
 }
 
+// restoreModels maps the archived model inventory to the provider-facing
+// restore model references.
+func restoreModels(info *restore.ArchiveInfo) []environs.RestoreModel {
+	models := make([]environs.RestoreModel, len(info.Models))
+	for i, m := range info.Models {
+		models[i] = environs.RestoreModel{Name: m.Name, UUID: m.UUID}
+	}
+	return models
+}
+
 // printRestoreSummary reports the restored identities and the immediate
 // reconciliation effects of the restore. The agent-side load reports the
 // database-derived details (dead controller machines, pending removals)
