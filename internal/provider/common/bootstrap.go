@@ -301,13 +301,13 @@ func BootstrapInstance(
 			}
 		}
 		if err := openControllerModelPorts(bootstrapContext, modelFw, args.ControllerConfig, env.Config(), envIPV6CIDRSupport); err != nil {
-			return nil, nil, nil, errors.Annotate(err, "cannot open SSH")
+			return nil, nil, nil, wrapStartedInstance(errors.Annotate(err, "cannot open SSH"), result.Instance)
 		}
 	}
 
 	err = statusCleanup()
 	if err != nil {
-		return nil, nil, nil, errors.Annotate(err, "cleaning up status line")
+		return nil, nil, nil, wrapStartedInstance(errors.Annotate(err, "cleaning up status line"), result.Instance)
 	}
 	msg := fmt.Sprintf(" - %s (%s)", result.Instance.Id(), formatHardware(result.Hardware))
 	// We need some padding below to overwrite any previous messages.
@@ -317,7 +317,14 @@ func BootstrapInstance(
 	}
 	bootstrapContext.Infof(msg)
 
-	finalizer := func(ctx environs.BootstrapContext, icfg *instancecfg.InstanceConfig, opts environs.BootstrapDialOpts) error {
+	finalizer := func(ctx environs.BootstrapContext, icfg *instancecfg.InstanceConfig, opts environs.BootstrapDialOpts) (err error) {
+		defer func() {
+			// From here on the instance exists: mark every failure so
+			// cleanup can destroy exactly this instance.
+			if err != nil {
+				err = wrapStartedInstance(err, result.Instance)
+			}
+		}()
 		icfg.Bootstrap.BootstrapMachineInstanceId = result.Instance.Id()
 		icfg.Bootstrap.BootstrapMachineDisplayName = result.DisplayName
 		icfg.Bootstrap.BootstrapMachineHardwareCharacteristics = result.Hardware
@@ -336,6 +343,21 @@ func BootstrapInstance(
 		return FinishBootstrap(bootstrapContext, client, env, result.Instance, icfg, opts)
 	}
 	return result, &requestedBootstrapBase, finalizer, nil
+}
+
+// wrapStartedInstance marks an error that happened after the bootstrap
+// instance started, so failure cleanup can destroy exactly that instance
+// instead of running a full environ destroy: a restore bootstrap
+// provisions the replacement with the source's model uuid, whose tag also
+// matches the fenced source's resources.
+func wrapStartedInstance(err error, inst instances.Instance) error {
+	if err == nil {
+		return nil
+	}
+	return &environs.BootstrapInstanceError{
+		InstanceID: string(inst.Id()),
+		Err:        err,
+	}
 }
 
 func startInstanceZones(env environs.Environ, ctx context.Context, args environs.StartInstanceParams) ([]string, error) {
@@ -469,7 +491,86 @@ var FinishBootstrap = func(
 	}
 	defer cleanup()
 
+	// In restore mode the archive is uploaded before the machine's
+	// configuration continues; the agent waits for the archive to appear
+	// before loading it, so the transfer only needs to win against
+	// bootstrap's own timeout.
+	if instanceConfig.Bootstrap != nil && instanceConfig.Bootstrap.RestoreArchivePath != "" {
+		if err := uploadRestoreArchive(ctx, client, addr, instanceConfig.Bootstrap, sshOptions); err != nil {
+			return errors.Trace(err)
+		}
+	}
+
 	return ConfigureMachine(ctx, client, addr, instanceConfig, sshOptions)
+}
+
+// uploadRestoreArchive copies the restore archive from the bootstrap
+// client to the machine over the bootstrap SSH channel and verifies its
+// checksum remotely before the agent is allowed to load it.
+func uploadRestoreArchive(
+	ctx environs.BootstrapContext,
+	client ssh.Client,
+	host string,
+	params *instancecfg.BootstrapConfig,
+	sshOptions *ssh.Options,
+) error {
+	remote := "ubuntu@" + host
+	ctx.Infof("Uploading restore archive to the controller")
+
+	// The SSH clients hand the command arguments to the remote login
+	// shell for re-parsing, so multi-word shell scripts cannot travel
+	// as command arguments. The archive is transferred with scp into a
+	// private (mktemp -d creates 0700) staging directory and installed
+	// with single-word commands only: a fixed /tmp path would sit
+	// world-readable until the install, and the archive holds the
+	// database dumps and the CA private key.
+	staging, err := client.Command(remote,
+		[]string{"mktemp", "-d", "/tmp/juju-restore.XXXXXX"},
+		sshOptions).Output()
+	if err != nil {
+		return errors.Annotate(err, "creating private staging directory on the controller")
+	}
+	stagingDir := strings.TrimSpace(string(staging))
+	if stagingDir == "" {
+		return errors.New("empty mktemp output from remote host")
+	}
+
+	if err := client.Copy([]string{
+		params.RestoreSourcePath, remote + ":" + stagingDir + "/archive",
+	}, sshOptions); err != nil {
+		return errors.Annotate(err, "uploading restore archive to the controller")
+	}
+
+	install := client.Command(remote, []string{
+		"sudo", "install", "-D", "-m", "0600",
+		stagingDir + "/archive", params.RestoreArchivePath,
+	}, sshOptions)
+	if out, err := install.CombinedOutput(); err != nil {
+		return errors.Annotatef(err, "installing restore archive on the controller: %s", strings.TrimSpace(string(out)))
+	}
+
+	verify := client.Command(remote, []string{"sudo", "sha256sum", params.RestoreArchivePath}, sshOptions)
+	out, err := verify.Output()
+	if err != nil {
+		return errors.Annotate(err, "verifying uploaded restore archive")
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) == 0 {
+		return errors.New("empty sha256sum output from remote host")
+	}
+	got := fields[0]
+	if !strings.EqualFold(got, params.RestoreSHA256) {
+		return errors.Errorf(
+			"uploaded restore archive checksum mismatch: expected sha256 %q, got %q",
+			params.RestoreSHA256, got)
+	}
+
+	if _, err := client.Command(remote, []string{"rm", "-rf", stagingDir}, sshOptions).Output(); err != nil {
+		// Non-fatal: the staging copy is private (0700) and the
+		// machine is discarded when bootstrap fails.
+		logger.Warningf(context.TODO(), "removing restore staging directory %q: %v", stagingDir, err)
+	}
+	return nil
 }
 
 func GetCheckNonceCommand(instanceConfig *instancecfg.InstanceConfig) string {

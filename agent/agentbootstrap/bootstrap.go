@@ -58,6 +58,19 @@ type DqliteInitializerFunc func(
 	options ...database.BootstrapOpt,
 ) error
 
+// DqliteRestoreInitializerFunc initializes the dqlite database for the
+// controller in restore mode, running the restore stage after the schema
+// migrations.
+type DqliteRestoreInitializerFunc func(
+	ctx context.Context,
+	mgr database.BootstrapNodeManager,
+	bootstrapAddresses corenetwork.ProviderAddresses,
+	modelUUID coremodel.UUID,
+	logger logger.Logger,
+	stage database.RestoreStage,
+	options ...database.BootstrapOpt,
+) error
+
 // CheckJWKSReachable checks if the given JWKS URL is reachable.
 func CheckJWKSReachable(url string) error {
 	ctx, cancelF := context.WithTimeout(context.TODO(), 30*time.Second)
@@ -74,6 +87,7 @@ type AgentBootstrap struct {
 	adminUser                 names.UserTag
 	agentConfig               agent.ConfigSetter
 	bootstrapDqlite           DqliteInitializerFunc
+	bootstrapDqliteRestore    DqliteRestoreInitializerFunc
 	bootstrapMachineAddresses corenetwork.ProviderAddresses
 
 	stateInitializationParams instancecfg.StateInitializationParams
@@ -93,7 +107,10 @@ type AgentBootstrapArgs struct {
 	BootstrapMachineAddresses corenetwork.ProviderAddresses
 	StateInitializationParams instancecfg.StateInitializationParams
 	BootstrapDqlite           DqliteInitializerFunc
-	Logger                    logger.Logger
+	// BootstrapDqliteRestore initializes dqlite in restore mode. Nil
+	// selects database.BootstrapDqliteWithRestore.
+	BootstrapDqliteRestore DqliteRestoreInitializerFunc
+	Logger                 logger.Logger
 }
 
 func (a *AgentBootstrapArgs) validate() error {
@@ -132,10 +149,16 @@ func NewAgentBootstrap(args AgentBootstrapArgs) (*AgentBootstrap, error) {
 	if err := args.validate(); err != nil {
 		return nil, errors.Trace(err)
 	}
+	bootstrapDqliteRestore := args.BootstrapDqliteRestore
+	if bootstrapDqliteRestore == nil {
+		bootstrapDqliteRestore = database.BootstrapDqliteWithRestore
+	}
+
 	return &AgentBootstrap{
 		adminUser:                 args.AdminUser,
 		agentConfig:               args.AgentConfig,
 		bootstrapDqlite:           args.BootstrapDqlite,
+		bootstrapDqliteRestore:    bootstrapDqliteRestore,
 		bootstrapMachineAddresses: args.BootstrapMachineAddresses,
 		clock:                     clock.WallClock,
 		logger:                    args.Logger,
@@ -258,8 +281,30 @@ func (b *AgentBootstrap) Initialize(ctx context.Context) (resultErr error) {
 		)
 	}
 
+	// Restore mode: wait for the uploaded archive, then load the archived
+	// databases instead of seeding identity data. Every seed operation
+	// above is skipped; the archived databases provide users, clouds,
+	// credentials, model records and configuration. The archived admin
+	// user's password is updated to the bootstrap-generated one, so the
+	// bootstrap client can authenticate with the credentials it holds;
+	// every other user keeps the archived password.
+	var stage database.RestoreStage
+	if stateParams.RestoreArchivePath != "" {
+		if err := b.waitForRestoreArchive(ctx, stateParams.RestoreArchivePath); err != nil {
+			return errors.Trace(err)
+		}
+		stage = b.restoreLoadStage(stateParams, controllerModelUUID)
+		databaseBootstrapOptions = []database.BootstrapOpt{
+			userbootstrap.SetUserPassword(
+				user.NameFromTag(b.adminUser),
+				auth.NewPassword(agentConfig.OldPassword()),
+				b.clock.Now().UTC(),
+			),
+		}
+	}
+
 	if err := b.initializeDqlite(
-		ctx, controllerModelUUID, databaseBootstrapOptions...,
+		ctx, controllerModelUUID, stage, databaseBootstrapOptions...,
 	); err != nil {
 		return errors.Trace(err)
 	}
@@ -280,6 +325,7 @@ func (b *AgentBootstrap) Initialize(ctx context.Context) (resultErr error) {
 
 func (b *AgentBootstrap) initializeDqlite(
 	ctx context.Context, controllerModelUUID coremodel.UUID,
+	stage database.RestoreStage,
 	options ...database.BootstrapOpt,
 ) error {
 	agentInfo, _ := b.agentConfig.ControllerAgentInfo()
@@ -289,11 +335,18 @@ func (b *AgentBootstrap) initializeDqlite(
 		ControllerCert:       agentInfo.Cert,
 		ControllerPrivateKey: agentInfo.PrivateKey,
 	}
+	nodeManager := database.NewNodeManager(
+		nodeManagerCfg, b.logger, coredatabase.NoopSlowQueryLogger{},
+	)
+	if stage != nil {
+		return b.bootstrapDqliteRestore(
+			ctx, nodeManager, b.bootstrapMachineAddresses,
+			controllerModelUUID, b.logger, stage, options...,
+		)
+	}
 	return b.bootstrapDqlite(
 		ctx,
-		database.NewNodeManager(
-			nodeManagerCfg, b.logger, coredatabase.NoopSlowQueryLogger{},
-		),
+		nodeManager,
 		b.bootstrapMachineAddresses,
 		controllerModelUUID,
 		b.logger,

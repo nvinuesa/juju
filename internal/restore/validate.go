@@ -19,6 +19,13 @@ import (
 // dump that preflight validation needs. Unknown fields are ignored; the
 // full decode happens agent-side during the load stage.
 type controllerDumpPayload struct {
+	Controller []struct {
+		UUID           string  `yaml:"uuid"`
+		ModelUUID      string  `yaml:"model_uuid"`
+		CACert         *string `yaml:"ca_cert"`
+		CAPrivateKey   *string `yaml:"ca_private_key"`
+		SystemIdentity *string `yaml:"system_identity"`
+	} `yaml:"controller"`
 	Cloud []struct {
 		UUID        string `yaml:"uuid"`
 		Name        string `yaml:"name"`
@@ -135,10 +142,38 @@ func buildArchiveInfo(meta *corebackups.Metadata, payload *controllerDumpPayload
 		}
 	}
 
+	if len(payload.Controller) == 0 {
+		return nil, errors.Errorf("%s records no controller row", controllerDumpPath)
+	}
+	if payload.Controller[0].CACert == nil || payload.Controller[0].CAPrivateKey == nil {
+		return nil, errors.Errorf("%s records no controller CA material", controllerDumpPath)
+	}
+	info.CACert = *payload.Controller[0].CACert
+	info.CAPrivateKey = *payload.Controller[0].CAPrivateKey
+	if payload.Controller[0].ModelUUID != "" &&
+		info.ControllerModelUUID != payload.Controller[0].ModelUUID {
+		return nil, errors.Errorf(
+			"controller model mismatch: metadata records %q, controller row records %q",
+			info.ControllerModelUUID, payload.Controller[0].ModelUUID)
+	}
+	// The manifest and the dump must agree on the controller's identity:
+	// the restored controller adopts the manifest's uuid, so a divergent
+	// dump row means the archive is internally inconsistent.
+	if payload.Controller[0].UUID != "" && payload.Controller[0].UUID != info.ControllerUUID {
+		return nil, errors.Errorf(
+			"controller uuid mismatch: metadata records %q, controller row records %q",
+			info.ControllerUUID, payload.Controller[0].UUID)
+	}
+
 	if len(payload.Model) == 0 {
 		return nil, errors.Errorf("%s records no models", controllerDumpPath)
 	}
+	seenModels := make(map[string]struct{}, len(payload.Model))
 	for _, m := range payload.Model {
+		if _, dup := seenModels[m.UUID]; dup {
+			return nil, errors.Errorf("dump records duplicate model uuid %q", m.UUID)
+		}
+		seenModels[m.UUID] = struct{}{}
 		cloud, ok := clouds[m.CloudUUID]
 		if !ok {
 			return nil, errors.Errorf("model %q references unknown cloud %q", m.Name, m.CloudUUID)

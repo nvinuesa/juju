@@ -53,6 +53,7 @@ import (
 	k8sconstants "github.com/juju/juju/internal/provider/kubernetes/constants"
 	"github.com/juju/juju/internal/provider/lxd/lxdnames"
 	"github.com/juju/juju/internal/proxy"
+	"github.com/juju/juju/internal/restore"
 	"github.com/juju/juju/internal/ssh"
 	"github.com/juju/juju/internal/storage"
 	"github.com/juju/juju/internal/uuid"
@@ -245,6 +246,16 @@ type bootstrapCommand struct {
 	ControllerCharmChannelStr string
 	ControllerCharmChannel    charm.Channel
 
+	// RestorePath and RestoreSHA256 carry `juju bootstrap --restore`:
+	// the backup archive to restore onto the fresh controller and the
+	// operator-supplied archive checksum.
+	RestorePath   string
+	RestoreSHA256 string
+
+	// restoreInfo is the validated archive summary produced by the
+	// restore preflight. It is nil for a normal bootstrap.
+	restoreInfo *restore.ArchiveInfo
+
 	// Force is used to allow a bootstrap to be run on unsupported series.
 	Force bool
 }
@@ -371,6 +382,10 @@ func (c *bootstrapCommand) SetFlags(f *gnuflag.FlagSet) {
 	f.BoolVar(&c.noSwitch, "no-switch", false, "Do not switch to the newly created controller")
 	f.BoolVar(&c.Force, "force", false, "Allow the bypassing of checks such as supported base")
 	f.StringVar(&c.ControllerCharmPath, "controller-charm-path", "", "Path to a locally built controller charm")
+	f.StringVar(&c.RestorePath, "restore", "",
+		"Restore a controller from the given backup archive onto a fresh replacement")
+	f.StringVar(&c.RestoreSHA256, "restore-sha256", "",
+		"SHA-256 checksum (hex) of the backup archive given with --restore")
 	f.StringVar(&c.ControllerCharmChannelStr, "controller-charm-channel",
 		fmt.Sprintf("%d.%d/stable", jujuversion.Current.Major, jujuversion.Current.Minor),
 		"The Charmhub channel to download the controller charm from (if not using a local charm)")
@@ -417,6 +432,17 @@ func (c *bootstrapCommand) Init(args []string) (err error) {
 	}
 	if c.AgentVersionParam != "" && c.BuildAgent {
 		return errors.New("--agent-version and --build-agent can't be used together")
+	}
+	if c.RestoreSHA256 != "" && c.RestorePath == "" {
+		return errors.New("--restore-sha256 requires --restore")
+	}
+	if c.RestorePath != "" && c.RestoreSHA256 == "" {
+		return errors.New("--restore requires --restore-sha256")
+	}
+	if c.RestoreSHA256 != "" {
+		if err := validateRestoreSHA256(c.RestoreSHA256); err != nil {
+			return err
+		}
 	}
 
 	// Parse the placement directive. Bootstrap currently only
@@ -644,8 +670,35 @@ func (c *bootstrapCommand) Run(ctx *cmd.Context) (resultErr error) {
 		return errors.Trace(err)
 	}
 
+	// Restore preflight: validate the archive offline and check it
+	// against the target cloud. It runs before anything is provisioned;
+	// a failure here creates nothing.
+	restoreInfo, err := c.runRestorePreflight(ctx, cloud)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	c.restoreInfo = restoreInfo
+
 	if c.controllerName == "" {
-		c.setControllerName(defaultControllerName(cloud.Name, region.Name))
+		// A Kubernetes restore lands in the source controller
+		// namespace, so the controller name defaults to the archived
+		// source name.
+		if restoreInfo != nil && cloud.Type == jujucloud.CloudTypeKubernetes && restoreInfo.ControllerName != "" {
+			c.setControllerName(restoreInfo.ControllerName)
+		} else {
+			c.setControllerName(defaultControllerName(cloud.Name, region.Name))
+		}
+	}
+
+	if restoreInfo != nil && cloud.Type == jujucloud.CloudTypeKubernetes {
+		if restoreInfo.ControllerName == "" {
+			return errors.New("restore archive does not record the source controller name")
+		}
+		if c.controllerName != restoreInfo.ControllerName {
+			return errors.Errorf(
+				"kubernetes restore requires the source controller name %q, got %q",
+				restoreInfo.ControllerName, c.controllerName)
+		}
 	}
 
 	// set a Region so it's config can be found below.
@@ -857,6 +910,16 @@ to create a new model to deploy %sworkloads.
 		},
 		Force: c.Force,
 	}
+	if c.restoreInfo != nil {
+		bootstrapParams.Restore = &bootstrap.RestoreParams{
+			SourcePath:          c.RestorePath,
+			SHA256:              c.RestoreSHA256,
+			ControllerUUID:      c.restoreInfo.ControllerUUID,
+			ControllerName:      c.restoreInfo.ControllerName,
+			ControllerModelUUID: c.restoreInfo.ControllerModelUUID,
+			Models:              restoreModels(c.restoreInfo),
+		}
+	}
 
 	if err := store.SetCurrentModel(c.controllerName, ""); err != nil {
 		return errors.Trace(err)
@@ -880,7 +943,12 @@ to create a new model to deploy %sworkloads.
 
 	// handleBootstrapErrorFunc is a function that will be called to clean up
 	// the environment if the bootstrap process fails.
-	handleBootstrapErrorFunc := func() error {
+	handleBootstrapErrorFunc := func(bootstrapErr error) error {
+		if c.RestorePath != "" {
+			return cleanupFailedRestoreBootstrap(
+				c.controllerName, environ, bootstrapErr, ctx, store,
+			)
+		}
 		return environsDestroy(
 			c.controllerName, environ, ctx, store,
 		)
@@ -908,10 +976,16 @@ See %s.`[1:], "`juju kill-controller`")
 
 		logger.Errorf(context.TODO(), "%v", resultErr)
 		logger.Debugf(context.TODO(), "(error details: %v)", errors.Details(resultErr))
+		// The cleanup needs the ORIGINAL error: resultErr is set to
+		// cmd.ErrSilent below to prevent logging it twice, which would
+		// erase the bootstrap-instance marker the restore cleanup reads.
+		bootstrapErr := resultErr
 		// Set resultErr to cmd.ErrSilent to prevent
 		// logging the error twice.
 		resultErr = cmd.ErrSilent
-		handleBootstrapError(ctx, handleBootstrapErrorFunc)
+		handleBootstrapError(ctx, func() error {
+			return handleBootstrapErrorFunc(bootstrapErr)
+		})
 	}()
 
 	if envMetadataSrc := os.Getenv(constants.EnvJujuMetadataSource); c.MetadataSource == "" && envMetadataSrc != "" {
@@ -1012,13 +1086,20 @@ See %s.`[1:], "`juju kill-controller`")
 	// To avoid race conditions when running scripted bootstraps, wait
 	// for the controller's machine agent to be ready to accept commands
 	// before exiting this bootstrap command.
-	return waitForAgentInitialisation(
+	if err := waitForAgentInitialisation(
 		bootstrapCtx,
 		&c.ModelCommandBase,
 		isCAASController,
 		c.controllerName,
 		common.TryAPI,
-	)
+	); err != nil {
+		return err
+	}
+
+	if c.restoreInfo != nil {
+		c.printRestoreSummary(ctx, c.restoreInfo)
+	}
+	return nil
 }
 
 func (c *bootstrapCommand) controllerDataRefresher(
@@ -1361,12 +1442,29 @@ func (c *bootstrapCommand) bootstrapConfigs(
 		return bootstrapConfigs{}, errors.Trace(err)
 	}
 
+	// In restore mode the replacement takes the source's identities: the
+	// controller and controller model UUIDs and the controller CA come
+	// from the validated archive, so the whole replacement stack is born
+	// with the source identity and surviving agents keep source trust.
+	if c.restoreInfo != nil {
+		if controllerModelUUID, err = uuid.UUIDFromString(c.restoreInfo.ControllerModelUUID); err != nil {
+			return bootstrapConfigs{}, errors.Annotate(err, "parsing source controller model UUID")
+		}
+		if controllerUUID, err = uuid.UUIDFromString(c.restoreInfo.ControllerUUID); err != nil {
+			return bootstrapConfigs{}, errors.Annotate(err, "parsing source controller UUID")
+		}
+	}
+
 	// Create a model config, and split out any controller
 	// and bootstrap config attributes.
 	combinedConfig := map[string]any{
 		"type":         cloud.Type,
 		"name":         bootstrap.ControllerModelName,
 		config.UUIDKey: controllerModelUUID.String(),
+	}
+	if c.restoreInfo != nil {
+		combinedConfig[bootstrap.CACertKey] = c.restoreInfo.CACert
+		combinedConfig[bootstrap.CAPrivateKeyKey] = c.restoreInfo.CAPrivateKey
 	}
 
 	userConfigAttrs, err := c.config.ReadAttrs(ctx)

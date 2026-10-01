@@ -440,6 +440,97 @@ func (c *controllerStack) uploadLocalControllerCharmWithRetry(ctx context.Contex
 	})
 }
 
+// uploadRestoreArchiveWithRetry uploads the restore archive to the
+// controller pod with the same retry policy as the local controller charm
+// upload. It is a no-op outside restore mode.
+func (c *controllerStack) uploadRestoreArchiveWithRetry(ctx context.Context, podName string) error {
+	if c.pcfg.Bootstrap == nil || c.pcfg.Bootstrap.RestoreArchivePath == "" {
+		return nil
+	}
+	return retry.Call(retry.CallArgs{
+		Attempts: localControllerCharmUploadRetryAttempts,
+		Delay:    localControllerCharmUploadRetryDelay,
+		Stop:     ctx.Done(),
+		Clock:    c.broker.clock,
+		Func: func() error {
+			return c.uploadRestoreArchive(ctx, podName)
+		},
+		NotifyFunc: func(err error, attempt int) {
+			logger.Debugf(ctx, "uploading restore archive, attempt %d/%d failed: %v", attempt, localControllerCharmUploadRetryAttempts, err)
+		},
+	})
+}
+
+// uploadRestoreArchive copies the restore archive from the bootstrap
+// client into the controller pod and verifies its checksum remotely
+// before the agent is allowed to load it. The agent waits for the
+// archive to appear, so the transfer only needs to win against
+// bootstrap's own timeout.
+func (c *controllerStack) uploadRestoreArchive(ctx context.Context, podName string) error {
+	params := c.pcfg.Bootstrap
+	execClient, err := c.controllerExecClient()
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	archivePath := params.RestoreArchivePath
+	uploadPath := archivePath + ".uploading"
+	execCommand := func(commands []string) (string, error) {
+		var stdout, stderr bytes.Buffer
+		err := execClient.Exec(ctx, k8sexec.ExecParams{
+			PodName:       podName,
+			ContainerName: apiServerContainerName,
+			Commands:      commands,
+			Stdout:        &stdout,
+			Stderr:        &stderr,
+		}, nil)
+		if err != nil && stderr.Len() > 0 {
+			return "", errors.Annotate(err, strings.TrimSpace(stderr.String()))
+		}
+		return stdout.String(), err
+	}
+
+	if _, err := execCommand([]string{"mkdir", "-p", path.Dir(archivePath)}); err != nil {
+		return errors.Annotate(err, "creating restore directory")
+	}
+
+	if err := execClient.Copy(ctx, k8sexec.CopyParams{
+		Src: k8sexec.FileResource{
+			Path: params.RestoreSourcePath,
+		},
+		Dest: k8sexec.FileResource{
+			Path:          uploadPath,
+			PodName:       podName,
+			ContainerName: apiServerContainerName,
+		},
+	}, nil); err != nil {
+		return errors.Annotate(err, "copying restore archive")
+	}
+
+	if _, err := execCommand([]string{"chmod", "0600", uploadPath}); err != nil {
+		return errors.Annotate(err, "setting restore archive permissions")
+	}
+	if _, err := execCommand([]string{"mv", "-f", uploadPath, archivePath}); err != nil {
+		return errors.Annotate(err, "installing restore archive")
+	}
+
+	out, err := execCommand([]string{"sha256sum", archivePath})
+	if err != nil {
+		return errors.Annotate(err, "verifying restore archive checksum")
+	}
+	fields := strings.Fields(out)
+	if len(fields) == 0 {
+		return errors.New("empty sha256sum output from controller pod")
+	}
+	got := fields[0]
+	if !strings.EqualFold(got, params.RestoreSHA256) {
+		return errors.Errorf(
+			"uploaded restore archive checksum mismatch: expected sha256 %q, got %q",
+			params.RestoreSHA256, got)
+	}
+	return nil
+}
+
 func (c *controllerStack) controllerExecClient() (k8sexec.Executor, error) {
 	restConfig := c.broker.restConfig()
 	if restConfig == nil {
@@ -1074,6 +1165,9 @@ func (c *controllerStack) createControllerStatefulset(ctx context.Context) error
 		if err = c.uploadLocalControllerCharmWithRetry(ctx, podName); err != nil {
 			return errors.Annotate(err, "uploading local controller charm")
 		}
+		if err = c.uploadRestoreArchiveWithRetry(ctx, podName); err != nil {
+			return errors.Annotate(err, "uploading restore archive")
+		}
 	}
 	return nil
 }
@@ -1509,7 +1603,7 @@ func (c *controllerStack) buildContainerSpecForController() (*core.PodSpec, erro
 		bootstrapSetup = fmt.Sprintf("test -e %s || %s", agentConfigPath, bootstrapStateCmd)
 	}
 	setupCmd := fmt.Sprintf(
-		`controller_id="${HOSTNAME##*-}"; if [ "${controller_id}" = "0" ]; then %s; else until test -e "$JUJU_DATA_DIR/agents/controller-${controller_id}/%s"; do sleep 1; done; fi`,
+		`controller_id="${HOSTNAME##*-}"; if [ "${controller_id}" = "0" ]; then %s || exit 1; else until test -e "$JUJU_DATA_DIR/agents/controller-${controller_id}/%s"; do sleep 1; done; fi`,
 		bootstrapSetup,
 		agentconstants.AgentConfigFilename,
 	)

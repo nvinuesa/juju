@@ -51,6 +51,12 @@ type BootstrapOpt func(
 	controller, model coredatabase.TxnRunner,
 ) error
 
+// RestoreStage runs after the controller and controller-model databases
+// are migrated and before the bootstrap seed operations and app shutdown.
+// It receives the open dqlite app so the restore load can open every
+// archived model database while bootstrap owns the databases exclusively.
+type RestoreStage func(ctx context.Context, dqlite *app.App) error
+
 // BootstrapDqlite opens a new database for the controller, and runs the
 // DDL to create its schema.
 //
@@ -62,6 +68,34 @@ func BootstrapDqlite(
 	bootstrapAddresses network.ProviderAddresses,
 	uuid model.UUID,
 	logger logger.Logger,
+	opts ...BootstrapOpt,
+) error {
+	return bootstrapDqlite(ctx, mgr, bootstrapAddresses, uuid, logger, nil, opts...)
+}
+
+// BootstrapDqliteWithRestore is BootstrapDqlite with a restore stage run
+// after the migrations and before the seed operations. Restore mode skips
+// the identity seed operations: the stage loads the archived databases
+// instead.
+func BootstrapDqliteWithRestore(
+	ctx context.Context,
+	mgr BootstrapNodeManager,
+	bootstrapAddresses network.ProviderAddresses,
+	uuid model.UUID,
+	logger logger.Logger,
+	stage RestoreStage,
+	opts ...BootstrapOpt,
+) error {
+	return bootstrapDqlite(ctx, mgr, bootstrapAddresses, uuid, logger, stage, opts...)
+}
+
+func bootstrapDqlite(
+	ctx context.Context,
+	mgr BootstrapNodeManager,
+	bootstrapAddresses network.ProviderAddresses,
+	uuid model.UUID,
+	logger logger.Logger,
+	stage RestoreStage,
 	opts ...BootstrapOpt,
 ) error {
 	dir, err := mgr.EnsureDataDir()
@@ -108,7 +142,15 @@ func BootstrapDqlite(
 
 	model, err := runMigration(ctx, dqlite, uuid.String(), schema.ModelDDL(), emptyInit, logger)
 	if err != nil {
-		return errors.Annotate(err, "running model migration")
+		return errors.Annotatef(err, "running model migration")
+	}
+
+	// The restore stage loads archived databases while the app is open
+	// and bootstrap owns every database exclusively.
+	if stage != nil {
+		if err := stage(ctx, dqlite); err != nil {
+			return errors.Annotatef(err, "running restore stage")
+		}
 	}
 
 	for i, op := range opts {
@@ -118,6 +160,24 @@ func BootstrapDqlite(
 	}
 
 	return nil
+}
+
+// EnsureModelDatabase opens the database for the given namespace on the
+// dqlite app, applying the model schema. Schema application is versioned
+// and idempotent, so this is safe on both fresh and existing databases.
+// The restore stage uses it to create the database of every archived
+// model; the caller owns the returned handle.
+func EnsureModelDatabase(ctx context.Context, dqlite *app.App, namespace string, logger logger.Logger) (*sql.DB, error) {
+	db, err := dqlite.Open(ctx, namespace)
+	if err != nil {
+		return nil, errors.Annotatef(err, "opening database for namespace %q", namespace)
+	}
+	runner := &txnRunner{db: db}
+	if err := NewDBMigration(runner, logger, schema.ModelDDL()).Apply(ctx); err != nil {
+		_ = db.Close()
+		return nil, errors.Annotatef(err, "migrating database with namespace %q schema", namespace)
+	}
+	return db, nil
 }
 
 func runMigration(ctx context.Context, dqlite *app.App, namespace string, schema Schema, init bootstrapInit, logger logger.Logger) (coredatabase.TxnRunner, error) {

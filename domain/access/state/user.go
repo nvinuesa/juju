@@ -1084,6 +1084,14 @@ WHERE      disabled = false`
 	return nil
 }
 
+// SetPasswordHashForBootstrap sets the password hash and salt for the
+// user with the supplied name. It is used by the bootstrap and restore
+// seeding paths, which run raw bootstrap opts against the controller
+// database before any worker starts.
+func SetPasswordHashForBootstrap(ctx context.Context, tx *sqlair.TX, name user.Name, passwordHash string, salt []byte) error {
+	return setPasswordHash(ctx, tx, name, passwordHash, salt)
+}
+
 // setPasswordHash sets the password hash and salt for the user with the
 // supplied uuid. If the user does not exist an error that satisfies
 // accesserrors.UserNotFound will be returned. If the user does not have their

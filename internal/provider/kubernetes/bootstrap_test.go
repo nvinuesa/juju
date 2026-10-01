@@ -984,7 +984,7 @@ export JUJU_TOOLS_DIR=$JUJU_DATA_DIR/tools
 mkdir -p $JUJU_TOOLS_DIR
 cp /opt/jujuagentd $JUJU_TOOLS_DIR/jujuagentd
 
-controller_id="${HOSTNAME##*-}"; if [ "${controller_id}" = "0" ]; then if ! test -e $JUJU_DATA_DIR/agents/controller-0/agent.conf; then mkdir -p $JUJU_DATA_DIR/charms; until test -e $JUJU_DATA_DIR/charms/controller.charm; do sleep 1; done; JUJU_DEV_FEATURE_FLAGS=developer-mode $JUJU_TOOLS_DIR/jujuagentd bootstrap-state --data-dir $JUJU_DATA_DIR --debug --timeout 10m0s; fi; else until test -e "$JUJU_DATA_DIR/agents/controller-${controller_id}/agent.conf"; do sleep 1; done; fi
+controller_id="${HOSTNAME##*-}"; if [ "${controller_id}" = "0" ]; then if ! test -e $JUJU_DATA_DIR/agents/controller-0/agent.conf; then mkdir -p $JUJU_DATA_DIR/charms; until test -e $JUJU_DATA_DIR/charms/controller.charm; do sleep 1; done; JUJU_DEV_FEATURE_FLAGS=developer-mode $JUJU_TOOLS_DIR/jujuagentd bootstrap-state --data-dir $JUJU_DATA_DIR --debug --timeout 10m0s; fi || exit 1; else until test -e "$JUJU_DATA_DIR/agents/controller-${controller_id}/agent.conf"; do sleep 1; done; fi
 
 mkdir -p /var/lib/pebble/default/layers
 cat > /var/lib/pebble/default/layers/001-jujuagentd.yaml <<EOF

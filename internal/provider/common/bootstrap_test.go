@@ -688,7 +688,8 @@ func (s *BootstrapSuite) TestSuccess(c *tc.C) {
 		IdentityFiles: identityFiles,
 		Timeout:       coretesting.LongWait,
 	})
-	c.Assert(err, tc.ErrorMatches, "invalid machine configuration: .*") // icfg hasn't been finalized
+	c.Assert(err, tc.ErrorMatches,
+		"bootstrap failed after instance \"i-success\" started: invalid machine configuration: .*") // icfg hasn't been finalized
 	c.Assert(innerInstanceConfig.Bootstrap.InitialSSHHostKeys, tc.HasLen, 3)
 	var computedKnownHosts strings.Builder
 	computedHostKeyAlgos := []string{}
@@ -749,7 +750,8 @@ func (s *BootstrapSuite) TestBootstrapFinalizeCloudInitUserData(c *tc.C) {
 	err = result.CloudBootstrapFinalizer(ctx, innerInstanceConfig, environs.BootstrapDialOpts{
 		Timeout: coretesting.ShortWait,
 	})
-	c.Assert(err, tc.ErrorMatches, "waited for 50ms without being able to connect.*")
+	c.Assert(err, tc.ErrorMatches,
+		"bootstrap failed after instance \"i-success\" started: waited for 50ms without being able to connect.*")
 	c.Assert(innerInstanceConfig.CloudInitUserData, tc.DeepEquals, map[string]any{
 		"packages":        []any{"python-keystoneclient", "python-glanceclient"},
 		"preruncmd":       []any{"mkdir /tmp/preruncmd", "mkdir /tmp/preruncmd2"},

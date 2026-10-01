@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"path"
 	"path/filepath"
 
 	"github.com/juju/collections/set"
@@ -57,8 +58,34 @@ var (
 	errCancelled = errors.New("cancelled")
 )
 
+// RestoreParams carries the `juju bootstrap --restore` inputs from the
+// bootstrap client down to the replacement.
+type RestoreParams struct {
+	// SourcePath is the archive's path on the bootstrap client.
+	SourcePath string
+
+	// SHA256 is the operator-supplied archive checksum (hex), verified
+	// on the client, after upload, and again before any data is loaded.
+	SHA256 string
+
+	// ControllerUUID, ControllerName and ControllerModelUUID are the
+	// archived source identities.
+	ControllerUUID      string
+	ControllerName      string
+	ControllerModelUUID string
+
+	// Models is the archived model inventory, including the controller
+	// model, used by provider substrate checks.
+	Models []environs.RestoreModel
+}
+
 // BootstrapParams holds the parameters for bootstrapping an environment.
 type BootstrapParams struct {
+	// Restore, when non-nil, puts this bootstrap into restore mode: the
+	// archive is uploaded to the replacement before its agent loads the
+	// archived databases instead of seeding identity data.
+	Restore *RestoreParams
+
 	// ModelConstraints are merged with the bootstrap constraints
 	// to choose the initial instance, and will be stored in the
 	// initial models' states.
@@ -269,6 +296,27 @@ func bootstrapCAAS(
 	bootstrapConstraints = withDefaultCAASControllerConstraints(bootstrapConstraints)
 	bootstrapParams.BootstrapConstraints = bootstrapConstraints
 
+	// A restore bootstrap verifies the surviving-cluster substrate
+	// read-only before provisioning anything. A CAAS environ without the
+	// capability must not be waved through: the fencing and substrate
+	// guarantees would go unchecked.
+	if args.Restore != nil {
+		checker, ok := environ.(environs.RestoreSubstrateChecker)
+		if !ok {
+			return errors.Errorf(
+				"provider %q does not support restore substrate verification; cannot restore onto it",
+				args.Cloud.Type)
+		}
+		if err := checker.CheckRestoreSubstrate(ctx, environs.RestoreSubstrateParams{
+			ControllerUUID:      args.Restore.ControllerUUID,
+			ControllerName:      args.Restore.ControllerName,
+			ControllerModelUUID: args.Restore.ControllerModelUUID,
+			Models:              args.Restore.Models,
+		}); err != nil {
+			return errors.Trace(err)
+		}
+	}
+
 	result, err := environ.Bootstrap(ctx, bootstrapParams)
 	if err != nil {
 		return errors.Trace(err)
@@ -449,7 +497,11 @@ func bootstrapIAAS(
 
 	agentVersion := jujuversion.Current
 	var availableTools coretools.List
-	if !args.BuildAgent {
+	// In restore mode the controller must run this client's binary: it
+	// is the code the archive was validated against. Packaged streams
+	// may hold a different build of the same version whose agent-binary
+	// metadata conflicts with the restored agent-binary store.
+	if !args.BuildAgent && args.Restore == nil {
 		latestPatchTxt := ""
 		versionTxt := fmt.Sprintf("%v", args.AgentVersion)
 		if args.AgentVersion == nil {
@@ -790,6 +842,11 @@ func finalizeInstanceBootstrapConfig(
 	icfg.Bootstrap.Timeout = args.DialOpts.Timeout
 	icfg.Bootstrap.ControllerCharm = args.ControllerCharmPath
 	icfg.Bootstrap.ControllerCharmChannel = args.ControllerCharmChannel
+	if args.Restore != nil {
+		icfg.Bootstrap.RestoreArchivePath = path.Join(icfg.DataDir, "restore", "archive.tar.gz")
+		icfg.Bootstrap.RestoreSHA256 = args.Restore.SHA256
+		icfg.Bootstrap.RestoreSourcePath = args.Restore.SourcePath
+	}
 	return nil
 }
 
@@ -865,6 +922,11 @@ func finalizePodBootstrapConfig(
 	pcfg.Bootstrap.ControllerCharmPath = args.ControllerCharmPath
 	pcfg.Bootstrap.ControllerCharmChannel = args.ControllerCharmChannel
 	pcfg.Bootstrap.SSHServerHostKey = args.SSHServerHostKey
+	if args.Restore != nil {
+		pcfg.Bootstrap.RestoreArchivePath = path.Join(pcfg.DataDir, "restore", "archive.tar.gz")
+		pcfg.Bootstrap.RestoreSHA256 = args.Restore.SHA256
+		pcfg.Bootstrap.RestoreSourcePath = args.Restore.SourcePath
+	}
 	return nil
 }
 

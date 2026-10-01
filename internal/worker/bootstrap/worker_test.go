@@ -48,6 +48,7 @@ type workerSuite struct {
 
 	states                 chan string
 	removeBootstrapSSHKeys func([]string) error
+	agentBinaryUploaded    bool
 }
 
 func TestWorkerSuite(t *stdtesting.T) {
@@ -136,6 +137,32 @@ func (s *workerSuite) TestReloadSpacesBeforeControllerCharm(c *tc.C) {
 	defer workertest.DirtyKill(c, w)
 
 	workertest.CleanKill(c, w)
+}
+
+// TestRestoreModeSkipsIdentitySeeding proves that in restore mode the
+// worker skips every identity seeding step — macaroon config, initial
+// users, agent binary, storage pools, spaces reload, controller charm
+// and authorized keys — because the archived databases provide them. The
+// skipped services carry no mock expectations, so any call fails the
+// test.
+func (s *workerSuite) TestRestoreModeSkipsIdentitySeeding(c *tc.C) {
+	defer s.setupMocks(c).Finish()
+
+	s.ensureBootstrapParamsRestore(c)
+	s.agentBinaryUploaded = false
+	s.expectGateUnlock()
+	s.expectBootstrapFlagSet()
+	s.expectSetAPIHostPorts()
+	s.controllerConfigService.EXPECT().ControllerConfig(gomock.Any()).Return(controller.Config{
+		controller.ControllerUUIDKey:   "test-uuid",
+		controller.JujuManagementSpace: "mgmt-space",
+	}, nil).AnyTimes()
+
+	w := s.newWorker(c)
+	defer workertest.DirtyKill(c, w)
+
+	workertest.CleanKill(c, w)
+	c.Check(s.agentBinaryUploaded, tc.IsFalse)
 }
 
 func (s *workerSuite) TestSeedAgentBinary(c *tc.C) {
@@ -292,6 +319,7 @@ func (s *workerSuite) newWorkerWithFunc(c *tc.C, controllerCharmDeployerFunc Con
 			return nil
 		},
 		AgentBinaryUploader: func(context.Context, string, AgentBinaryStore, logger.Logger) (func(), error) {
+			s.agentBinaryUploaded = true
 			return func() {}, nil
 		},
 		ControllerCharmDeployer: controllerCharmDeployerFunc,
@@ -415,6 +443,16 @@ func (s *workerSuite) expectSetAPIHostPorts() {
 }
 
 func (s *workerSuite) ensureBootstrapParams(c *tc.C) {
+	s.ensureBootstrapParamsWithRestore(c, "")
+}
+
+// ensureBootstrapParamsRestore writes bootstrap params that put the
+// worker into restore mode.
+func (s *workerSuite) ensureBootstrapParamsRestore(c *tc.C) {
+	s.ensureBootstrapParamsWithRestore(c, "/var/lib/juju/restore/archive.tar.gz")
+}
+
+func (s *workerSuite) ensureBootstrapParamsWithRestore(c *tc.C, restoreArchivePath string) {
 	cfg, err := config.New(config.NoDefaults, testing.FakeConfig())
 	c.Assert(err, tc.ErrorIsNil)
 
@@ -425,6 +463,7 @@ func (s *workerSuite) ensureBootstrapParams(c *tc.C) {
 		BootstrapMachineInstanceId:  instance.Id("i-deadbeef"),
 		ControllerCharmPath:         "obscura",
 		ControllerCharmChannel:      charm.MakePermissiveChannel("", "stable", ""),
+		RestoreArchivePath:          restoreArchivePath,
 	}
 	bytes, err := args.Marshal()
 	c.Assert(err, tc.ErrorIsNil)

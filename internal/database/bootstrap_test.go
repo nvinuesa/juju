@@ -96,6 +96,44 @@ func (s *bootstrapSuite) TestBootstrapSuccess(c *tc.C) {
 	c.Check(mgr.tlsOptionCalled, tc.IsTrue)
 }
 
+func (s *bootstrapSuite) TestBootstrapWithRestoreRunsStage(c *tc.C) {
+	const bootstrapAddress = "10.0.0.1"
+	addresses := network.NewMachineAddresses(
+		[]string{bootstrapAddress}, network.WithScope(network.ScopeCloudLocal),
+	).AsProviderAddresses()
+	mgr := &testNodeManager{c: c}
+
+	stageRan := false
+	stage := func(ctx context.Context, dqlite *app.App) error {
+		stageRan = true
+
+		// The stage receives the open app and can create and migrate a
+		// fresh model database.
+		db, err := EnsureModelDatabase(ctx, dqlite,
+			"00000000-0000-0000-0000-000000000001", loggertesting.WrapCheckLog(c))
+		if err != nil {
+			return err
+		}
+		defer func() { _ = db.Close() }()
+
+		var name string
+		return db.QueryRowContext(ctx,
+			"SELECT name FROM sqlite_master WHERE name='change_log'").Scan(&name)
+	}
+
+	err := BootstrapDqliteWithRestore(
+		c.Context(), mgr, addresses, tc.Must0(c, coremodel.NewUUID),
+		loggertesting.WrapCheckLog(c), stage,
+		func(ctx context.Context, controller, model database.TxnRunner) error {
+			// Seed operations run after the stage.
+			c.Check(stageRan, tc.IsTrue)
+			return nil
+		},
+	)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(stageRan, tc.IsTrue)
+}
+
 func (s *bootstrapSuite) TestBootstrapNoAddress(c *tc.C) {
 	mgr := &testNodeManager{c: c}
 

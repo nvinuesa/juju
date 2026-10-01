@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/juju/tc"
 
@@ -55,12 +56,15 @@ func metadataJSON(agentVersion string) string {
 // given per-model cloud type IDs and model type IDs. Cloud type 1 is
 // "lxd", 2 is "kubernetes"; model type 0 is "iaas", 1 is "caas".
 func controllerDump(models ...[3]string) string {
-	out := "payload:\n" +
+	out := "version: 4.1.0\n" +
+		"payload:\n" +
 		"  controller:\n" +
 		"  - uuid: " + testControllerUUID + "\n" +
 		"    model_uuid: " + testControllerModelUUID + "\n" +
 		"    target_version: 4.1.0\n" +
 		"    api_port: \"17070\"\n" +
+		"    ca_cert: source-ca-cert\n" +
+		"    ca_private_key: source-ca-key\n" +
 		"  cloud:\n" +
 		"  - uuid: cloud-lxd\n    name: lxd\n    cloud_type_id: 1\n    endpoint: ''\n    skip_tls_verify: false\n" +
 		"  - uuid: cloud-k8s\n    name: myk8s\n    cloud_type_id: 2\n    endpoint: ''\n    skip_tls_verify: false\n" +
@@ -149,6 +153,8 @@ func (s *validateSuite) TestValidateArchive(c *tc.C) {
 	c.Check(info.ControllerName, tc.Equals, "source-ctrl")
 	c.Check(info.ControllerModelUUID, tc.Equals, testControllerModelUUID)
 	c.Check(info.HANodes, tc.Equals, int64(3))
+	c.Check(info.CACert, tc.Equals, "source-ca-cert")
+	c.Check(info.CAPrivateKey, tc.Equals, "source-ca-key")
 	c.Check(info.CloudName, tc.Equals, "lxd")
 	c.Check(info.CloudType, tc.Equals, "lxd")
 	c.Check(info.Checksum, tc.Equals, sum)
@@ -308,4 +314,34 @@ func (s *validateSuite) TestCheckProviderFamily(c *tc.C) {
 	err := info.CheckProviderFamily("ec2")
 	c.Assert(err, tc.ErrorMatches,
 		"archive comes from a .lxd. controller but the bootstrap cloud is .ec2.*")
+}
+
+func (s *validateSuite) TestValidateArchiveRejectsControllerUUIDMismatch(c *tc.C) {
+	files := validFiles()
+	// The dump's controller row records a different uuid than the
+	// manifest: the archive is internally inconsistent.
+	files["juju-backup/dump/controller.yaml"] = []byte(strings.Replace(
+		controllerDump(
+			modelRow(testControllerModelUUID, "controller", "cloud-lxd"),
+			modelRow(testModelAUUID, "workload-a", "cloud-lxd"),
+			modelRow(testModelBUUID, "workload-b", "cloud-lxd"),
+		),
+		"uuid: "+testControllerUUID, "uuid: deadbeef00-1111-2222-3333-444455556666", 1))
+	archivePath, sum := writeArchive(c, files)
+
+	_, err := restore.ValidateArchive(c.Context(), archivePath, sum)
+	c.Assert(err, tc.ErrorMatches, "controller uuid mismatch: metadata records .*, controller row records .*")
+}
+
+func (s *validateSuite) TestValidateArchiveRejectsDuplicateModelUUID(c *tc.C) {
+	files := validFiles()
+	files["juju-backup/dump/controller.yaml"] = []byte(controllerDump(
+		modelRow(testControllerModelUUID, "controller", "cloud-lxd"),
+		modelRow(testModelAUUID, "workload-a", "cloud-lxd"),
+		modelRow(testModelAUUID, "workload-a-again", "cloud-lxd"),
+	))
+	archivePath, sum := writeArchive(c, files)
+
+	_, err := restore.ValidateArchive(c.Context(), archivePath, sum)
+	c.Assert(err, tc.ErrorMatches, `dump records duplicate model uuid ".*"`)
 }

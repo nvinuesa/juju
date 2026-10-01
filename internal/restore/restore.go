@@ -48,6 +48,12 @@ type ArchiveInfo struct {
 	// ControllerModelUUID is the source controller model's identity.
 	ControllerModelUUID string
 
+	// CACert and CAPrivateKey are the source controller's CA material.
+	// The replacement is bootstrapped with them, so surviving agents keep
+	// trusting the controller through source trust.
+	CACert       string
+	CAPrivateKey string
+
 	// HANodes is the number of controller nodes the source had. Restore
 	// always produces a single-node replacement; values above one mean
 	// the remaining controller machines load as dead rows.

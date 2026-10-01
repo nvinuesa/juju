@@ -21,11 +21,13 @@ import (
 	"github.com/juju/juju/core/permission"
 	corestatus "github.com/juju/juju/core/status"
 	corestorage "github.com/juju/juju/core/storage"
+	"github.com/juju/juju/core/unit"
 	"github.com/juju/juju/core/user"
 	accesserrors "github.com/juju/juju/domain/access/errors"
 	userservice "github.com/juju/juju/domain/access/service"
 	"github.com/juju/juju/domain/controllernode"
 	macaroonerrors "github.com/juju/juju/domain/macaroon/errors"
+	machineerrors "github.com/juju/juju/domain/machine/errors"
 	networkerrors "github.com/juju/juju/domain/network/errors"
 	"github.com/juju/juju/domain/status"
 	domainstorage "github.com/juju/juju/domain/storage"
@@ -241,32 +243,47 @@ func (w *bootstrapWorker) loop() error {
 	ctx, cancel := w.scopedContext()
 	defer cancel()
 
-	if err := w.seedMacaroonConfig(ctx); err != nil {
-		return errors.Annotatef(err, "initialising macaroon bakery config")
-	}
-
-	// Insert all the initial users into the state.
-	if err := w.seedInitialUsers(ctx); err != nil {
-		return errors.Annotatef(err, "inserting initial users")
-	}
-
 	dataDir := w.cfg.DataDir
 
-	// Seed the agent binary to the object store.
-	cleanup, err := w.seedAgentBinary(ctx, dataDir)
-	if err != nil {
-		return errors.Trace(err)
-	}
-
-	// Seed the controller charm to the object store.
+	// The bootstrap parameters decide the mode: in restore mode the
+	// archived databases have already been loaded during agent bootstrap,
+	// so every identity seeding step below is skipped. The data provides
+	// users, macaroon config, storage pools, spaces, the controller charm
+	// and authorized keys.
 	bootstrapParams, err := w.bootstrapParams(ctx, dataDir)
 	if err != nil {
 		return errors.Annotatef(err, "getting bootstrap params")
 	}
+	restoreMode := bootstrapParams.RestoreArchivePath != ""
 
-	// Create the user specified storage pools.
-	if err := w.seedStoragePools(ctx, bootstrapParams.StoragePools); err != nil {
-		return errors.Annotate(err, "seeding storage pools")
+	if !restoreMode {
+		if err := w.seedMacaroonConfig(ctx); err != nil {
+			return errors.Annotatef(err, "initialising macaroon bakery config")
+		}
+
+		// Insert all the initial users into the state.
+		if err := w.seedInitialUsers(ctx); err != nil {
+			return errors.Annotatef(err, "inserting initial users")
+		}
+	}
+
+	// Seed the agent binary to the object store. In restore mode the
+	// archived agent-binary store is authoritative: seeding the
+	// replacement's binary would conflict with the restored
+	// version→SHA mapping for the same version.
+	var cleanup func()
+	if !restoreMode {
+		cleanup, err = w.seedAgentBinary(ctx, dataDir)
+		if err != nil {
+			return errors.Trace(err)
+		}
+	}
+
+	if !restoreMode {
+		// Create the user specified storage pools.
+		if err := w.seedStoragePools(ctx, bootstrapParams.StoragePools); err != nil {
+			return errors.Annotate(err, "seeding storage pools")
+		}
 	}
 
 	controllerConfig, err := w.cfg.ControllerConfigService.ControllerConfig(ctx)
@@ -280,32 +297,55 @@ func (w *bootstrapWorker) loop() error {
 		return errors.Trace(err)
 	}
 
-	// Load spaces from the underlying substrate.
-	if err := w.cfg.NetworkService.ReloadSpaces(ctx); err != nil {
-		if !errors.Is(err, errors.NotSupported) {
+	if !restoreMode {
+		// Load spaces from the underlying substrate. In restore mode the
+		// archived spaces and subnets win; provider refreshes happen
+		// after normal startup.
+		if err := w.cfg.NetworkService.ReloadSpaces(ctx); err != nil {
+			if !errors.Is(err, errors.NotSupported) {
+				return errors.Trace(err)
+			}
+			w.logger.Debugf(ctx, "reload spaces not supported due to a non-networking environment")
+		}
+
+		// Deploy the controller charm after calling reload spaces or
+		// no subnets will be available for the ip address table with
+		// kubernetes.
+		if err := w.seedControllerCharm(ctx, dataDir, bootstrapParams, bootstrapAddresses); err != nil {
 			return errors.Trace(err)
 		}
-		w.logger.Debugf(ctx, "reload spaces not supported due to a non-networking environment")
-	}
+		if err := w.setControllerApplicationPassword(ctx); err != nil {
+			return errors.Trace(err)
+		}
 
-	// Deploy the controller charm after calling reload spaces or
-	// no subnets will be available for the ip address table with
-	// kubernetes.
-	if err := w.seedControllerCharm(ctx, dataDir, bootstrapParams, bootstrapAddresses); err != nil {
-		return errors.Trace(err)
-	}
-	if err := w.setControllerApplicationPassword(ctx); err != nil {
-		return errors.Trace(err)
-	}
-
-	if err := w.seedInitialAuthorizedKeys(ctx, bootstrapParams.ControllerModelAuthorizedKeys); err != nil {
-		return errors.Trace(err)
+		if err := w.seedInitialAuthorizedKeys(ctx, bootstrapParams.ControllerModelAuthorizedKeys); err != nil {
+			return errors.Trace(err)
+		}
+	} else {
+		// Restore mode: the controller application and unit come from
+		// the archive holding the source's credentials. Bridge them to
+		// the passwords bootstrap generated for the replacement pod,
+		// which the Kubernetes application secret carries, so the
+		// controller charm container can introduce itself and log in.
+		if err := w.setControllerApplicationPassword(ctx); err != nil {
+			return errors.Trace(err)
+		}
+		if err := w.setControllerUnitPassword(ctx); err != nil {
+			return errors.Trace(err)
+		}
 	}
 
 	// Finialize the agent by either setting the machine as provisioned
 	// or by setting the controller node password.
 	if err := w.cfg.AgentFinalizer(ctx, w.cfg.AgentPasswordService, w.cfg.MachineService, bootstrapParams, w.cfg.AgentPassword); err != nil {
-		return errors.Annotatef(err, "finalizing agent")
+		if restoreMode && errors.Is(err, machineerrors.MachineCloudInstanceAlreadyExists) {
+			// The restore stage already patched the archived
+			// controller machine's cloud instance onto the
+			// replacement; the finalizer's insert is redundant.
+			w.logger.Debugf(ctx, "machine cloud instance already restored: %v", err)
+		} else {
+			return errors.Annotatef(err, "finalizing agent")
+		}
 	}
 
 	// Convert the provider addresses that we got from the bootstrap instance
@@ -325,7 +365,9 @@ func (w *bootstrapWorker) loop() error {
 	}
 
 	// Cleanup only after the bootstrap flag has been set.
-	cleanup()
+	if cleanup != nil {
+		cleanup()
+	}
 
 	w.reportInternalState(stateCompleted)
 
@@ -360,6 +402,24 @@ func (w *bootstrapWorker) setControllerApplicationPassword(ctx context.Context) 
 		ctx, applicationUUID, w.cfg.ApplicationPassword,
 	); err != nil {
 		return errors.Annotate(err, "setting controller application password")
+	}
+	return nil
+}
+
+// setControllerUnitPassword bridges the restored controller unit's password
+// to the one bootstrap generated for the replacement's controller pod, which
+// the Kubernetes application secret carries. It is a no-op when bootstrap
+// provided no unit password (IAAS).
+func (w *bootstrapWorker) setControllerUnitPassword(ctx context.Context) error {
+	if w.cfg.UnitPassword == "" {
+		return nil
+	}
+	controllerUnit, err := unit.NewNameFromParts(environsbootstrap.ControllerApplicationName, 0)
+	if err != nil {
+		return errors.Errorf("creating controller unit name: %s", err)
+	}
+	if err := w.cfg.AgentPasswordService.SetUnitPassword(ctx, controllerUnit, w.cfg.UnitPassword); err != nil {
+		return errors.Annotate(err, "setting controller unit password")
 	}
 	return nil
 }
