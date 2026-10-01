@@ -67,6 +67,9 @@ type RecoverySubstrateParams struct {
 // reconcile will re-create (workload objects) or find empty (volumes)
 // before the recovered controller starts.
 type RecoverySubstrateReport struct {
+	// HostCloudRegion is cluster metadata read during recovery preparation.
+	// It supplies Kubernetes bootstrap configuration absent from database dumps.
+	HostCloudRegion string
 	// MissingWorkloads names archived applications whose Kubernetes
 	// workload objects (the StatefulSet named after the application)
 	// are gone from the surviving namespace.
@@ -92,4 +95,12 @@ func (r *RecoverySubstrateReport) Empty() bool {
 // degraded recovery, not a refusal.
 type RecoverySubstrateChecker interface {
 	CheckRecoverySubstrate(ctx context.Context, params RecoverySubstrateParams) (*RecoverySubstrateReport, error)
+}
+
+// RecoveryControllerPreparer verifies surviving substrate and prepares the
+// provider for a replacement controller without rejecting its workload models.
+// It must perform the same checks as RecoverySubstrateChecker and create no
+// provider resources. It is called before writing local controller records.
+type RecoveryControllerPreparer interface {
+	PrepareForRecovery(ctx BootstrapContext, params RecoverySubstrateParams) (*RecoverySubstrateReport, error)
 }
