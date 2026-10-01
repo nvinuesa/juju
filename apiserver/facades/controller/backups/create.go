@@ -18,6 +18,7 @@ import (
 	"github.com/juju/juju/core/permission"
 	coreversion "github.com/juju/juju/core/version"
 	"github.com/juju/juju/internal/errors"
+	"github.com/juju/juju/internal/restore"
 	"github.com/juju/juju/rpc/params"
 )
 
@@ -180,6 +181,17 @@ func (c *Creator) Create(ctx context.Context, notes string) (*corebackups.Metada
 	staging, err := corebackups.StageDumps(ctx, backupDir, dumps)
 	if err != nil {
 		return nil, "", nil, errors.Capture(err)
+	}
+	// Restore rejects any dump larger than its read bound: fail the
+	// backup now instead of producing an archive that cannot be
+	// restored.
+	if name, size, err := staging.Oversized(restore.MaxDumpSize); err != nil {
+		return nil, "", nil, errors.Capture(err)
+	} else if name != "" {
+		return nil, "", nil, errors.Errorf(
+			"database dump %q is %d bytes, exceeding the %d byte restore limit: "+
+				"the archive could never be restored",
+			name, size, restore.MaxDumpSize)
 	}
 	// Close cleans up the staged dumps on return. Its error is only logged:
 	// it must not mask the Create result.

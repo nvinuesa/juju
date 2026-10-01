@@ -43,6 +43,23 @@ func (s *DumpStaging) Entries() []DumpEntry {
 	return s.entries
 }
 
+// Oversized reports the staged dump exceeding limit, if any. Restore
+// refuses dumps larger than its own read bound, so a dump that would back
+// up fine but can never be restored fails the backup instead. The entry
+// name is empty when nothing exceeds the limit.
+func (s *DumpStaging) Oversized(limit int64) (name string, size int64, err error) {
+	for i, file := range s.files {
+		info, err := file.Stat()
+		if err != nil {
+			return "", 0, errors.Capture(err)
+		}
+		if info.Size() > limit {
+			return s.entries[i].Name, info.Size(), nil
+		}
+	}
+	return "", 0, nil
+}
+
 // Size returns the total size in bytes of the staged dumps.
 func (s *DumpStaging) Size() (int64, error) {
 	var size int64
