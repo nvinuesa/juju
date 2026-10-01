@@ -158,5 +158,33 @@ func Load(ctx context.Context, params LoadParams) (*Summary, error) {
 	if err != nil {
 		return nil, errors.Capture(err)
 	}
+
+	// Pin the file-backed object store across restarts and charm events:
+	// the controller charm must not reactivate S3 until the operator
+	// explicitly authorizes a transition.
+	pinPath := filepath.Join(params.DataDir, "restore", "file-backed-object-store")
+	if err := os.MkdirAll(filepath.Dir(pinPath), 0o700); err != nil {
+		return nil, errors.Errorf("writing object store restore pin: %w", err)
+	}
+	if err := os.WriteFile(pinPath,
+		[]byte(info.BackupFinished.UTC().Format(time.RFC3339)+"\n"), 0o600); err != nil {
+		return nil, errors.Errorf("writing object store restore pin: %w", err)
+	}
+
+	// On Kubernetes the controller charm's install hook creates an empty
+	// controller.conf that its Dqlite peer-relation hooks then maintain.
+	// A restored unit resumes from archived hook state, so install never
+	// runs; the stage creates the file on the replacement. Machine
+	// controllers have no controller charm: nothing to create.
+	if params.MachinePatch == nil {
+		charmConfPath := filepath.Join(params.DataDir,
+			"agents", "controller-0", "controller.conf")
+		if err := os.MkdirAll(filepath.Dir(charmConfPath), 0o700); err != nil {
+			return nil, errors.Errorf("creating controller charm config directory: %w", err)
+		}
+		if err := os.WriteFile(charmConfPath, nil, 0o600); err != nil {
+			return nil, errors.Errorf("creating controller charm config: %w", err)
+		}
+	}
 	return summary, nil
 }
