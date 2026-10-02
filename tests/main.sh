@@ -46,6 +46,7 @@ TEST_NAMES="actions \
             agents \
             appdata \
             authorized_keys \
+            backup_restore \
             bootstrap \
             caasadmission \
             charmhub \
