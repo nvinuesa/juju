@@ -6,6 +6,7 @@ package recovery
 import (
 	"context"
 	"database/sql"
+	"os"
 	"sort"
 
 	"github.com/juju/juju/core/logger"

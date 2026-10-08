@@ -330,6 +330,39 @@ func (s *loadSuite) TestLoadControllerDumpRejectsUnknownVersion(c *tc.C) {
 	c.Assert(err, tc.ErrorMatches, "controller dump: dump records no format version")
 }
 
+func (s *loadSuite) TestLoadControllerDiscardsBackupLease(c *tc.C) {
+	s.seedTargetController(c)
+	dump := s.controllerDump()
+	dump.Tables["lease_type"] = []domainrecovery.Row{
+		{"id": 0, "type": "singular-controller"},
+		{"id": 1, "type": "application-leadership"},
+		{"id": 2, "type": "backup-creation"},
+	}
+	dump.Tables["lease"] = []domainrecovery.Row{
+		{"uuid": "backup", "lease_type_id": 2, "holder": "request", "model_uuid": sourceModelUUID},
+		{"uuid": "leadership", "lease_type_id": 1, "holder": "app/0", "model_uuid": sourceModelUUID},
+	}
+	dump.Tables["lease_pin"] = []domainrecovery.Row{
+		{"uuid": "backup-pin", "lease_uuid": "backup", "entity_id": "request"},
+		{"uuid": "leader-pin", "lease_uuid": "leadership", "entity_id": "unit"},
+	}
+	err := recoverystate.LoadControllerDump(c.Context(), s.DB(), dump)
+	c.Assert(err, tc.ErrorIsNil)
+	var holder string
+	err = s.DB().QueryRowContext(c.Context(), "SELECT holder FROM lease").Scan(&holder)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(holder, tc.Equals, "app/0")
+	var pin string
+	err = s.DB().QueryRowContext(c.Context(), "SELECT uuid FROM lease_pin").Scan(&pin)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(pin, tc.Equals, "leader-pin")
+	c.Check(dump.Tables["lease"], tc.HasLen, 2)
+	var leaseType string
+	err = s.DB().QueryRowContext(c.Context(), "SELECT type FROM lease_type WHERE id = 2").Scan(&leaseType)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(leaseType, tc.Equals, "backup-creation")
+}
+
 func (s *loadSuite) TestLoadModelDumpRejectsUnknownVersion(c *tc.C) {
 	db := s.openModelDB(c, sourceModelUUID)
 	defer db.Close()

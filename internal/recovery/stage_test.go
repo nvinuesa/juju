@@ -6,6 +6,7 @@ package recovery_test
 import (
 	"context"
 	"database/sql"
+	"os"
 	stdtesting "testing"
 
 	"github.com/juju/tc"
