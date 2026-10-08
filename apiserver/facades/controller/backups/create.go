@@ -265,6 +265,7 @@ func (c *Creator) Create(ctx context.Context, notes string) (*corebackups.Metada
 	}()
 
 	filename, err := corebackups.Create(meta, corebackups.CreateArgs{
+		Context:        ctx,
 		DestinationDir: tmpDir,
 		FilesToBackUp:  files,
 		DumpEntries:    staging.Entries(),

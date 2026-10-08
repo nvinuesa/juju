@@ -6,6 +6,7 @@ package backups_test
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -36,6 +37,30 @@ type createSuite struct {
 
 func TestCreateSuite(t *stdtesting.T) {
 	tc.Run(t, &createSuite{})
+}
+
+func (s *createSuite) TestCancelledCreateLeavesNoArchive(c *tc.C) {
+	ctx, cancel := context.WithCancel(c.Context())
+	destDir := c.MkDir()
+	file := s.writeFile(c, "system-identity", "identity")
+	_, err := backups.Create(backups.NewMetadata(testStarted), backups.CreateArgs{
+		Context:        ctx,
+		DestinationDir: destDir,
+		Clock:          clock.WallClock,
+		FilesToBackUp:  []string{file},
+		DumpEntries:    []backups.DumpEntry{{Name: "controller.yaml", Reader: cancellingReader{cancel: cancel}}},
+	})
+	c.Check(err, tc.ErrorIs, context.Canceled)
+	entries, err := os.ReadDir(destDir)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(entries, tc.HasLen, 0)
+}
+
+type cancellingReader struct{ cancel context.CancelFunc }
+
+func (r cancellingReader) Read(p []byte) (int, error) {
+	r.cancel()
+	return 0, context.Canceled
 }
 
 func (s *createSuite) writeFile(c *tc.C, name, content string) string {

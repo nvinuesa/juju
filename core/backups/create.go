@@ -5,6 +5,7 @@ package backups
 
 import (
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
@@ -37,6 +38,9 @@ type DumpEntry struct {
 
 // CreateArgs holds the arguments for building a backup archive.
 type CreateArgs struct {
+	// Context cancels expensive archive copies when the request or lease ends.
+	// Nil retains the behaviour of callers without cancellation.
+	Context context.Context
 	// DestinationDir is the absolute path to the directory in which
 	// the archive is stored. The staging area is created there too.
 	DestinationDir string
@@ -60,6 +64,13 @@ type CreateArgs struct {
 // It is a variable so tests can replace the archive creation with a
 // stub, mirroring [GetFilesToBackUp].
 var Create = func(meta *Metadata, args CreateArgs) (string, error) {
+	ctx := args.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	if args.Clock == nil {
 		return "", errors.New("missing clock")
 	}
@@ -110,7 +121,7 @@ var Create = func(meta *Metadata, args CreateArgs) (string, error) {
 		SHA256: metaSum,
 	})
 
-	bundleSize, bundleSum, err := buildFilesBundle(
+	bundleSize, bundleSum, err := buildFilesBundleContext(ctx,
 		archivePaths.FilesBundle, args.FilesToBackUp)
 	if err != nil {
 		return "", errors.Capture(err)
@@ -122,8 +133,12 @@ var Create = func(meta *Metadata, args CreateArgs) (string, error) {
 		SHA256: bundleSum,
 	})
 
+	entries := make([]DumpEntry, len(args.DumpEntries))
+	for i, entry := range args.DumpEntries {
+		entries[i] = DumpEntry{Name: entry.Name, Reader: contextReader{ctx: ctx, Reader: entry.Reader}}
+	}
 	dumpEntries, err := buildDump(
-		archivePaths.DBDumpDir, canonicalPaths.DBDumpDir, args.DumpEntries)
+		archivePaths.DBDumpDir, canonicalPaths.DBDumpDir, entries)
 	if err != nil {
 		return "", errors.Capture(err)
 	}
@@ -142,7 +157,7 @@ var Create = func(meta *Metadata, args CreateArgs) (string, error) {
 
 	filename := filepath.Join(args.DestinationDir,
 		meta.Started.Format(FilenameTemplate))
-	size, checksum, err := buildArchiveAndChecksum(filename, stagingDir,
+	size, checksum, err := buildArchiveAndChecksumContext(ctx, filename, stagingDir,
 		archivePaths.ContentDir)
 	if err != nil {
 		return "", errors.Capture(err)
@@ -155,6 +170,9 @@ var Create = func(meta *Metadata, args CreateArgs) (string, error) {
 	if err := meta.MarkComplete(size, checksum, args.Clock.Now()); err != nil {
 		return "", discardArchive(filename,
 			errors.Errorf("updating metadata: %w", err))
+	}
+	if err := ctx.Err(); err != nil {
+		return "", discardArchive(filename, err)
 	}
 
 	return filename, nil
@@ -246,11 +264,11 @@ func writeAll(targetname string, source io.Reader) (int64, string, error) {
 	return size, hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
-// buildFilesBundle creates the tar file bundling all the juju
+// buildFilesBundleContext creates the tar file bundling all the juju
 // state-related files gathered in by the backup machinery. It returns
 // the bundle's size and SHA-256 checksum, hex encoded, hashed while
 // writing so the bundle is only read once.
-func buildFilesBundle(bundleFileName string, filesToBackUp []string) (int64, string, error) {
+func buildFilesBundleContext(ctx context.Context, bundleFileName string, filesToBackUp []string) (int64, string, error) {
 	if len(filesToBackUp) == 0 {
 		return 0, "", errors.New("missing list of files to back up")
 	}
@@ -272,7 +290,7 @@ func buildFilesBundle(bundleFileName string, filesToBackUp []string) (int64, str
 	stripPrefix := string(os.PathSeparator)
 	hasher := sha256.New()
 	_, terr := tar.TarFiles(filesToBackUp,
-		io.MultiWriter(bundleFile, hasher), stripPrefix)
+		contextWriter{ctx: ctx, Writer: io.MultiWriter(bundleFile, hasher)}, stripPrefix)
 	if cerr := bundleFile.Close(); terr == nil {
 		terr = errors.Capture(cerr)
 	}
@@ -319,6 +337,10 @@ func buildDump(dumpDir, canonicalDumpDir string, entries []DumpEntry) ([]Manifes
 // the named archive file, computing the archive's SHA-256 checksum and
 // size along the way.
 func buildArchiveAndChecksum(filename, stagingDir, contentDir string) (_ int64, _ string, err error) {
+	return buildArchiveAndChecksumContext(context.Background(), filename, stagingDir, contentDir)
+}
+
+func buildArchiveAndChecksumContext(ctx context.Context, filename, stagingDir, contentDir string) (_ int64, _ string, err error) {
 	archiveFile, err := os.Create(filename)
 	if err != nil {
 		return 0, "", errors.Errorf("creating archive file: %w", err)
@@ -341,7 +363,7 @@ func buildArchiveAndChecksum(filename, stagingDir, contentDir string) (_ int64, 
 	// users can compare the published checksum against the checksum of
 	// the file without having to decompress it first.
 	hasher := sha256.New()
-	if err := buildArchive(io.MultiWriter(archiveFile, hasher), stagingDir, contentDir); err != nil {
+	if err := buildArchive(contextWriter{ctx: ctx, Writer: io.MultiWriter(archiveFile, hasher)}, stagingDir, contentDir); err != nil {
 		return 0, "", errors.Capture(err)
 	}
 
@@ -351,6 +373,30 @@ func buildArchiveAndChecksum(filename, stagingDir, contentDir string) (_ int64, 
 	}
 
 	return stat.Size(), hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+type contextReader struct {
+	ctx context.Context
+	io.Reader
+}
+
+func (r contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.Reader.Read(p)
+}
+
+type contextWriter struct {
+	ctx context.Context
+	io.Writer
+}
+
+func (w contextWriter) Write(p []byte) (int, error) {
+	if err := w.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return w.Writer.Write(p)
 }
 
 // buildArchive writes the gzipped tar of the content directory to the
