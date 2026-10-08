@@ -6,12 +6,15 @@ package state
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/juju/juju/core/lease"
 	"github.com/juju/juju/core/semversion"
 	domainexport "github.com/juju/juju/domain/export"
 	domainrecovery "github.com/juju/juju/domain/recovery"
@@ -26,10 +29,40 @@ func LoadControllerDump(ctx context.Context, db *sql.DB, dump *domainrecovery.Du
 	if err := checkDumpVersion(dump, domainexport.ControllerExportVersions); err != nil {
 		return errors.Errorf("controller dump: %w", err)
 	}
-	if err := loadDatabase(ctx, db, dump, controllerTablePolicies, true); err != nil {
+	if err := loadDatabase(ctx, db, discardBackupLeases(dump), controllerTablePolicies, true); err != nil {
 		return errors.Errorf("loading controller database: %w", err)
 	}
 	return nil
+}
+
+// Backup leases describe an in-flight operation on the lost controller. They
+// must not block backups on its replacement. Preserve the type and other leases,
+// and filter a copy so retrying a load never mutates its archive input.
+func discardBackupLeases(dump *domainrecovery.Dump) *domainrecovery.Dump {
+	filtered := *dump
+	filtered.Tables = maps.Clone(dump.Tables)
+	types := make(map[string]bool)
+	for _, row := range dump.Tables["lease_type"] {
+		if row["type"] == lease.BackupCreationNamespace {
+			types[fmt.Sprint(row["id"])] = true
+		}
+	}
+	discarded := make(map[string]bool)
+	for _, row := range dump.Tables["lease"] {
+		if types[fmt.Sprint(row["lease_type_id"])] {
+			discarded[fmt.Sprint(row["uuid"])] = true
+		}
+	}
+	if len(discarded) == 0 {
+		return dump
+	}
+	filtered.Tables["lease"] = slices.DeleteFunc(slices.Clone(dump.Tables["lease"]), func(row domainrecovery.Row) bool {
+		return discarded[fmt.Sprint(row["uuid"])]
+	})
+	filtered.Tables["lease_pin"] = slices.DeleteFunc(slices.Clone(dump.Tables["lease_pin"]), func(row domainrecovery.Row) bool {
+		return discarded[fmt.Sprint(row["lease_uuid"])]
+	})
+	return &filtered
 }
 
 // LoadModelDump loads one archived model database dump into the model's
