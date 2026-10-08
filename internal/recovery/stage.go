@@ -6,6 +6,7 @@ package recovery
 import (
 	"context"
 	"database/sql"
+	"os"
 	"sort"
 
 	"github.com/juju/juju/core/logger"
@@ -60,7 +61,7 @@ type LoadParams struct {
 // database and patch the replacement's physical facts in place. Any
 // failure fails bootstrap; the target is discarded and bootstrap re-run.
 func Load(ctx context.Context, params LoadParams) (*domainrecovery.Summary, error) {
-	contents, info, err := ReadArchive(ctx, params.ArchivePath, params.ExpectedSHA256)
+	contents, info, err := ReadArchive(ctx, params.Logger, params.ArchivePath, params.ExpectedSHA256)
 	if err != nil {
 		return nil, errors.Capture(err)
 	}
