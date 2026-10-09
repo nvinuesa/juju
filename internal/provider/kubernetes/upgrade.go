@@ -166,7 +166,7 @@ func upgradePodTemplateSpec(
 
 func findJujudContainer(containers []core.Container) (int, bool) {
 	for i, c := range containers {
-		if podcfg.IsJujuOCIImage(c.Image) {
+		if c.Name == apiServerContainerName || podcfg.IsJujuOCIImage(c.Image) {
 			return i, true
 		}
 	}

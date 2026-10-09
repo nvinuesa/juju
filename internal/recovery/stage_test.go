@@ -203,6 +203,17 @@ payload:
     charm_upgrade_on_error: null
   application_controller:
   - application_uuid: app-uuid-0
+  application_platform:
+  - application_uuid: app-uuid-0
+    architecture_id: 0
+    os_id: '0'
+    channel: 24.04/stable
+  architecture:
+  - id: 0
+    name: amd64
+  os:
+  - id: 0
+    name: ubuntu
   unit:
   - uuid: unit-uuid-0
     name: controller/0

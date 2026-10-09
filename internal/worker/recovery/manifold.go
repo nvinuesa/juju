@@ -63,8 +63,11 @@ func Manifold(cfg ManifoldConfig) dependency.Manifold {
 				return nil, errors.Capture(err)
 			}
 			operation := func(ctx context.Context) error {
+				if controllerModel.ModelType == model.CAAS {
+					return finaliseK8sController(ctx, controller, modelServices, factory, controllerModel.UUID, cfg)
+				}
 				if controllerModel.ModelType != model.IAAS {
-					return errors.New("Kubernetes recovery requires the Kubernetes recovery implementation")
+					return errors.New("unsupported recovery model type")
 				}
 				name := machine.Name(params.MachineName)
 				machineID, err := modelServices.Machine().GetMachineUUID(ctx, name)

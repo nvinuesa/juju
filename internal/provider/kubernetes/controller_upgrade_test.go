@@ -84,7 +84,7 @@ func (s *ControllerUpgraderSuite) TestControllerUpgrade(c *tc.C) {
 		}, meta.CreateOptions{})
 	c.Assert(err, tc.ErrorIsNil)
 
-	c.Assert(controllerUpgrade(c.Context(), appName, semversion.MustParse("9.9.9"), s.broker), tc.ErrorIsNil)
+	c.Assert(controllerUpgrade(c.Context(), appName, semversion.MustParse("9.9.9"), "", s.broker), tc.ErrorIsNil)
 
 	ss, err := s.broker.Client().AppsV1().StatefulSets(s.broker.Namespace()).
 		Get(c.Context(), appName, meta.GetOptions{})
@@ -99,7 +99,7 @@ func (s *ControllerUpgraderSuite) TestControllerDoesNotExist(c *tc.C) {
 	var (
 		appName = k8sconstants.JujuControllerStackName
 	)
-	err := controllerUpgrade(c.Context(), appName, semversion.MustParse("9.9.9"), s.broker)
+	err := controllerUpgrade(c.Context(), appName, semversion.MustParse("9.9.9"), "", s.broker)
 	c.Assert(err, tc.NotNil)
 	c.Assert(err, tc.ErrorIs, errors.NotFound)
 }

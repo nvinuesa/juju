@@ -11,8 +11,11 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/juju/juju/cloud"
 	"github.com/juju/juju/controller"
+	"github.com/juju/juju/core/arch"
 	corebackups "github.com/juju/juju/core/backups"
+	"github.com/juju/juju/core/base"
 	corelogger "github.com/juju/juju/core/logger"
 	"github.com/juju/juju/core/semversion"
 	exportcontroller "github.com/juju/juju/domain/export/types/controller/v4_1_0"
@@ -328,6 +331,34 @@ func buildArchiveInfo(ctx context.Context, logger corelogger.Logger, meta *coreb
 	info.ModelConfig = make(map[string]string)
 	for _, attr := range modelDump.Payload.ModelConfig {
 		info.ModelConfig[attr.Key] = attr.Value
+	}
+
+	if info.CloudType == cloud.CloudTypeKubernetes {
+		payload := modelDump.Payload
+		if len(payload.ApplicationController) != 1 {
+			return nil, errors.New("archive must identify one Kubernetes controller application")
+		}
+		for _, platform := range payload.ApplicationPlatform {
+			if platform.ApplicationUUID != payload.ApplicationController[0].ApplicationUUID {
+				continue
+			}
+			for _, a := range payload.Architecture {
+				if a.ID != nil && *a.ID == platform.ArchitectureID {
+					info.ControllerArchitecture = a.Name
+				}
+			}
+			for _, os := range payload.OS {
+				if os.ID != nil && strconv.FormatInt(*os.ID, 10) == platform.OsID && platform.Channel != nil {
+					info.ControllerCharmBase = os.Name + "@" + *platform.Channel
+				}
+			}
+		}
+		if !arch.AllArches().Contains(info.ControllerArchitecture) {
+			return nil, errors.New("archive does not record a supported Kubernetes controller architecture")
+		}
+		if _, err := base.ParseBaseFromString(info.ControllerCharmBase); err != nil {
+			return nil, errors.Errorf("invalid archived controller charm base: %w", err)
+		}
 	}
 
 	// Fill the Kubernetes workload inventory from the model dumps: it powers
