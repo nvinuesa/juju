@@ -16,6 +16,7 @@ import (
 	"github.com/juju/juju/agent"
 	"github.com/juju/juju/api"
 	"github.com/juju/juju/controller"
+	"github.com/juju/juju/core/base"
 	"github.com/juju/juju/core/constraints"
 	"github.com/juju/juju/core/model"
 	"github.com/juju/juju/core/paths"
@@ -28,6 +29,15 @@ import (
 
 // ControllerPodConfig represents initialization information for a new juju caas controller pod.
 type ControllerPodConfig struct {
+	// CharmBase overrides the default controller charm platform.
+	CharmBase base.Base
+
+	// AgentImage overrides image selection with a previously resolved image.
+	AgentImage string
+
+	// Initialisation supplies an alternative to fresh state initialisation.
+	Initialisation *ControllerInitialisation
+
 	// Tags is a set of tags/labels to set on the Pod, if supported. This
 	// should be populated using the PodLabels method in this package.
 	Tags map[string]string

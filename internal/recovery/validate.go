@@ -11,10 +11,14 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/juju/juju/cloud"
 	"github.com/juju/juju/controller"
+	"github.com/juju/juju/core/arch"
 	corebackups "github.com/juju/juju/core/backups"
+	"github.com/juju/juju/core/base"
 	"github.com/juju/juju/core/semversion"
 	exportcontroller "github.com/juju/juju/domain/export/types/controller/v4_1_0"
+	exportmodel "github.com/juju/juju/domain/export/types/v4_1_0"
 	domainlife "github.com/juju/juju/domain/life"
 	domainrecovery "github.com/juju/juju/domain/recovery"
 	"github.com/juju/juju/internal/errors"
@@ -252,7 +256,11 @@ func buildArchiveInfo(ctx context.Context, meta *corebackups.Metadata, payload *
 
 	var modelDump struct {
 		Payload struct {
-			ModelConfig []struct{ Key, Value string } `yaml:"model_config"`
+			ModelConfig           []struct{ Key, Value string }       `yaml:"model_config"`
+			ApplicationController []exportmodel.ApplicationController `yaml:"application_controller"`
+			ApplicationPlatform   []exportmodel.ApplicationPlatform   `yaml:"application_platform"`
+			Architecture          []exportmodel.Architecture          `yaml:"architecture"`
+			OS                    []exportmodel.Os                    `yaml:"os"`
 		} `yaml:"payload"`
 	}
 	file, err := os.Open(modelDumps[info.ControllerModelUUID])
@@ -266,6 +274,34 @@ func buildArchiveInfo(ctx context.Context, meta *corebackups.Metadata, payload *
 	info.ModelConfig = make(map[string]string)
 	for _, attr := range modelDump.Payload.ModelConfig {
 		info.ModelConfig[attr.Key] = attr.Value
+	}
+
+	if info.CloudType == cloud.CloudTypeKubernetes {
+		payload := modelDump.Payload
+		if len(payload.ApplicationController) != 1 {
+			return nil, errors.New("archive must identify one Kubernetes controller application")
+		}
+		for _, platform := range payload.ApplicationPlatform {
+			if platform.ApplicationUUID != payload.ApplicationController[0].ApplicationUUID {
+				continue
+			}
+			for _, a := range payload.Architecture {
+				if a.ID != nil && *a.ID == platform.ArchitectureID {
+					info.ControllerArchitecture = a.Name
+				}
+			}
+			for _, os := range payload.OS {
+				if os.ID != nil && strconv.FormatInt(*os.ID, 10) == platform.OsID && platform.Channel != nil {
+					info.ControllerCharmBase = os.Name + "@" + *platform.Channel
+				}
+			}
+		}
+		if !arch.AllArches().Contains(info.ControllerArchitecture) {
+			return nil, errors.New("archive does not record a supported Kubernetes controller architecture")
+		}
+		if _, err := base.ParseBaseFromString(info.ControllerCharmBase); err != nil {
+			return nil, errors.Errorf("invalid archived controller charm base: %w", err)
+		}
 	}
 
 	// Fill the CAAS workload inventory from the model dumps: it powers

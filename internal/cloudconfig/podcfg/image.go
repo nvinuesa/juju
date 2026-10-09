@@ -30,12 +30,15 @@ var JujudOCINamespace = "ghcr.io/juju"
 
 // GetControllerImagePath returns oci image path of jujud for a controller.
 func (cfg *ControllerPodConfig) GetControllerImagePath() (string, error) {
+	if cfg.AgentImage != "" {
+		return cfg.AgentImage, nil
+	}
 	return GetJujuOCIImagePathFromControllerCfg(cfg.Controller, cfg.JujuVersion)
 }
 
 // IsJujuOCIImage returns true if the image path is for a Juju operator.
 func IsJujuOCIImage(imagePath string) bool {
-	return strings.Contains(imagePath, JujudOCIName+":")
+	return strings.Contains(imagePath, JujudOCIName+":") || strings.Contains(imagePath, JujudOCIName+"@")
 }
 
 // IsCharmBaseImage returns true if the image path is for a Juju operator.
@@ -96,7 +99,7 @@ func tagImagePath(fullPath, tag string) (string, error) {
 		return "", errors.Errorf("unexpected docker image path type, got %T, expected reference.Named", ref)
 	}
 	if tag != "" {
-		imageNamed, _ = reference.WithTag(imageNamed, tag)
+		imageNamed, _ = reference.WithTag(reference.TrimNamed(imageNamed), tag)
 	}
 	return imageNamed.String(), nil
 }

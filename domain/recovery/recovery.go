@@ -77,6 +77,11 @@ type ArchiveInfo struct {
 	// read from metadata.json.
 	AgentVersion semversion.Number
 
+	// ControllerArchitecture and ControllerCharmBase describe the archived
+	// Kubernetes controller application platform used by the replacement pod.
+	ControllerArchitecture string
+	ControllerCharmBase    string
+
 	// SourceBase is the operating system base recorded in metadata.json.
 	SourceBase string
 	// MachineName is the source agent identity recorded in metadata.json.

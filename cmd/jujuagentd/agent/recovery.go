@@ -5,13 +5,17 @@ package agent
 
 import (
 	"context"
+	"path/filepath"
 	"time"
 
 	"github.com/juju/gnuflag"
+	"github.com/juju/names/v6"
 
 	"github.com/juju/juju/agent"
 	"github.com/juju/juju/agent/agentrecovery"
 	agentconfig "github.com/juju/juju/agent/config"
+	"github.com/juju/juju/caas"
+	"github.com/juju/juju/cloud"
 	jujucmd "github.com/juju/juju/cmd"
 	"github.com/juju/juju/cmd/cmd"
 	"github.com/juju/juju/cmd/internal/agent/agentconf"
@@ -19,6 +23,7 @@ import (
 	"github.com/juju/juju/environs"
 	"github.com/juju/juju/environs/cloudspec"
 	"github.com/juju/juju/internal/errors"
+	k8sconstants "github.com/juju/juju/internal/provider/kubernetes/constants"
 	"github.com/juju/juju/internal/recovery"
 )
 
@@ -84,22 +89,34 @@ func (c *RecoveryCommand) Run(ctx *cmd.Context) error {
 	if err := info.CheckAgentVersion(version.Current); err != nil {
 		return errors.Capture(err)
 	}
-	if info.AgentVersion != params.AgentVersion || info.MachineName != params.MachineName {
+	isK8s := info.CloudType == cloud.CloudTypeKubernetes
+	if info.AgentVersion != params.AgentVersion || (!isK8s && info.MachineName != params.MachineName) || (isK8s && params.MachineName != "0") {
 		return errors.New("recovery parameters disagree with archive metadata")
 	}
+	if isK8s {
+		tag := names.NewControllerAgentTag(params.MachineName)
+		if err := copyFileFromTemplate(agent.ConfigPath(c.DataDir(), tag),
+			filepath.Join(agent.Dir(c.DataDir(), tag), k8sconstants.TemplateFileNameAgentConf)); err != nil {
+			return errors.Capture(err)
+		}
+	}
+
 	if err := agentconfig.ReadAgentConfig(c, params.MachineName); err != nil {
 		return errors.Errorf("reading recovery agent config: %w", err)
 	}
-	cloud, err := cloudspec.MakeCloudSpec(params.Node.ControllerCloud,
+	spec, err := cloudspec.MakeCloudSpec(params.Node.ControllerCloud,
 		params.Node.ControllerCloudRegion, params.Node.ControllerCloudCredential)
 	if err != nil {
 		return errors.Capture(err)
 	}
-	cloud.IsControllerCloud = true
-	env, err := environs.New(stdCtx, environs.OpenParams{
-		ControllerUUID: info.ControllerUUID, Cloud: cloud,
-		Config: params.Node.ControllerModelConfig,
-	}, environs.NoopCredentialInvalidator())
+	spec.IsControllerCloud = true
+	openParams := environs.OpenParams{ControllerUUID: info.ControllerUUID, Cloud: spec, Config: params.Node.ControllerModelConfig}
+	var env environs.BootstrapEnviron
+	if isK8s {
+		env, err = caas.New(stdCtx, openParams, environs.NoopCredentialInvalidator())
+	} else {
+		env, err = environs.New(stdCtx, openParams, environs.NoopCredentialInvalidator())
+	}
 	if err != nil {
 		return errors.Capture(err)
 	}

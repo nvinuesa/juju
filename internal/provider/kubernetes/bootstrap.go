@@ -178,6 +178,7 @@ type controllerStack struct {
 
 	dockerAuthSecretData        []byte
 	controllerExecClientFactory func() (k8sexec.Executor, error)
+	serviceAccountCreator       func(context.Context) (string, []func(), error)
 
 	cleanUps []func()
 }
@@ -257,6 +258,16 @@ func newControllerStack(
 	broker *kubernetesClient,
 	pcfg *podcfg.ControllerPodConfig,
 ) (controllerStacker, error) {
+	return makeControllerStack(logger, stackName, storageClass, broker, pcfg)
+}
+
+func makeControllerStack(
+	logger environs.BootstrapLogger,
+	stackName string,
+	storageClass string,
+	broker *kubernetesClient,
+	pcfg *podcfg.ControllerPodConfig,
+) (*controllerStack, error) {
 	storageSizeControllerRaw := "20Gi"
 	if rootDiskSize := pcfg.Bootstrap.BootstrapMachineConstraints.RootDisk; rootDiskSize != nil {
 		storageSizeControllerRaw = fmt.Sprintf("%dMi", *rootDiskSize)
@@ -318,6 +329,10 @@ func newControllerStack(
 		portSSHServer: pcfg.Bootstrap.ControllerConfig.SSHServerPort(),
 	}
 	cs.controllerExecClientFactory = cs.controllerExecClient
+	cs.serviceAccountCreator = func(ctx context.Context) (string, []func(), error) {
+		return ensureControllerServiceAccount(ctx, broker.client(), broker.Namespace(),
+			broker.ControllerUUID(), cs.stackLabels, cs.stackAnnotations)
+	}
 	cs.resourceNameService = cs.getResourceName("service")
 	cs.resourceNameHeadlessService = cs.getResourceName("service-endpoints")
 	cs.resourceNameConfigMap = cs.getResourceName("configmap")
@@ -503,6 +518,11 @@ func (c *controllerStack) Deploy(ctx context.Context) (err error) {
 		return errors.Annotate(err, "creating namespace for controller stack")
 	}
 
+	return c.deployResources(ctx)
+}
+
+// deployResources installs a controller stack in an already-owned namespace.
+func (c *controllerStack) deployResources(ctx context.Context) (err error) {
 	if environsbootstrap.IsContextDone(ctx) {
 		return environsbootstrap.Cancelled()
 	}
@@ -535,9 +555,9 @@ func (c *controllerStack) Deploy(ctx context.Context) (err error) {
 		return errors.Annotate(err, "creating controller service proxy for controller")
 	}
 
-	// create bootstrap-params configmap for controller pod.
-	if err = c.ensureControllerConfigmapBootstrapParams(ctx); err != nil {
-		return errors.Annotate(err, "creating bootstrap-params configmap for controller")
+	// Write the parameters for controller initialisation.
+	if err = c.ensureControllerInitialisation(ctx); err != nil {
+		return errors.Annotate(err, "creating controller initialisation configuration")
 	}
 	if environsbootstrap.IsContextDone(ctx) {
 		return environsbootstrap.Cancelled()
@@ -559,14 +579,7 @@ func (c *controllerStack) Deploy(ctx context.Context) (err error) {
 	}
 
 	// create service account for local cluster/provider connections.
-	saName, saCleanUps, err := ensureControllerServiceAccount(
-		ctx,
-		c.broker.client(),
-		c.broker.Namespace(),
-		c.broker.ControllerUUID(),
-		c.stackLabels,
-		c.stackAnnotations,
-	)
+	saName, saCleanUps, err := c.serviceAccountCreator(ctx)
 	c.addCleanUp(func() {
 		logger.Debugf(context.TODO(), "delete controller service accounts")
 		for _, v := range saCleanUps {
@@ -903,7 +916,7 @@ func (c *controllerStack) ensureControllerConfigmapAgentConf(ctx context.Context
 	cm.Data[constants.ControllerUnitAgentConfigFilename] = string(unitAgentConfigFileContent)
 	cm.Data[constants.ControllerNonceConfigMapKey(0)] = c.nonce
 
-	logger.Tracef(context.TODO(), "ensuring agent.conf configmap: \n%+v", cm)
+	logger.Tracef(ctx, "ensuring controller agent configuration %q", cm.Name)
 	cleanUp, err := c.broker.ensureConfigMap(ctx, cm)
 	c.addCleanUp(func() {
 		logger.Debugf(context.TODO(), "deleting %q template-agent.conf", cm.Name)
@@ -1271,6 +1284,10 @@ func (c *controllerStack) buildStorageSpecForController(ctx context.Context, sta
 		},
 	}}
 
+	if c.pcfg.Initialisation != nil {
+		vols = vols[:len(vols)-1]
+	}
+
 	statefulset.Spec.Template.Spec.Volumes = append(statefulset.Spec.Template.Spec.Volumes, vols...)
 	return nil
 }
@@ -1405,6 +1422,15 @@ func (c *controllerStack) controllerContainers(setupCmd, machineCmd, controllerI
 			},
 		},
 	}
+	if c.pcfg.Initialisation != nil {
+		for i, mount := range apiContainer.VolumeMounts {
+			if mount.Name == c.resourceNameVolBootstrapParams {
+				apiContainer.VolumeMounts = append(apiContainer.VolumeMounts[:i], apiContainer.VolumeMounts[i+1:]...)
+				break
+			}
+		}
+	}
+
 	apiContainer.Env = append(apiContainer.Env, proxyEnvironment(c.pcfg.ProxySettings)...)
 	if features := featureflag.AsEnvironmentValue(); features != "" {
 		apiContainer.Env = append(apiContainer.Env, core.EnvVar{
@@ -1462,6 +1488,11 @@ func jujudPebbleLayer(machineCmd string, env map[string]string) ([]byte, error) 
 }
 
 func (c *controllerStack) buildContainerSpecForController() (*core.PodSpec, error) {
+	if c.pcfg.Initialisation != nil {
+		return c.buildContainerSpecForCommands(c.pcfg.Initialisation.SetupCommand,
+			controllerMachineCommand(), nil)
+	}
+
 	loggingOption := "--show-log"
 	if loggo.GetLogger("").LogLevel() == loggo.DEBUG {
 		// If the bootstrap command was requested with --debug, then the root
@@ -1552,7 +1583,10 @@ func (c *controllerStack) buildContainerSpecForCommands(setupCmd, machineCmd str
 		func() bool { return enableServiceLinks },
 	)
 
-	defaultBase := version.DefaultSupportedLTSBase()
+	defaultBase := c.pcfg.CharmBase
+	if defaultBase.Empty() {
+		defaultBase = version.DefaultSupportedLTSBase()
+	}
 	repo, err := docker.NewImageRepoDetails(c.pcfg.Controller.CAASImageRepo())
 	if err != nil {
 		return nil, errors.Annotatef(err, "parsing %s", controller.CAASImageRepo)
@@ -1660,6 +1694,10 @@ fi
 			RunAsGroup: pointer.Int64(constants.JujuGroupID),
 		},
 	}
+	if c.pcfg.Initialisation != nil {
+		controllerConfigSeed.Args[0] += c.initialisationSeedCommand()
+	}
+
 	spec.InitContainers = append([]core.Container{controllerConfigSeed}, spec.InitContainers...)
 
 	for i, ct := range spec.InitContainers {

@@ -47,7 +47,7 @@ import (
 func (c *recoveryCommand) provisionRecoveryController(ctx *cmd.Context) (resultErr error) {
 	info := c.recoveryInfo
 	if info.CloudType == cloud.CloudTypeKubernetes {
-		return errors.New("Kubernetes recovery requires the Kubernetes recovery implementation")
+		return c.provisionK8sRecoveryController(ctx)
 	}
 	bundle, err := internalrecovery.SelectAgent(ctx, ctx.AbsPath(c.archivePath), info)
 	if err != nil {
