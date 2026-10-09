@@ -6,6 +6,7 @@ package recovery
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"sort"
 
 	corebackups "github.com/juju/juju/core/backups"
@@ -222,5 +223,17 @@ func Load(ctx context.Context, params LoadParams) (*domainrecovery.Summary, erro
 		return nil, errors.Capture(err)
 	}
 
+	// The controller charm's install hook creates an empty
+	// controller.conf that its Dqlite peer-relation hooks then maintain.
+	// A recovered unit resumes from archived hook state, so install never
+	// runs; create the file for the replacement's actual controller ID.
+	charmConfPath := filepath.Join(params.DataDir,
+		"agents", "controller-"+params.ControllerID, "controller.conf")
+	if err := os.MkdirAll(filepath.Dir(charmConfPath), 0o700); err != nil {
+		return nil, errors.Errorf("creating controller charm config directory: %w", err)
+	}
+	if err := os.WriteFile(charmConfPath, nil, 0o600); err != nil {
+		return nil, errors.Errorf("creating controller charm config: %w", err)
+	}
 	return summary, nil
 }

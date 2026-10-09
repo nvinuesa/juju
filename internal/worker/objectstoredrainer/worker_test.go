@@ -69,6 +69,96 @@ func (s *workerSuite) TestObjectStoreDrainingNotDraining(c *tc.C) {
 	workertest.CleanKill(c, w)
 }
 
+func (s *workerSuite) TestSecondaryObservesDrainingWithoutPerformingDrain(c *tc.C) {
+	defer s.setupMocks(c).Finish()
+
+	draining := make(chan struct{})
+	observed := make(chan struct{}, 1)
+	s.guardService.EXPECT().WatchDraining(gomock.Any()).Return(watchertest.NewMockNotifyWatcher(draining), nil)
+	gomock.InOrder(
+		s.guardService.EXPECT().GetDrainingPhase(gomock.Any()).Return(objectstore.PhaseUnknown, nil),
+		s.guard.EXPECT().Unlock(gomock.Any()).DoAndReturn(func(context.Context) error {
+			observed <- struct{}{}
+			return nil
+		}),
+		s.guardService.EXPECT().GetDrainingPhase(gomock.Any()).Return(objectstore.PhaseDraining, nil),
+		s.guard.EXPECT().Lockdown(gomock.Any()).DoAndReturn(func(context.Context) error {
+			observed <- struct{}{}
+			return nil
+		}),
+		s.guardService.EXPECT().GetDrainingPhase(gomock.Any()).Return(objectstore.PhaseCompleted, nil),
+		s.objectStoreFlusher.EXPECT().FlushWorkers(gomock.Any()).Return(nil),
+		s.guard.EXPECT().Unlock(gomock.Any()).DoAndReturn(func(context.Context) error {
+			observed <- struct{}{}
+			return nil
+		}),
+	)
+
+	config := s.getConfig(c)
+	config.GuardOnly = true
+	w, err := NewWorker(config)
+	c.Assert(err, tc.ErrorIsNil)
+	defer workertest.DirtyKill(c, w)
+
+	for range 3 {
+		select {
+		case draining <- struct{}{}:
+		case <-c.Context().Done():
+			c.Fatal("waiting for draining notification")
+		}
+		select {
+		case <-observed:
+		case <-c.Context().Done():
+			c.Fatal("waiting for guard update")
+		}
+	}
+	workertest.CleanKill(c, w)
+}
+
+func (s *workerSuite) TestSecondaryRefreshFailureDoesNotUnlockGuard(c *tc.C) {
+	defer s.setupMocks(c).Finish()
+
+	draining := make(chan struct{}, 1)
+	draining <- struct{}{}
+	s.guardService.EXPECT().WatchDraining(gomock.Any()).Return(watchertest.NewMockNotifyWatcher(draining), nil)
+	s.guardService.EXPECT().GetDrainingPhase(gomock.Any()).Return(objectstore.PhaseCompleted, nil)
+	refreshErr := errors.New("refresh failed")
+	s.objectStoreFlusher.EXPECT().FlushWorkers(gomock.Any()).Return(refreshErr)
+
+	config := s.getConfig(c)
+	config.GuardOnly = true
+	w, err := NewWorker(config)
+	c.Assert(err, tc.ErrorIsNil)
+	defer workertest.DirtyKill(c, w)
+	c.Check(workertest.CheckKilled(c, w), tc.ErrorIs, refreshErr)
+}
+
+func (s *workerSuite) TestSecondaryLocksGuardOnDrainError(c *tc.C) {
+	defer s.setupMocks(c).Finish()
+
+	draining := make(chan struct{}, 1)
+	draining <- struct{}{}
+	locked := make(chan struct{})
+	s.guardService.EXPECT().WatchDraining(gomock.Any()).Return(watchertest.NewMockNotifyWatcher(draining), nil)
+	s.guardService.EXPECT().GetDrainingPhase(gomock.Any()).Return(objectstore.PhaseError, nil)
+	s.guard.EXPECT().Lockdown(gomock.Any()).DoAndReturn(func(context.Context) error {
+		close(locked)
+		return nil
+	})
+
+	config := s.getConfig(c)
+	config.GuardOnly = true
+	w, err := NewWorker(config)
+	c.Assert(err, tc.ErrorIsNil)
+	defer workertest.DirtyKill(c, w)
+	select {
+	case <-locked:
+	case <-c.Context().Done():
+		c.Fatal("waiting for guard lockdown")
+	}
+	workertest.CleanKill(c, w)
+}
+
 func (s *workerSuite) TestObjectStoreDrainingDraining(c *tc.C) {
 	defer s.setupMocks(c).Finish()
 

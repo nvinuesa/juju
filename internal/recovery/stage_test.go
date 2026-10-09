@@ -7,6 +7,8 @@ import (
 	"context"
 	"database/sql"
 	"os"
+	"path/filepath"
+	"strings"
 	stdtesting "testing"
 
 	"github.com/juju/tc"
@@ -471,8 +473,193 @@ func (s *loadSuite) TestLoadStageEndToEnd(c *tc.C) {
 	c.Assert(err, tc.ErrorIsNil)
 	c.Check(controllerUUID, tc.Equals, testControllerUUID)
 
+	// The archive's object blob landed in the replacement's object store.
+	blob, err := os.ReadFile(filepath.Join(dataDir, "objectstore", "some-ns", "somehash"))
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(string(blob), tc.Equals, "blob content")
+
+	// The recovered controller config is bound to the file object store.
+	var storeType string
+	err = s.DB().QueryRow(
+		"SELECT value FROM controller_config WHERE key = 'object-store-type'").Scan(&storeType)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(storeType, tc.Equals, "file")
+
+	// The recovered machine charm resumes without running its install hook.
+	charmConf, err := os.Stat(filepath.Join(
+		dataDir, "agents", "controller-0", "controller.conf"))
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(charmConf.Size(), tc.Equals, int64(0))
 }
 
+// TestLoadStageArchivedS3ConfigRemoved loads an archive whose source used
+// an S3 object store: the replacement is always file-backed, so recovery
+// forces object-store-type to file and drops the archived S3 settings.
+func (s *loadSuite) TestLoadStageArchivedS3ConfigRemoved(c *tc.C) {
+	dump := controllerDump(
+		modelRow(testControllerModelUUID, "controller", "cloud-lxd"),
+		modelRow(testModelAUUID, "workload-a", "cloud-lxd"),
+		modelRow(testModelBUUID, "workload-b", "cloud-lxd"),
+	)
+	dump = strings.ReplaceAll(dump,
+		"  - key: controller-name\n    value: source-ctrl\n",
+		"  - key: controller-name\n    value: source-ctrl\n"+
+			"  - key: object-store-type\n    value: s3\n"+
+			"  - key: object-store-s3-endpoint\n    value: https://s3.example.com\n"+
+			"  - key: object-store-s3-static-key\n    value: archived-key\n"+
+			"  - key: object-store-s3-static-secret\n    value: archived-secret\n")
+	files := map[string][]byte{
+		"juju-backup/metadata.json":                                    []byte(metadataJSON("4.1.0")),
+		"juju-backup/dump/controller.yaml":                             []byte(dump),
+		"juju-backup/dump/models/" + testControllerModelUUID + ".yaml": []byte(controllerModelDumpYAML),
+		"juju-backup/dump/models/" + testModelAUUID + ".yaml":          []byte(emptyModelDumpYAML),
+		"juju-backup/dump/models/" + testModelBUUID + ".yaml":          []byte(emptyModelDumpYAML),
+		"juju-backup/root.tar":                                         rootTar(c),
+	}
+	archivePath, sum := writeArchive(c, files)
+
+	openModelDB := func(_ context.Context, modelUUID string) (*sql.DB, error) {
+		return s.openModelDB(c, modelUUID), nil
+	}
+	_, err := recovery.Load(c.Context(), recovery.LoadParams{
+		Service:             s.recoveryService(c, openModelDB),
+		ArchivePath:         archivePath,
+		ExpectedSHA256:      sum,
+		DataDir:             c.MkDir(),
+		ControllerModelUUID: testControllerModelUUID,
+		ControllerID:        "0",
+		MachinePatch: &domainrecovery.MachinePatch{
+			MachineName: "0",
+			InstanceID:  "replacement-instance",
+			DisplayName: "replacement-display",
+		},
+		Logger: loggertesting.WrapCheckLog(c),
+	})
+	c.Assert(err, tc.ErrorIsNil)
+
+	var storeType string
+	err = s.DB().QueryRow(
+		"SELECT value FROM controller_config WHERE key = 'object-store-type'").Scan(&storeType)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(storeType, tc.Equals, "file")
+
+	var s3Keys int
+	err = s.DB().QueryRow(
+		"SELECT COUNT(*) FROM controller_config WHERE key LIKE 'object-store-s3-%'").Scan(&s3Keys)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(s3Keys, tc.Equals, 0)
+
+	// Unrelated config survives the patch.
+	var name string
+	err = s.DB().QueryRow(
+		"SELECT value FROM controller_config WHERE key = 'controller-name'").Scan(&name)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(name, tc.Equals, "source-ctrl")
+}
+
+// TestLoadStageK8sControllerConf checks DNS observations and the controller
+// charm config file that its archived install hook will not recreate.
+func (s *loadSuite) TestLoadStageK8sControllerConf(c *tc.C) {
+	files := validFiles()
+	files["juju-backup/dump/controller.yaml"] = []byte(strings.ReplaceAll(controllerDump(
+		modelRow(testControllerModelUUID, "controller", "cloud-k8s"),
+		modelRow(testModelAUUID, "workload-a", "cloud-k8s"),
+		modelRow(testModelBUUID, "workload-b", "cloud-k8s"),
+	), "model_type_id: 0", "model_type_id: 1"))
+	files["juju-backup/dump/models/"+testControllerModelUUID+".yaml"] = []byte(`version: 4.1.0
+payload:
+  net_node:
+  - uuid: nn-0
+  fqdn_address:
+  - uuid: source-dns
+    address: source.example.com
+    scope_id: 1
+  net_node_fqdn_address:
+  - net_node_uuid: nn-0
+    address_uuid: source-dns
+  charm:
+  - uuid: charm-uuid-0
+    reference_name: controller
+    revision: 1
+    source_id: 1
+    architecture_id: 0
+    archive_path: null
+    object_store_uuid: null
+    available: null
+    version: null
+    lxd_profile: null
+    create_time: 2026-09-30T12:00:00Z
+  application:
+  - uuid: app-uuid-0
+    name: controller
+    life_id: 0
+    charm_uuid: charm-uuid-0
+    space_uuid: 656b4a82-e28c-53d6-a014-f0dd53417eb6
+    charm_modified_version: 0
+    charm_upgrade_on_error: null
+  application_controller:
+  - application_uuid: app-uuid-0
+  application_platform:
+  - application_uuid: app-uuid-0
+    architecture_id: 1
+    os_id: '0'
+    channel: 24.04/stable
+  architecture:
+  - id: 0
+    name: arm64
+  - id: 1
+    name: amd64
+  os:
+  - id: 0
+    name: ubuntu
+  unit:
+  - uuid: unit-uuid-0
+    name: controller/0
+    life_id: 0
+    application_uuid: app-uuid-0
+    net_node_uuid: nn-0
+    charm_uuid: charm-uuid-0
+    password_hash_algorithm_id: null
+    password_hash: null
+`)
+	files["juju-backup/dump/models/"+testModelAUUID+".yaml"] = []byte(emptyModelDumpYAML)
+	files["juju-backup/dump/models/"+testModelBUUID+".yaml"] = []byte(emptyModelDumpYAML)
+	files["juju-backup/root.tar"] = rootTar(c)
+	archivePath, sum := writeArchive(c, files)
+
+	dataDir := c.MkDir()
+	_, err := recovery.Load(c.Context(), recovery.LoadParams{
+		Service: s.recoveryService(c, func(_ context.Context, modelUUID string) (*sql.DB, error) {
+			return s.openModelDB(c, modelUUID), nil
+		}),
+		ControllerID:            "0",
+		ArchivePath:             archivePath,
+		ExpectedSHA256:          sum,
+		DataDir:                 dataDir,
+		ControllerModelUUID:     testControllerModelUUID,
+		ControllerUnitAddresses: []string{"replacement.example.com"},
+		Logger:                  loggertesting.WrapCheckLog(c),
+	})
+	c.Assert(err, tc.ErrorIsNil)
+
+	charmConf, err := os.Stat(filepath.Join(
+		dataDir, "agents", "controller-0", "controller.conf"))
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(charmConf.Size(), tc.Equals, int64(0))
+	db := s.openModelDB(c, testControllerModelUUID)
+	defer db.Close()
+	var address string
+	err = db.QueryRowContext(c.Context(), `
+SELECT fa.address FROM fqdn_address AS fa
+JOIN net_node_fqdn_address AS nnfa ON nnfa.address_uuid = fa.uuid
+WHERE nnfa.net_node_uuid = 'nn-0'`).Scan(&address)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(address, tc.Equals, "replacement.example.com")
+}
+
+// TestLoadStageHAMachineSelection checks that the replacement patches the
+// archived live controller machine, not an assumed ordinal: machine "0"
+// is dead in this dump, machine "1" hosts the live controller unit.
 func (s *loadSuite) TestLoadStageHAMachineSelection(c *tc.C) {
 	files := map[string][]byte{
 		"juju-backup/metadata.json": []byte(metadataJSON("4.1.0")),
@@ -526,6 +713,15 @@ func (s *loadSuite) TestLoadStageHAMachineSelection(c *tc.C) {
 
 	// Machine "0" is a dead controller machine awaiting removal.
 	c.Check(summary.DeadControllerMachines, tc.DeepEquals, []string{"0"})
+
+	// The replacement's charm config belongs to the surviving controller.
+	charmConf, err := os.Stat(filepath.Join(
+		dataDir, "agents", "controller-1", "controller.conf"))
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(charmConf.Size(), tc.Equals, int64(0))
+	_, err = os.Stat(filepath.Join(
+		dataDir, "agents", "controller-0", "controller.conf"))
+	c.Check(err, tc.ErrorIs, os.ErrNotExist)
 }
 
 // TestLoadStageHAWorkloadMachineNotDead checks that workload machines
@@ -632,7 +828,7 @@ func (s *loadSuite) recoveryService(c *tc.C, open func(context.Context, string) 
 				}
 			}
 			return s.ModelTxnRunner(c, model), nil
-	}, "0")
+		}, "0")
 	c.Assert(err, tc.ErrorIsNil)
 	return svc
 }

@@ -1,0 +1,35 @@
+type: charm
+name: recovery-k8s
+title: Recovery Kubernetes witness
+summary: Exercise persistent workload data and relations across recovery.
+description: A test workload for controller backup and recovery.
+base: ubuntu@24.04
+platforms:
+  amd64:
+assumes:
+  - k8s-api
+containers:
+  workload:
+    resource: ubuntu-image
+    mounts:
+      - storage: data
+        location: /data
+resources:
+  ubuntu-image:
+    type: oci-image
+    description: Workload image.
+    upstream-source: public.ecr.aws/ubuntu/ubuntu:24.04
+storage:
+  data:
+    type: filesystem
+    minimum-size: 1M
+provides:
+  sink:
+    interface: recovery-witness
+requires:
+  source:
+    interface: recovery-witness
+parts:
+  charm:
+    plugin: charm
+    source: .

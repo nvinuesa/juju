@@ -19,6 +19,10 @@ type State interface {
 	// rebinding every object store placement to the supplied target node.
 	LoadControllerDump(context.Context, *domainrecovery.ControllerDump, string) error
 	LoadModelDump(context.Context, *domainrecovery.ModelDump, string) error
+	// PatchControllerObjectStoreConfig forces the recovered controller's
+	// object store configuration to its file backend and drops the
+	// archived S3 settings.
+	PatchControllerObjectStoreConfig(context.Context) error
 	// Object queries describe the files required by persisted metadata.
 	GetObjectMetadataPaths(context.Context) ([]domainrecovery.ObjectMetadataPath, error)
 	// Machine lookup returns the first live controller machine in name order.
