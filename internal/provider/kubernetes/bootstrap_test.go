@@ -328,6 +328,58 @@ func (s *bootstrapSuite) TestControllerSpecWaitsForLocalControllerCharm(c *tc.C)
 	c.Check(startup, tc.Not(tc.Contains), "test -e $JUJU_DATA_DIR/agents/controller-0/agent.conf ||")
 }
 
+func (s *bootstrapSuite) TestControllerSpecRecoveryBootstrapGate(c *tc.C) {
+	newK8sClientFunc, newK8sRestClientFunc := s.setupK8sRestClient(c, s.pcfg.ControllerName)
+	var bootstrapWatchers []k8swatcher.KubernetesNotifyWatcher
+	s.setupBroker(c, newK8sClientFunc, newK8sRestClientFunc, &bootstrapWatchers)
+
+	s.pcfg.Bootstrap.Timeout = 10 * time.Minute
+	s.pcfg.Bootstrap.RecoveryArchivePath = "/var/lib/juju/recovery.tar.gz"
+
+	spec := s.controllerStackerGetter().BuildContainerSpecForController(c)
+	var apiServer *core.Container
+	for i := range spec.Containers {
+		if spec.Containers[i].Name == "api-server" {
+			apiServer = &spec.Containers[i]
+			break
+		}
+	}
+	c.Assert(apiServer, tc.NotNil)
+	c.Assert(apiServer.Args, tc.HasLen, 2)
+
+	startup := apiServer.Args[1]
+	// A completed recovery is detected via the marker file, not
+	// agent.conf (which bootstrap-state writes as its first step).
+	c.Check(startup, tc.Contains, "if test -e $JUJU_DATA_DIR/recovery/bootstrap-complete; then :; elif test -e $JUJU_DATA_DIR/agents/controller-0/agent.conf")
+	c.Check(startup, tc.Contains, `echo "recovery was interrupted; destroy the controller and re-run juju recover" >&2`)
+	c.Check(startup, tc.Contains, "$JUJU_TOOLS_DIR/jujuagentd bootstrap-state --data-dir $JUJU_DATA_DIR --debug --timeout 10m0s")
+	c.Check(startup, tc.Contains, "test -e $JUJU_DATA_DIR/recovery/bootstrap-complete || exit 1")
+}
+
+func (s *bootstrapSuite) TestControllerSpecNonRecoveryUnchanged(c *tc.C) {
+	newK8sClientFunc, newK8sRestClientFunc := s.setupK8sRestClient(c, s.pcfg.ControllerName)
+	var bootstrapWatchers []k8swatcher.KubernetesNotifyWatcher
+	s.setupBroker(c, newK8sClientFunc, newK8sRestClientFunc, &bootstrapWatchers)
+
+	s.pcfg.Bootstrap.Timeout = 10 * time.Minute
+
+	spec := s.controllerStackerGetter().BuildContainerSpecForController(c)
+	var apiServer *core.Container
+	for i := range spec.Containers {
+		if spec.Containers[i].Name == "api-server" {
+			apiServer = &spec.Containers[i]
+			break
+		}
+	}
+	c.Assert(apiServer, tc.NotNil)
+	c.Assert(apiServer.Args, tc.HasLen, 2)
+
+	startup := apiServer.Args[1]
+	c.Check(startup, tc.Contains, "test -e $JUJU_DATA_DIR/agents/controller-0/agent.conf || JUJU_DEV_FEATURE_FLAGS=developer-mode $JUJU_TOOLS_DIR/jujuagentd bootstrap-state --data-dir $JUJU_DATA_DIR --debug --timeout 10m0s")
+	c.Check(startup, tc.Not(tc.Contains), "recovery/bootstrap-complete")
+	c.Check(startup, tc.Not(tc.Contains), "recovery bootstrap was interrupted")
+}
+
 func (s *bootstrapSuite) TestIsLocalControllerCharmPath(c *tc.C) {
 	c.Check(kubernetes.IsLocalControllerCharmPath("/tmp/controller.charm"), tc.IsTrue)
 	c.Check(kubernetes.IsLocalControllerCharmPath("./controller.charm"), tc.IsTrue)
@@ -978,13 +1030,14 @@ func (s *bootstrapSuite) testBootstrap(c *tc.C, enableServiceLinks bool) {
 			Args: []string{
 				"-c",
 				`
+set -e
 export JUJU_DATA_DIR=/var/lib/juju
 export JUJU_TOOLS_DIR=$JUJU_DATA_DIR/tools
 
 mkdir -p $JUJU_TOOLS_DIR
 cp /opt/jujuagentd $JUJU_TOOLS_DIR/jujuagentd
 
-controller_id="${HOSTNAME##*-}"; if [ "${controller_id}" = "0" ]; then if ! test -e $JUJU_DATA_DIR/agents/controller-0/agent.conf; then mkdir -p $JUJU_DATA_DIR/charms; until test -e $JUJU_DATA_DIR/charms/controller.charm; do sleep 1; done; JUJU_DEV_FEATURE_FLAGS=developer-mode $JUJU_TOOLS_DIR/jujuagentd bootstrap-state --data-dir $JUJU_DATA_DIR --debug --timeout 10m0s; fi; else until test -e "$JUJU_DATA_DIR/agents/controller-${controller_id}/agent.conf"; do sleep 1; done; fi
+controller_id="${HOSTNAME##*-}"; if [ "${controller_id}" = "0" ]; then if ! test -e $JUJU_DATA_DIR/agents/controller-0/agent.conf; then mkdir -p $JUJU_DATA_DIR/charms; until test -e $JUJU_DATA_DIR/charms/controller.charm; do sleep 1; done; JUJU_DEV_FEATURE_FLAGS=developer-mode $JUJU_TOOLS_DIR/jujuagentd bootstrap-state --data-dir $JUJU_DATA_DIR --debug --timeout 10m0s; fi || exit 1; else until test -e "$JUJU_DATA_DIR/agents/controller-${controller_id}/agent.conf"; do sleep 1; done; fi
 
 mkdir -p /var/lib/pebble/default/layers
 cat > /var/lib/pebble/default/layers/001-jujuagentd.yaml <<EOF

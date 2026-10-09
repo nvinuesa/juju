@@ -399,6 +399,21 @@ type StateInitializationParams struct {
 
 	// SSHServerHostKey holds the host key to be used within the embedded SSH server for Juju.
 	SSHServerHostKey string
+
+	// RecoveryArchivePath, when non-empty, puts this bootstrap into
+	// recovery mode: the path to the uploaded controller backup archive on
+	// the machine or pod. The archived databases are loaded into the
+	// freshly bootstrapped dqlite before any agent, API or worker starts,
+	// instead of seeding identity data.
+	RecoveryArchivePath string
+
+	// RecoverySHA256 is the operator-supplied archive checksum (hex),
+	// verified before any archived data is loaded.
+	RecoverySHA256 string
+
+	// RecoverySourcePath is the archive's path on the bootstrap client,
+	// consumed by the upload step. It never ships to the machine.
+	RecoverySourcePath string `yaml:"-"`
 }
 
 type stateInitializationParamsInternal struct {
@@ -415,6 +430,8 @@ type stateInitializationParamsInternal struct {
 	BootstrapMachineConstraints             constraints.Value                 `yaml:"bootstrap-machine-constraints"`
 	BootstrapMachineHardwareCharacteristics *instance.HardwareCharacteristics `yaml:"bootstrap-machine-hardware,omitempty"`
 	BootstrapMachineDisplayName             string                            `yaml:"bootstrap-machine-display-name,omitempty"`
+	RecoveryArchivePath                     string                            `yaml:"recovery-archive-path,omitempty"`
+	RecoverySHA256                          string                            `yaml:"recovery-sha256,omitempty"`
 	ModelConstraints                        constraints.Value                 `yaml:"model-constraints"`
 	CustomImageMetadataJSON                 string                            `yaml:"custom-image-metadata,omitempty"`
 	ControllerCloud                         string                            `yaml:"controller-cloud"`
@@ -459,6 +476,8 @@ func (p *StateInitializationParams) Marshal() ([]byte, error) {
 		ControllerCharmPath:                     p.ControllerCharmPath,
 		ControllerCharmChannel:                  p.ControllerCharmChannel,
 		SSHServerHostKey:                        p.SSHServerHostKey,
+		RecoveryArchivePath:                     p.RecoveryArchivePath,
+		RecoverySHA256:                          p.RecoverySHA256,
 	}
 	return yaml.Marshal(&internal)
 }
@@ -509,6 +528,8 @@ func (p *StateInitializationParams) Unmarshal(data []byte) error {
 		ControllerCharmPath:                     internal.ControllerCharmPath,
 		ControllerCharmChannel:                  internal.ControllerCharmChannel,
 		SSHServerHostKey:                        internal.SSHServerHostKey,
+		RecoveryArchivePath:                     internal.RecoveryArchivePath,
+		RecoverySHA256:                          internal.RecoverySHA256,
 	}
 	return nil
 }

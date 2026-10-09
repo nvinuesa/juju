@@ -341,6 +341,28 @@ func (c *BootstrapCommand) initialiseFreshController(ctx *cmd.Context, args inst
 	if err != nil {
 		return errors.Capture(err)
 	}
+	if args.RecoveryArchivePath != "" {
+		// Recovery bootstrap is complete only once the archived
+		// databases are fully loaded; record that so a restarting
+		// controller pod does not mistake partial state for a
+		// finished recovery.
+		if err := writeRecoveryCompleteMarker(c.DataDir(), args.RecoverySHA256); err != nil {
+			return errors.Capture(err)
+		}
+	}
+	return nil
+}
+
+// writeRecoveryCompleteMarker writes the recovery bootstrap completion
+// marker under dataDir, containing the recovery archive SHA256.
+func writeRecoveryCompleteMarker(dataDir, sha256 string) error {
+	markerPath := filepath.Join(dataDir, cloudconfig.FileNameRecoveryComplete)
+	if err := os.MkdirAll(filepath.Dir(markerPath), 0o700); err != nil {
+		return errors.Errorf("creating recovery directory: %w", err)
+	}
+	if err := os.WriteFile(markerPath, []byte(sha256+"\n"), 0o600); err != nil {
+		return errors.Errorf("writing recovery bootstrap marker: %w", err)
+	}
 	return nil
 }
 

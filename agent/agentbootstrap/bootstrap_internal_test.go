@@ -5,8 +5,13 @@ package agentbootstrap
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/juju/clock"
 	"github.com/juju/names/v6"
 	"github.com/juju/tc"
 
@@ -17,6 +22,7 @@ import (
 	"github.com/juju/juju/core/network"
 	"github.com/juju/juju/environs"
 	"github.com/juju/juju/internal/database"
+	"github.com/juju/juju/internal/database/app"
 	loggertesting "github.com/juju/juju/internal/logger/testing"
 )
 
@@ -48,9 +54,77 @@ func (*bootstrapInternalSuite) TestBootstrapMachineAddressesReachDqlite(c *tc.C)
 	})
 	c.Assert(err, tc.ErrorIsNil)
 
-	err = bootstrap.initialiseDqlite(c.Context(), tc.Must0(c, model.NewUUID))
+	err = bootstrap.initialiseDqlite(c.Context(), tc.Must0(c, model.NewUUID), nil)
 	c.Assert(err, tc.ErrorIsNil)
 	c.Check(gotAddresses, tc.DeepEquals, addresses)
+}
+
+func (*bootstrapInternalSuite) TestInitializeDqliteRecoveryDispatch(c *tc.C) {
+	var recoveryCalled bool
+	var gotStage database.RecoveryStage
+	bootstrap, err := NewAgentBootstrap(AgentBootstrapArgs{
+		AdminUser:        names.NewLocalUserTag("admin"),
+		AgentConfig:      stubAgentConfig{dataDir: c.MkDir()},
+		BootstrapEnviron: stubBootstrapEnviron{},
+		BootstrapMachineAddresses: network.NewMachineAddresses(
+			[]string{"10.0.0.1"}).AsProviderAddresses(),
+		BootstrapDqlite: func(
+			context.Context, database.BootstrapNodeManager,
+			network.ProviderAddresses, model.UUID,
+			corelogger.Logger, ...database.BootstrapOpt,
+		) error {
+			return errors.New("must not be called in recovery mode")
+		},
+		BootstrapDqliteRecovery: func(
+			_ context.Context, _ database.BootstrapNodeManager,
+			_ network.ProviderAddresses, _ model.UUID,
+			_ corelogger.Logger, stage database.RecoveryStage,
+			opts ...database.BootstrapOpt,
+		) error {
+			recoveryCalled = true
+			gotStage = stage
+			c.Check(opts, tc.HasLen, 0)
+			return nil
+		},
+		Logger: loggertesting.WrapCheckLog(c),
+	})
+	c.Assert(err, tc.ErrorIsNil)
+
+	err = bootstrap.initialiseDqlite(c.Context(), tc.Must0(c, model.NewUUID),
+		func(context.Context, *app.App) error { return nil })
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(recoveryCalled, tc.IsTrue)
+	c.Check(gotStage, tc.NotNil)
+}
+
+func (*bootstrapInternalSuite) TestWaitForRecoveryArchivePresent(c *tc.C) {
+	path := filepath.Join(c.MkDir(), "archive.tar.gz")
+	c.Assert(os.WriteFile(path, []byte("x"), 0o600), tc.ErrorIsNil)
+
+	b := &AgentBootstrap{logger: loggertesting.WrapCheckLog(c), clock: clock.WallClock}
+	c.Check(b.waitForRecoveryArchive(c.Context(), path), tc.ErrorIsNil)
+}
+
+func (*bootstrapInternalSuite) TestWaitForRecoveryArchiveCancelled(c *tc.C) {
+	ctx, cancel := context.WithCancel(c.Context())
+	cancel()
+
+	b := &AgentBootstrap{logger: loggertesting.WrapCheckLog(c), clock: clock.WallClock}
+	err := b.waitForRecoveryArchive(ctx, filepath.Join(c.MkDir(), "missing.tar.gz"))
+	c.Assert(err, tc.NotNil)
+}
+
+func (*bootstrapInternalSuite) TestWaitForRecoveryArchiveTimeout(c *tc.C) {
+	// A lost upload must fail the wait with a clear error instead of
+	// hanging until the bootstrap-wide timeout.
+	old := recoveryArchiveWaitTimeout
+	recoveryArchiveWaitTimeout = -1 * time.Second
+	defer func() { recoveryArchiveWaitTimeout = old }()
+
+	b := &AgentBootstrap{logger: loggertesting.WrapCheckLog(c), clock: clock.WallClock}
+	err := b.waitForRecoveryArchive(c.Context(), filepath.Join(c.MkDir(), "missing.tar.gz"))
+	c.Assert(err, tc.ErrorMatches,
+		`recovery archive did not appear at .*; the upload may have failed and bootstrap must be re-run`)
 }
 
 type stubAgentConfig struct {

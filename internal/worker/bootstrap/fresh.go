@@ -5,7 +5,6 @@ package bootstrap
 
 import (
 	"context"
-	"os"
 
 	"github.com/juju/clock"
 	jujuerrors "github.com/juju/errors"
@@ -23,9 +22,7 @@ import (
 	macaroonerrors "github.com/juju/juju/domain/macaroon/errors"
 	domainstorage "github.com/juju/juju/domain/storage"
 	storageerrors "github.com/juju/juju/domain/storage/errors"
-	environsbootstrap "github.com/juju/juju/environs/bootstrap"
 	"github.com/juju/juju/internal/auth"
-	"github.com/juju/juju/internal/bootstrap"
 	"github.com/juju/juju/internal/cloudconfig/instancecfg"
 	"github.com/juju/juju/internal/errors"
 	"github.com/juju/juju/internal/password"
@@ -232,7 +229,7 @@ func (b *freshBootstrap) run(ctx context.Context) (func(), error) {
 	}
 
 	// Seed the controller charm to the object store.
-	bootstrapParams, err := b.bootstrapParams(ctx, dataDir)
+	bootstrapParams, err := readBootstrapParams(dataDir)
 	if err != nil {
 		return nil, errors.Errorf("getting bootstrap params: %w", err)
 	}
@@ -267,7 +264,9 @@ func (b *freshBootstrap) run(ctx context.Context) (func(), error) {
 	if err := b.seedControllerCharm(ctx, dataDir, bootstrapParams, bootstrapAddresses); err != nil {
 		return nil, errors.Capture(err)
 	}
-	if err := b.setControllerApplicationPassword(ctx); err != nil {
+	if err := setControllerApplicationPassword(
+		ctx, b.cfg.ApplicationService, b.cfg.AgentPasswordService, b.cfg.ApplicationPassword,
+	); err != nil {
 		return nil, errors.Capture(err)
 	}
 
@@ -296,24 +295,6 @@ func (b *freshBootstrap) run(ctx context.Context) (func(), error) {
 	}
 
 	return cleanup, nil
-}
-
-func (b *freshBootstrap) setControllerApplicationPassword(ctx context.Context) error {
-	if b.cfg.ApplicationPassword == "" {
-		return nil
-	}
-	applicationUUID, err := b.cfg.ApplicationService.GetApplicationUUIDByName(
-		ctx, environsbootstrap.ControllerApplicationName,
-	)
-	if err != nil {
-		return errors.Errorf("getting controller application UUID: %w", err)
-	}
-	if err := b.cfg.AgentPasswordService.SetApplicationPassword(
-		ctx, applicationUUID, b.cfg.ApplicationPassword,
-	); err != nil {
-		return errors.Errorf("setting controller application password: %w", err)
-	}
-	return nil
 }
 
 func (b *freshBootstrap) seedMacaroonConfig(ctx context.Context) error {
@@ -487,18 +468,6 @@ func (b *freshBootstrap) seedControllerCharm(
 	}
 
 	return errors.Capture(b.cfg.PopulateControllerCharm(ctx, deployer))
-}
-
-func (b *freshBootstrap) bootstrapParams(ctx context.Context, dataDir string) (instancecfg.StateInitializationParams, error) {
-	bootstrapParamsData, err := os.ReadFile(bootstrap.BootstrapParamsPath(dataDir))
-	if err != nil {
-		return instancecfg.StateInitializationParams{}, errors.Errorf("reading bootstrap params file: %w", err)
-	}
-	var args instancecfg.StateInitializationParams
-	if err := args.Unmarshal(bootstrapParamsData); err != nil {
-		return instancecfg.StateInitializationParams{}, errors.Capture(err)
-	}
-	return args, nil
 }
 
 // initialStoragePools extracts any storage pools included with the bootstrap

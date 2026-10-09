@@ -66,6 +66,13 @@ type ModelInfo struct {
 // It is produced before anything is provisioned and drives the recovery
 // preflight checks.
 type ArchiveInfo struct {
+	// Cloud and Region identify the original provisioning target.
+	Cloud  CloudInfo
+	Region string
+	// Credential is used only when local credentials are unavailable.
+	Credential *CredentialInfo
+	// ModelConfig contains the source controller model's provider settings.
+	ModelConfig map[string]string
 	// AgentVersion is the exact agent version of the source controller,
 	// read from the archive metadata (the manifest).
 	AgentVersion semversion.Number
@@ -114,6 +121,28 @@ type ArchiveInfo struct {
 
 	// Size is the archive file's size in bytes.
 	Size int64
+}
+
+// CloudInfo describes the cloud recorded in the controller export.
+type CloudInfo struct {
+	Name, Type                                  string
+	Endpoint, IdentityEndpoint, StorageEndpoint string
+	AuthTypes                                   []string
+	CACertificates                              []string
+	SkipTLSVerify                               bool
+	Regions                                     []RegionInfo
+}
+
+// RegionInfo retains the source region's endpoint overrides.
+type RegionInfo struct {
+	Name, Endpoint, IdentityEndpoint, StorageEndpoint string
+}
+
+// CredentialInfo describes the controller model's archived cloud credential.
+type CredentialInfo struct {
+	Name, AuthType   string
+	Attributes       map[string]string
+	Revoked, Invalid bool
 }
 
 // CheckAgentVersion enforces the exact-version recovery gate: an archive

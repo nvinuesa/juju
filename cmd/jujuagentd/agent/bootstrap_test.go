@@ -5,6 +5,8 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	stdtesting "testing"
 
 	"github.com/juju/tc"
@@ -40,6 +42,35 @@ func (s *BootstrapSuite) TestBootstrapControllerAddressesUsesProviderInterface(c
 	c.Assert(err, tc.ErrorIsNil)
 	c.Check(got, tc.DeepEquals, want)
 	c.Check(env.calls, tc.Equals, 1)
+}
+
+func (s *BootstrapSuite) TestWriteRecoveryCompleteMarker(c *tc.C) {
+	dataDir := c.MkDir()
+	err := writeRecoveryCompleteMarker(dataDir, "abc123")
+	c.Assert(err, tc.ErrorIsNil)
+
+	markerPath := filepath.Join(dataDir, "recovery", "bootstrap-complete")
+	data, err := os.ReadFile(markerPath)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(string(data), tc.Equals, "abc123\n")
+
+	info, err := os.Stat(markerPath)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(info.Mode().Perm(), tc.Equals, os.FileMode(0o600))
+
+	dirInfo, err := os.Stat(filepath.Dir(markerPath))
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(dirInfo.Mode().Perm(), tc.Equals, os.FileMode(0o700))
+}
+
+func (s *BootstrapSuite) TestWriteRecoveryCompleteMarkerOverwrites(c *tc.C) {
+	dataDir := c.MkDir()
+	c.Assert(writeRecoveryCompleteMarker(dataDir, "abc123"), tc.ErrorIsNil)
+	c.Assert(writeRecoveryCompleteMarker(dataDir, "def456"), tc.ErrorIsNil)
+
+	data, err := os.ReadFile(filepath.Join(dataDir, "recovery", "bootstrap-complete"))
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(string(data), tc.Equals, "def456\n")
 }
 
 type stubBootstrapAddressEnviron struct {
