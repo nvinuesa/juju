@@ -21,6 +21,7 @@ import (
 	"github.com/juju/errors"
 	"github.com/juju/names/v6"
 	"github.com/juju/ratelimit"
+	"github.com/juju/worker/v5"
 	"github.com/juju/worker/v5/catacomb"
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -67,6 +68,7 @@ import (
 	"github.com/juju/juju/internal/resource"
 	resourcecharmhub "github.com/juju/juju/internal/resource/charmhub"
 	"github.com/juju/juju/internal/services"
+	"github.com/juju/juju/internal/worker/backuplock"
 	"github.com/juju/juju/internal/worker/trace"
 	"github.com/juju/juju/internal/worker/watcherregistry"
 	"github.com/juju/juju/rpc"
@@ -104,7 +106,10 @@ type Server struct {
 	pingClock clock.Clock
 	wg        sync.WaitGroup
 
-	shared *sharedServerContext
+	shared     *sharedServerContext
+	backupLock interface {
+		Acquire(context.Context) (context.Context, func(), error)
+	}
 
 	// modelRemovals reports the removal of a model from this controller to the
 	// connections serving it.
@@ -139,8 +144,8 @@ type Server struct {
 	// healthStatus is returned from the health endpoint.
 	healthStatus string
 
-	// sshTunnelConfig holds the SSH tunnel endpoint dependencies.
-	sshTunnelConfig SSHTunnelConfig
+	// sshProxyConfig holds the SSH tunnel and relay endpoint dependencies.
+	sshProxyConfig SSHProxyConfig
 
 	// publicDNSName_ holds the value that will be returned in
 	// LoginResult.PublicDNSName. Currently this is set once and does
@@ -272,17 +277,21 @@ type ServerConfig struct {
 	// require them, but where the provider does not need to be tracked.
 	EphemeralProviderFactory providertracker.EphemeralProviderFactory
 
-	// SSHTunnelConfig configures the SSH reverse tunnel upgrade endpoint.
-	SSHTunnelConfig SSHTunnelConfig
+	// SSHProxyConfig configures the SSH reverse tunnel and relay upgrade
+	// endpoints.
+	SSHProxyConfig SSHProxyConfig
 }
 
-// SSHTunnelConfig holds the dependencies for the SSH tunnel upgrade
-// endpoint.
-type SSHTunnelConfig struct {
+// SSHProxyConfig holds the dependencies for the SSH tunnel and relay
+// upgrade endpoints.
+type SSHProxyConfig struct {
 	// TunnelTracker accepts reverse tunnel connections pushed by machine
 	// agents. It is the sshtunneler worker's output, local to this
 	// controller node.
 	TunnelTracker sshproxy.TunnelTracker
+	// ServerFactory builds the per-destination terminating SSH server
+	// for the relay endpoint.
+	ServerFactory sshproxy.TerminatingServerFactory
 }
 
 // Validate validates the API server configuration.
@@ -343,8 +352,11 @@ func (c ServerConfig) Validate() error {
 	if c.EphemeralProviderFactory == nil {
 		return errors.NotValidf("missing EphemeralProviderFactory")
 	}
-	if c.SSHTunnelConfig.TunnelTracker == nil {
-		return errors.NotValidf("missing SSHTunnelConfig.TunnelTracker")
+	if c.SSHProxyConfig.TunnelTracker == nil {
+		return errors.NotValidf("missing SSHProxyConfig.TunnelTracker")
+	}
+	if c.SSHProxyConfig.ServerFactory == nil {
+		return errors.NotValidf("missing SSHProxyConfig.ServerFactory")
 	}
 	return nil
 }
@@ -450,8 +462,8 @@ func newServer(ctx context.Context, cfg ServerConfig) (_ *Server, err error) {
 		logSink:          cfg.LogSink,
 		metricsCollector: cfg.MetricsCollector,
 
-		healthStatus:    "starting",
-		sshTunnelConfig: cfg.SSHTunnelConfig,
+		healthStatus:   "starting",
+		sshProxyConfig: cfg.SSHProxyConfig,
 	}
 	srv.updateAgentRateLimiter(controllerConfig)
 	if err := srv.updateResourceDownloadLimiters(controllerConfig); err != nil {
@@ -459,9 +471,21 @@ func newServer(ctx context.Context, cfg ServerConfig) (_ *Server, err error) {
 	}
 
 	ready := make(chan struct{})
+	backupLock, err := backuplock.NewWorker(backuplock.Config{
+		Manager:             cfg.LeaseManager,
+		ControllerUUID:      cfg.ControllerUUID,
+		ControllerModelUUID: cfg.ControllerModelUUID.String(),
+		Clock:               cfg.Clock,
+		Logger:              shared.logger.Child("backups"),
+	})
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	srv.backupLock = backupLock
 	if err := catacomb.Invoke(catacomb.Plan{
 		Name: "apiserver",
 		Site: &srv.catacomb,
+		Init: []worker.Worker{backupLock},
 		Work: func() error {
 			return srv.loop(ready)
 		},
@@ -850,6 +874,11 @@ func (srv *Server) endpoints() ([]apihttp.Endpoint, error) {
 		debuglogAuth,
 		srv.logDir,
 	), "log")
+	backupHandler := srv.monitoredHandler(&backupHandler{
+		createArchive: srv.createBackupArchive,
+		shutdownCtx:   srv.catacomb.Context(context.Background()),
+		logger:        logger,
+	}, "backup")
 	logSinkHandler := logsink.NewHTTPHandler(
 		newAgentLogWriteFunc(httpCtxt, srv.logSink),
 		httpCtxt.stop(),
@@ -888,6 +917,9 @@ func (srv *Server) endpoints() ([]apihttp.Endpoint, error) {
 		},
 		tagKindAuthorizer{names.ControllerAgentTagKind, names.MachineTagKind, names.ApplicationTagKind},
 	}
+	// Unit resources are only ever fetched by the agent of the unit, the same
+	// entities the ResourcesHookContext facade is restricted to.
+	unitResourcesAuthorizer := tagKindAuthorizer{names.UnitTagKind, names.ApplicationTagKind}
 	modelObjectsCharmsHTTPHandler := srv.monitoredHandler(objects.NewObjectsCharmHTTPHandler(
 		&applicationServiceGetter{ctxt: httpCtxt},
 		objects.CharmURLFromLocator,
@@ -943,9 +975,19 @@ func (srv *Server) endpoints() ([]apihttp.Endpoint, error) {
 		logger,
 	), "applications")
 	unitResourceNewOpenerFunc := resourceOpenerGetter(func(req *http.Request, tagKinds ...string) (coreresource.Opener, error) {
+		authTag, err := httpCtxt.authenticatedTagFromRequest(req, tagKinds...)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+
 		tagStr := req.URL.Query().Get(":unit")
 		tag, err := names.ParseUnitTag(tagStr)
 		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		// The unit is named by the request URL, so it has to be tied back
+		// to the authenticated agent before any resource is opened for it.
+		if err := checkUnitResourceAccess(authTag, tag); err != nil {
 			return nil, errors.Trace(err)
 		}
 		unitName, err := coreunit.NewName(tag.Id())
@@ -999,11 +1041,12 @@ func (srv *Server) endpoints() ([]apihttp.Endpoint, error) {
 		ctxt: httpCtxt,
 	}, "register")
 
-	// SSH tunnel upgrade endpoint. It is attached to the apiserver's
-	// catacomb so hijacked connections are closed and drained on shutdown.
+	// SSH tunnel and relay upgrade endpoints. They are attached to the
+	// apiserver's catacomb so hijacked connections are closed and drained
+	// on shutdown.
 	tunnelHandler, err := sshproxy.NewTunnelHandler(sshproxy.TunnelHandlerConfig{
 		Logger:  logger.Child("sshtunnel"),
-		Tracker: srv.sshTunnelConfig.TunnelTracker,
+		Tracker: srv.sshProxyConfig.TunnelTracker,
 	})
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -1011,7 +1054,20 @@ func (srv *Server) endpoints() ([]apihttp.Endpoint, error) {
 	if err := srv.catacomb.Add(tunnelHandler); err != nil {
 		return nil, errors.Trace(err)
 	}
-	sshTunnelHandler := srv.sshTunnelRequestWrapper(tunnelHandler)
+	sshTunnelHandler := srv.sshTunnelMiddleware(tunnelHandler)
+
+	relayHandler, err := sshproxy.NewRelayHandler(sshproxy.RelayHandlerConfig{
+		Logger:                   logger.Child("sshrelay"),
+		ServerFactory:            srv.sshProxyConfig.ServerFactory,
+		MaxConcurrentConnections: srv.shared.sshMaxConcurrentConnections,
+	})
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	if err := srv.catacomb.Add(relayHandler); err != nil {
+		return nil, errors.Trace(err)
+	}
+	sshRelayHandler := srv.sshRelayMiddleware(relayHandler)
 
 	// HTTP handler for application offer macaroon authentication.
 	if err := handlerscrossmodel.AddOfferAuthHandlers(srv.shared, srv.shared.offersThirdPartyKeyPair, srv.mux, srv.shared.logger); err != nil {
@@ -1030,6 +1086,28 @@ func (srv *Server) endpoints() ([]apihttp.Endpoint, error) {
 		handler:    logSinkHandler,
 		tracked:    true,
 		authorizer: logSinkAuthorizer,
+	}, {
+		pattern:    "/backup",
+		methods:    []string{http.MethodPost},
+		handler:    backupHandler,
+		authorizer: controllerAdminAuthorizer,
+		// Keep long-lived transfers tracked until their archives are
+		// removed; shutdown aborts stalled clients before waiting.
+		tracked: true,
+	}, {
+		// The pre-4.1 download paths: kept only so older clients get
+		// a clear upgrade error instead of a bare 404. Old clients
+		// download through a model connection, so the model-scoped
+		// route is the one they actually hit.
+		pattern:    "/backups",
+		methods:    []string{http.MethodGet},
+		handler:    backupHandler,
+		authorizer: controllerAdminAuthorizer,
+	}, {
+		pattern:    modelRoutePrefix + "/backups",
+		methods:    []string{http.MethodGet},
+		handler:    backupHandler,
+		authorizer: controllerAdminAuthorizer,
 	}, {
 		pattern:         modelRoutePrefix + "/api",
 		handler:         mainAPIHandler,
@@ -1056,7 +1134,7 @@ func (srv *Server) endpoints() ([]apihttp.Endpoint, error) {
 	}, {
 		pattern:    modelRoutePrefix + "/units/:unit/resources/:resource",
 		handler:    unitResourcesHandler,
-		authorizer: httpcontext.TODOAuthorizer,
+		authorizer: unitResourcesAuthorizer,
 	}, {
 		pattern:    "/migrate/charms/:object",
 		handler:    migrateObjectsCharmsHTTPHandler,
@@ -1141,6 +1219,15 @@ func (srv *Server) endpoints() ([]apihttp.Endpoint, error) {
 			tracked:    true,
 			authorizer: machineAgentAuthorizer{},
 		},
+		handler{
+			// Unscoped: the relay endpoint is bearer-JWT
+			// authenticated and independent of the request model.
+			pattern:    "/ssh-relay/:virtualHostname",
+			methods:    []string{"GET"},
+			handler:    sshRelayHandler,
+			tracked:    true,
+			authorizer: relayJWTAuthorizer{},
+		},
 	)
 	if srv.registerIntrospectionHandlers != nil {
 		add := func(subpath string, h http.Handler) {
@@ -1161,11 +1248,11 @@ func (srv *Server) endpoints() ([]apihttp.Endpoint, error) {
 	return endpoints, nil
 }
 
-// sshTunnelRequestWrapper injects the authenticated machine name into
+// sshTunnelMiddleware injects the authenticated machine name into
 // the request context for the SSH tunnel upgrade endpoint. The machine
 // identity is resolved from the HTTP authentication layer, never from the
 // request.
-func (srv *Server) sshTunnelRequestWrapper(h http.Handler) http.Handler {
+func (srv *Server) sshTunnelMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tag, err := (&httpContext{srv: srv}).authenticatedTagFromRequest(r, names.MachineTagKind)
 		if err != nil {
@@ -1180,6 +1267,28 @@ func (srv *Server) sshTunnelRequestWrapper(h http.Handler) http.Handler {
 		machineName := machineTag.Id()
 		ctx := context.WithValue(r.Context(), sshproxy.AuthenticatedMachineNameKey{}, machineName)
 		h.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// sshRelayMiddleware injects the relay JWT into the request context
+// for the SSH relay upgrade endpoint.
+func (srv *Server) sshRelayMiddleware(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authInfo, ok := httpcontext.RequestAuthInfo(r.Context())
+		if !ok {
+			http.Error(w, "authentication info missing", http.StatusUnauthorized)
+			return
+		}
+
+		// relayJWTAuthorizer admits only JWT delegators
+		delegator, ok := authInfo.Delegator.(*jwt.PermissionDelegator)
+		if !ok || delegator == nil {
+			http.Error(w, "JWT delegator not found", http.StatusUnauthorized)
+			return
+		}
+		// The token was signature-verified by the JWT authenticator.
+		r = r.WithContext(context.WithValue(r.Context(), sshproxy.RelayJWTKey{}, delegator.Token))
+		h.ServeHTTP(w, r)
 	})
 }
 
@@ -1658,4 +1767,23 @@ type resourceOpenerGetter func(r *http.Request, tagKinds ...string) (coreresourc
 
 func (rog resourceOpenerGetter) Opener(r *http.Request, tagKinds ...string) (coreresource.Opener, error) {
 	return rog(r, tagKinds...)
+}
+
+// checkUnitResourceAccess checks that the authenticated entity is allowed to
+// fetch resources on behalf of the supplied unit. A unit agent may only fetch
+// resources for itself, and an application agent only for the units of its
+// own application. Anything else gets [apiservererrors.ErrPerm].
+func checkUnitResourceAccess(authTag names.Tag, unitTag names.UnitTag) error {
+	switch authTag := authTag.(type) {
+	case names.UnitTag:
+		if authTag == unitTag {
+			return nil
+		}
+	case names.ApplicationTag:
+		appName, err := names.UnitApplication(unitTag.Id())
+		if err == nil && appName == authTag.Id() {
+			return nil
+		}
+	}
+	return apiservererrors.ErrPerm
 }

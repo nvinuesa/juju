@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"path"
 	"path/filepath"
 
 	"github.com/juju/collections/set"
@@ -57,8 +58,45 @@ var (
 	errCancelled = errors.New("cancelled")
 )
 
+// RecoveryParams carries the `juju recovery` inputs through the shared
+// provisioning code to the replacement.
+type RecoveryParams struct {
+	// SourcePath is the archive's path on the bootstrap client.
+	SourcePath string
+
+	// SHA256 is the operator-supplied archive checksum (hex), verified
+	// on the client, after upload, and again before any data is loaded.
+	SHA256 string
+
+	// ControllerUUID, ControllerName and ControllerModelUUID are the
+	// archived source identities.
+	ControllerUUID      string
+	ControllerName      string
+	ControllerModelUUID string
+
+	// Models is the archived model inventory, including the controller
+	// model, used by provider substrate checks.
+	Models []environs.RecoveryModel
+
+	// StartedInstanceID is the provider instance id of the replacement,
+	// recorded once the bootstrap instance is running. The bootstrap
+	// client reads it back to clean up the replacement when a later
+	// bootstrap step fails without an instance-id-marked error.
+	StartedInstanceID string
+	// SubstrateReport is written by the substrate check during the
+	// bootstrap: it records the archived workload substrate the
+	// surviving target no longer holds, reported to the operator in the
+	// recovery summary. Missing substrate never aborts recovery.
+	SubstrateReport *environs.RecoverySubstrateReport
+}
+
 // BootstrapParams holds the parameters for bootstrapping an environment.
 type BootstrapParams struct {
+	// Recovery, when non-nil, puts this bootstrap into recovery mode: the
+	// archive is uploaded to the replacement before its agent loads the
+	// archived databases instead of seeding identity data.
+	Recovery *RecoveryParams
+
 	// ModelConstraints are merged with the bootstrap constraints
 	// to choose the initial instance, and will be stored in the
 	// initial models' states.
@@ -269,6 +307,39 @@ func bootstrapCAAS(
 	bootstrapConstraints = withDefaultCAASControllerConstraints(bootstrapConstraints)
 	bootstrapParams.BootstrapConstraints = bootstrapConstraints
 
+	// A recovery bootstrap verifies the surviving-cluster substrate
+	// read-only before provisioning anything. A CAAS environ without the
+	// capability must not be waved through: the fencing and substrate
+	// guarantees would go unchecked.
+	if args.Recovery != nil {
+		checker, ok := environ.(environs.RecoverySubstrateChecker)
+		if !ok {
+			return errors.Errorf(
+				"provider %q does not support recovery substrate verification; cannot recover onto it",
+				args.Cloud.Type)
+		}
+		report, err := checker.CheckRecoverySubstrate(ctx, environs.RecoverySubstrateParams{
+			ControllerUUID:      args.Recovery.ControllerUUID,
+			ControllerName:      args.Recovery.ControllerName,
+			ControllerModelUUID: args.Recovery.ControllerModelUUID,
+			Models:              args.Recovery.Models,
+		})
+		if err != nil {
+			return errors.Trace(err)
+		}
+		args.Recovery.SubstrateReport = report
+		if !report.Empty() {
+			// Report before provisioning: the operator can still
+			// abort knowing what the first reconcile will recreate.
+			for _, workload := range report.MissingWorkloads {
+				ctx.Infof("recovery: the workload objects of archived application %q are missing; the first reconcile will recreate them", workload)
+			}
+			for _, claim := range report.MissingPersistentVolumeClaims {
+				ctx.Infof("recovery: archived volume claim %q is missing; a recreated claim comes back empty", claim)
+			}
+		}
+	}
+
 	result, err := environ.Bootstrap(ctx, bootstrapParams)
 	if err != nil {
 		return errors.Trace(err)
@@ -449,7 +520,11 @@ func bootstrapIAAS(
 
 	agentVersion := jujuversion.Current
 	var availableTools coretools.List
-	if !args.BuildAgent {
+	// In recovery mode the controller must run this client's binary: it
+	// is the code the archive was validated against. Packaged streams
+	// may hold a different build of the same version whose agent-binary
+	// metadata conflicts with the recovered agent-binary store.
+	if !args.BuildAgent && args.Recovery == nil {
 		latestPatchTxt := ""
 		versionTxt := fmt.Sprintf("%v", args.AgentVersion)
 		if args.AgentVersion == nil {
@@ -651,7 +726,6 @@ func bootstrapIAAS(
 
 		args.CloudCredential = cred
 	}
-
 	// Make sure we have the most recent environ config as the specified
 	// tools version has been updated there.
 	if err := finalizeInstanceBootstrapConfig(
@@ -661,6 +735,12 @@ func bootstrapIAAS(
 	}
 	if err := result.CloudBootstrapFinalizer(ctx, instanceConfig, args.DialOpts); err != nil {
 		return errors.Trace(err)
+	}
+	if args.Recovery != nil {
+		// Record the running replacement so the bootstrap client can
+		// stop it if a later step fails without an instance-id-marked
+		// error: RecoveryParams is shared with the client by pointer.
+		args.Recovery.StartedInstanceID = string(result.InstanceID)
 	}
 	return nil
 }
@@ -790,6 +870,11 @@ func finalizeInstanceBootstrapConfig(
 	icfg.Bootstrap.Timeout = args.DialOpts.Timeout
 	icfg.Bootstrap.ControllerCharm = args.ControllerCharmPath
 	icfg.Bootstrap.ControllerCharmChannel = args.ControllerCharmChannel
+	if args.Recovery != nil {
+		icfg.Bootstrap.RecoveryArchivePath = path.Join(icfg.DataDir, "recovery", "archive.tar.gz")
+		icfg.Bootstrap.RecoverySHA256 = args.Recovery.SHA256
+		icfg.Bootstrap.RecoverySourcePath = args.Recovery.SourcePath
+	}
 	return nil
 }
 
@@ -865,6 +950,11 @@ func finalizePodBootstrapConfig(
 	pcfg.Bootstrap.ControllerCharmPath = args.ControllerCharmPath
 	pcfg.Bootstrap.ControllerCharmChannel = args.ControllerCharmChannel
 	pcfg.Bootstrap.SSHServerHostKey = args.SSHServerHostKey
+	if args.Recovery != nil {
+		pcfg.Bootstrap.RecoveryArchivePath = path.Join(pcfg.DataDir, "recovery", "archive.tar.gz")
+		pcfg.Bootstrap.RecoverySHA256 = args.Recovery.SHA256
+		pcfg.Bootstrap.RecoverySourcePath = args.Recovery.SourcePath
+	}
 	return nil
 }
 

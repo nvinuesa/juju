@@ -49,6 +49,17 @@ const (
 	// FileNameBootstrapParams is the name of bootstrap params file.
 	FileNameBootstrapParams = "bootstrap-params"
 
+	// FileNameRecoveryComplete is the path, relative to the Juju
+	// data-dir, of the marker written once a recovery bootstrap has
+	// fully loaded the archived databases. A restarting controller
+	// pod uses its presence to distinguish a completed recovery from
+	// an interrupted one.
+	FileNameRecoveryComplete = "recovery/bootstrap-complete"
+
+	// FileNameRecoveryStarted records that Kubernetes recovery has begun.
+	// Agent config files may already exist before the first recovery attempt.
+	FileNameRecoveryStarted = "recovery/bootstrap-started"
+
 	// curlCommand is the base curl command used to download tools.
 	curlCommand = "curl -sSf"
 
