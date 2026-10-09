@@ -58,6 +58,9 @@ type InstanceConfig struct {
 	// Controller must also be set.
 	Bootstrap *BootstrapConfig
 
+	// Initialisation supplies a separate controller initialisation workflow.
+	Initialisation *ControllerInitialisation
+
 	// Controller contains configuration for the controller
 	// used to manage this new instance.
 	ControllerConfig controller.Config

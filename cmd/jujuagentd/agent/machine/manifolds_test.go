@@ -66,6 +66,23 @@ func (s *ManifoldsSuite) TestDependencyGraphsAreAcyclic(c *tc.C) {
 	}
 }
 
+func (s *ManifoldsSuite) TestRecoveryWorkerSelection(c *tc.C) {
+	for _, isRecovery := range []bool{false, true} {
+		config := machine.ManifoldsConfig{IsRecovery: isRecovery, Agent: &mockAgent{}, PreUpgradeSteps: preUpgradeSteps}
+		for _, manifolds := range []dependency.Manifolds{machine.IAASManifolds(config), machine.K8sManifolds(config)} {
+			_, bootstrap := manifolds["bootstrap"]
+			_, recovery := manifolds["recovery"]
+			c.Check(bootstrap, tc.Equals, !isRecovery)
+			c.Check(recovery, tc.Equals, isRecovery)
+			c.Assert(dependency.Validate(manifolds), tc.ErrorIsNil)
+			if isRecovery {
+				c.Check(slices.Contains(manifolds["recovery"].Inputs, "is-bootstrap-gate"), tc.IsTrue)
+				c.Check(slices.Contains(manifolds["recovery"].Inputs, "http-client"), tc.IsFalse)
+			}
+		}
+	}
+}
+
 func (*ManifoldsSuite) assertStartFuncs(c *tc.C, manifolds dependency.Manifolds) {
 	for name, manifold := range manifolds {
 		c.Logf("checking %q manifold", name)

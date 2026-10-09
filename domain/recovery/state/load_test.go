@@ -290,6 +290,7 @@ func (s *loadSuite) TestPatchControllerMachine(c *tc.C) {
 		DisplayName: "replacement-display",
 		Arch:        "amd64",
 		MemMB:       8192,
+		Nonce:       "replacement-nonce",
 	})
 	c.Assert(err, tc.ErrorIsNil)
 
@@ -303,6 +304,9 @@ func (s *loadSuite) TestPatchControllerMachine(c *tc.C) {
 	c.Check(displayName, tc.Equals, "replacement-display")
 	c.Check(arch, tc.Equals, "amd64")
 	c.Check(mem, tc.Equals, int64(8192))
+	var nonce string
+	c.Assert(db.QueryRow("SELECT nonce FROM machine WHERE name = '0'").Scan(&nonce), tc.ErrorIsNil)
+	c.Check(nonce, tc.Equals, "replacement-nonce")
 }
 
 func (s *loadSuite) TestPatchControllerMachineMissing(c *tc.C) {

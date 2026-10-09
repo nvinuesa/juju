@@ -135,7 +135,10 @@ func Load(ctx context.Context, params LoadParams) (*domainrecovery.Summary, erro
 	var patchTarget string
 	if params.MachinePatch != nil {
 		patch := *params.MachinePatch
-		patchTarget, err = recoverystate.ControllerMachineName(ctx, controllerModelDB)
+		patchTarget = patch.MachineName
+		if patchTarget == "" {
+			patchTarget, err = recoverystate.ControllerMachineName(ctx, controllerModelDB)
+		}
 		if err != nil {
 			return nil, errors.Capture(err)
 		}

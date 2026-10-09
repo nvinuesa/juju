@@ -6,7 +6,6 @@ package state
 import (
 	"context"
 	"database/sql"
-	"strings"
 
 	"github.com/canonical/sqlair"
 
@@ -43,50 +42,68 @@ LIMIT 1`).Scan(&name)
 // observations are left as archived: the instance poller refreshes them
 // after the first start.
 func PatchControllerMachine(ctx context.Context, modelDB *sql.DB, patch domainrecovery.MachinePatch) error {
-	var machineUUID string
-	err := modelDB.QueryRowContext(ctx,
-		"SELECT uuid FROM machine WHERE name = ?", patch.MachineName).Scan(&machineUUID)
-	if errors.Is(err, sql.ErrNoRows) {
+	type input struct {
+		Name        string `db:"name"`
+		UUID        string `db:"uuid"`
+		InstanceID  string `db:"instance_id"`
+		DisplayName string `db:"display_name"`
+		Arch        string `db:"arch"`
+		Mem         uint64 `db:"mem"`
+		Cores       uint64 `db:"cpu_cores"`
+		RootDisk    uint64 `db:"root_disk"`
+		Nonce       string `db:"nonce"`
+	}
+	in := input{Name: patch.MachineName, InstanceID: patch.InstanceID,
+		DisplayName: patch.DisplayName, Arch: patch.Arch, Mem: patch.MemMB,
+		Cores: patch.Cores, RootDisk: patch.RootDiskMB, Nonce: patch.Nonce}
+	tx, err := sqlair.NewDB(modelDB).Begin(ctx, nil)
+	if err != nil {
+		return errors.Capture(err)
+	}
+	defer tx.Rollback()
+	query, err := sqlair.Prepare(`
+SELECT m.uuid AS &input.uuid FROM machine AS m
+WHERE m.name = $input.name`, in)
+	if err != nil {
+		return errors.Capture(err)
+	}
+	if err := tx.Query(ctx, query, in).Get(&in); errors.Is(err, sqlair.ErrNoRows) {
 		return errors.Errorf("archived controller machine %q not found", patch.MachineName)
 	} else if err != nil {
-		return errors.Errorf("finding archived controller machine %q: %w", patch.MachineName, err)
+		return errors.Errorf("finding archived controller machine: %w", err)
 	}
-
-	sets := []string{"instance_id = ?", "display_name = ?"}
-	args := []any{patch.InstanceID, patch.DisplayName}
-	if patch.Arch != "" {
-		sets = append(sets, "arch = ?")
-		args = append(args, patch.Arch)
-	}
-	if patch.MemMB > 0 {
-		sets = append(sets, "mem = ?")
-		args = append(args, patch.MemMB)
-	}
-	if patch.Cores > 0 {
-		sets = append(sets, "cpu_cores = ?")
-		args = append(args, patch.Cores)
-	}
-	if patch.RootDiskMB > 0 {
-		sets = append(sets, "root_disk = ?")
-		args = append(args, patch.RootDiskMB)
-	}
-	args = append(args, machineUUID)
-
-	res, err := modelDB.ExecContext(ctx,
-		"UPDATE machine_cloud_instance SET "+strings.Join(sets, ", ")+" WHERE machine_uuid = ?",
-		args...)
+	query, err = sqlair.Prepare(`
+UPDATE machine_cloud_instance AS mci SET
+instance_id = $input.instance_id, display_name = $input.display_name,
+arch = CASE WHEN $input.arch != '' THEN $input.arch ELSE arch END,
+mem = CASE WHEN $input.mem > 0 THEN $input.mem ELSE mem END,
+cpu_cores = CASE WHEN $input.cpu_cores > 0 THEN $input.cpu_cores ELSE cpu_cores END,
+root_disk = CASE WHEN $input.root_disk > 0 THEN $input.root_disk ELSE root_disk END
+WHERE mci.machine_uuid = $input.uuid`, in)
 	if err != nil {
-		return errors.Errorf("patching controller machine %q: %w", patch.MachineName, err)
+		return errors.Capture(err)
 	}
-	affected, err := res.RowsAffected()
+	var outcome sqlair.Outcome
+	if err := tx.Query(ctx, query, in).Get(&outcome); err != nil {
+		return errors.Errorf("patching controller machine: %w", err)
+	}
+	affected, err := outcome.Result().RowsAffected()
 	if err != nil {
 		return errors.Capture(err)
 	}
 	if affected == 0 {
-		return errors.Errorf(
-			"archived controller machine %q has no cloud instance record", patch.MachineName)
+		return errors.New("archived controller machine has no cloud instance record")
 	}
-	return nil
+	if patch.Nonce != "" {
+		query, err := sqlair.Prepare(`UPDATE machine AS m SET nonce = $input.nonce WHERE m.uuid = $input.uuid`, in)
+		if err != nil {
+			return errors.Capture(err)
+		}
+		if err := tx.Query(ctx, query, in).Run(); err != nil {
+			return errors.Capture(err)
+		}
+	}
+	return errors.Capture(tx.Commit())
 }
 
 // PatchControllerUnitAddresses replaces the controller unit's IP and DNS

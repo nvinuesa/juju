@@ -66,9 +66,23 @@ type ModelInfo struct {
 // It is produced before anything is provisioned and drives the recovery
 // preflight checks.
 type ArchiveInfo struct {
+	// Cloud and Region identify the original provisioning target.
+	Cloud  CloudInfo
+	Region string
+	// Credential is used only when local credentials are unavailable.
+	Credential *CredentialInfo
+	// ModelConfig contains the source controller model's provider settings.
+	ModelConfig map[string]string
 	// AgentVersion is the exact agent version of the source controller,
-	// read from the archive metadata (the manifest).
+	// read from metadata.json.
 	AgentVersion semversion.Number
+
+	// SourceBase is the operating system base recorded in metadata.json.
+	SourceBase string
+	// MachineName is the source agent identity recorded in metadata.json.
+	MachineName      string
+	SystemIdentity   string
+	ControllerConfig map[string]string
 
 	// ControllerUUID is the source controller's logical identity.
 	ControllerUUID string
@@ -116,20 +130,33 @@ type ArchiveInfo struct {
 	Size int64
 }
 
-// CheckAgentVersion enforces the exact-version recovery gate: an archive
-// is only ever recovered onto the same agent version it was taken from.
-// The official build number (the ".1" in "4.1-beta3.1") distinguishes
-// released packaging of the same version, not the dump format or the
-// schema; the gate ignores it, mirroring the CAAS agent-version
-// comparison.
+// CloudInfo describes the cloud recorded in the controller export.
+type CloudInfo struct {
+	Name, Type                                  string
+	Endpoint, IdentityEndpoint, StorageEndpoint string
+	AuthTypes                                   []string
+	CACertificates                              []string
+	SkipTLSVerify                               bool
+	Regions                                     []RegionInfo
+}
+
+// RegionInfo retains the source region's endpoint overrides.
+type RegionInfo struct {
+	Name, Endpoint, IdentityEndpoint, StorageEndpoint string
+}
+
+// CredentialInfo describes the controller model's archived cloud credential.
+type CredentialInfo struct {
+	Name, AuthType   string
+	Attributes       map[string]string
+	Revoked, Invalid bool
+}
+
+// CheckAgentVersion verifies the full version of the replacement agent.
+// Client compatibility is determined by archive format, not client version.
 func (i *ArchiveInfo) CheckAgentVersion(current semversion.Number) error {
-	archived := i.AgentVersion
-	archived.Build = 0
-	current.Build = 0
-	if archived.Compare(current) != 0 {
-		return errors.Errorf(
-			"archive was created by agent version %s but this binary is %s; "+
-				"recovery requires the exact same version", i.AgentVersion, current)
+	if i.AgentVersion != current {
+		return errors.Errorf("archive agent version %s differs from replacement agent %s", i.AgentVersion, current)
 	}
 	return nil
 }
@@ -167,6 +194,9 @@ func (i *ArchiveInfo) CheckProviderFamily(targetCloudType string) error {
 // MachinePatch carries the replacement machine's physical facts, known to
 // bootstrap because it just created them.
 type MachinePatch struct {
+	// Nonce is the replacement machine's provisioned introduction nonce.
+	Nonce string
+
 	// MachineName is the name of the archived controller machine the
 	// replacement maps onto. It is resolved from the loaded dump by the
 	// recovery stage; the caller need not set it.

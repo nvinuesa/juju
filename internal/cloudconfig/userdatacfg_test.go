@@ -697,6 +697,29 @@ func (*cloudinitSuite) TestCloudInitConfigure(c *tc.C) {
 	}
 }
 
+func (s *cloudinitSuite) TestControllerInitialisationUsesOwnCommand(c *tc.C) {
+	icfg := s.createInstanceConfig(c, minimalModelConfig(c))
+	icfg.Initialisation = &instancecfg.ControllerInitialisation{
+		Command: "recovery-state", ParamsPath: "recovery/params",
+		ModePath: "recovery/is-recovery", Mode: "true", Timeout: time.Minute,
+		Prepare: func(cfg *instancecfg.InstanceConfig) ([]byte, error) {
+			c.Check(cfg.MachineId, tc.Equals, "42")
+			return []byte("opaque recovery parameters"), nil
+		},
+	}
+	cloudcfg, err := cloudinit.New("ubuntu")
+	c.Assert(err, tc.ErrorIsNil)
+	udata, err := cloudconfig.NewUserdataConfig(icfg, cloudcfg)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Assert(udata.ConfigureJuju(), tc.ErrorIsNil)
+	scripts := fmt.Sprint(cloudcfg.RunCmds())
+	c.Check(scripts, tc.Contains, "recovery-state")
+	c.Check(scripts, tc.Contains, "recovery/is-recovery")
+	c.Check(scripts, tc.Contains, "opaque recovery parameters")
+	c.Check(scripts, tc.Not(tc.Contains), "bootstrap-state")
+	c.Check(scripts, tc.Not(tc.Contains), "bootstrap-params")
+}
+
 func (s *cloudinitSuite) TestCloudInitConfigCloudInitUserData(c *tc.C) {
 	environConfig := minimalModelConfig(c)
 	environConfig, err := environConfig.Apply(map[string]any{
