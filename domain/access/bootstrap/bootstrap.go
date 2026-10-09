@@ -80,3 +80,46 @@ func bootstrapErr(err error) func(context.Context, database.TxnRunner, database.
 		return err
 	}
 }
+
+// SetUserPassword is responsible for setting the password of an existing
+// user at bootstrap time. It is used by recovery mode to bridge
+// authentication: the recovered database keeps the source's archived users,
+// and the bootstrap client authenticates with the password generated for
+// this bootstrap, so the archived admin user's password is updated to
+// match while every other user attribute stays archived.
+func SetUserPassword(name user.Name, password auth.Password,
+	now time.Time) internaldatabase.BootstrapOpt {
+	defer password.Destroy()
+
+	if name.IsZero() {
+		return bootstrapErr(errors.Errorf("%q: %w", name, usererrors.UserNameNotValid))
+	}
+
+	salt, err := auth.NewSalt()
+	if err != nil {
+		return bootstrapErr(errors.Errorf(
+			"generating salt for bootstrap set user %q password: %w",
+			name, err))
+	}
+
+	pwHash, err := auth.HashPassword(password, salt)
+	if err != nil {
+		return bootstrapErr(errors.Errorf(
+			"generating password hash for bootstrap set user %q password: %w",
+			name, err))
+	}
+
+	return func(ctx context.Context, controller, model database.TxnRunner) error {
+		return errors.Capture(controller.Txn(ctx, func(ctx context.Context, tx *sqlair.TX) error {
+			if err = state.SetPasswordHashForBootstrap(
+				ctx, tx,
+				name,
+				pwHash, salt,
+			); err != nil {
+				return errors.Errorf("setting bootstrap password for user %q: %w",
+					name, err)
+			}
+			return nil
+		}))
+	}
+}

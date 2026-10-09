@@ -34,6 +34,7 @@ fi
 	// APIServerStartUpSh is the start script for the "api-server" container
 	// in the controller pod (Pebble running jujud).
 	APIServerStartUpSh = `
+set -e
 export JUJU_DATA_DIR=%[1]s
 export JUJU_TOOLS_DIR=$JUJU_DATA_DIR/tools
 

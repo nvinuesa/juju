@@ -177,7 +177,13 @@ func (env *maasEnviron) Bootstrap(ctx environs.BootstrapContext, args environs.B
 	) error {
 		// Wait for bootstrap instance to change to deployed state.
 		if err := env.waitForNodeDeployment(ctx, result.Instance.Id(), dialOpts.Timeout); err != nil {
-			return errors.Annotate(err, "bootstrap instance started but did not change to Deployed state")
+			// The node is allocated and started: mark the error with
+			// its instance id so a failed recovery bootstrap stops
+			// exactly this node instead of destroying by tag.
+			return &environs.BootstrapInstanceError{
+				InstanceID: string(result.Instance.Id()),
+				Err:        errors.Annotate(err, "bootstrap instance started but did not change to Deployed state"),
+			}
 		}
 		return finalizer(ctx, icfg, dialOpts)
 	}
@@ -185,6 +191,7 @@ func (env *maasEnviron) Bootstrap(ctx environs.BootstrapContext, args environs.B
 	bsResult := &environs.BootstrapResult{
 		Arch:                    *result.Hardware.Arch,
 		Base:                    *base,
+		InstanceID:              result.Instance.Id(),
 		CloudBootstrapFinalizer: waitingFinalizer,
 	}
 	return bsResult, nil

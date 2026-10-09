@@ -251,37 +251,65 @@ func Manifold(config ManifoldConfig) dependency.Manifold {
 
 			// Select the operation for fresh bootstrap or restoration here.
 			// Keep this choice out of the worker's completion and gate handling.
-			operation, err := NewFreshBootstrap(FreshBootstrapConfig{
-				ControllerAgentBinaryStore: controllerDomainServices.ControllerAgentBinaryStore(),
-				ControllerConfigService:    controllerDomainServices.ControllerConfig(),
-				ControllerNodeService:      controllerDomainServices.ControllerNode(),
-				UserService:                controllerDomainServices.Access(),
-				StorageService:             controllerModelDomainServices.Storage(),
-				AgentPasswordService:       controllerModelDomainServices.AgentPassword(),
-				ApplicationService:         applicationService,
-				ControllerModel:            controllerModel,
-				ModelConfigService:         controllerModelDomainServices.Config(),
-				ModelInfoService:           controllerModelDomainServices.ModelInfo(),
-				MachineService:             controllerModelDomainServices.Machine(),
-				KeyManagerService:          controllerModelDomainServices.KeyManager(),
-				NetworkService:             controllerModelDomainServices.Network(),
-				BakeryConfigService:        controllerDomainServices.Macaroon(),
-				DataDir:                    config.DataDir,
-				APIPort:                    config.APIPort,
-				AgentBinaryUploader:        config.AgentBinaryUploader,
-				ControllerCharmDeployer:    config.ControllerCharmDeployer,
-				PopulateControllerCharm:    config.PopulateControllerCharm,
-				AgentFinalizer:             config.AgentFinalizer,
-				RemoveBootstrapSSHKeys:     config.RemoveBootstrapSSHKeys,
-				AgentPassword:              config.AgentPassword,
-				ApplicationPassword:        applicationPassword,
-				CharmhubHTTPClient:         charmhubHTTPClient,
-				UnitPassword:               unitPassword,
-				ServiceManagerGetter:       serviceManagerGetter,
-				BootstrapAddressFinder:     config.BootstrapAddressFinderGetter(providerFactory, controllerModel.UUID.String()),
-				Logger:                     config.Logger,
-				Clock:                      config.Clock,
-			})
+			params, err := readBootstrapParams(config.DataDir)
+			if err != nil {
+				return nil, errors.Capture(err)
+			}
+			var operation Operation
+			if params.RecoveryArchivePath != "" {
+				operation, err = NewRecoveryBootstrap(RecoveryBootstrapConfig{
+					ControllerConfigService: controllerDomainServices.ControllerConfig(),
+					ControllerNodeService:   controllerDomainServices.ControllerNode(),
+					AgentPasswordService:    controllerModelDomainServices.AgentPassword(),
+					ApplicationService:      applicationService,
+					MachineService:          controllerModelDomainServices.Machine(),
+					NetworkService:          controllerModelDomainServices.Network(),
+					ControllerModel:         controllerModel,
+					BootstrapAddressFinder:  config.BootstrapAddressFinderGetter(providerFactory, controllerModel.UUID.String()),
+					DataDir:                 config.DataDir,
+					APIPort:                 config.APIPort,
+					AgentFinalizer:          config.AgentFinalizer,
+					AgentPassword:           config.AgentPassword,
+					ApplicationPassword:     applicationPassword,
+					UnitPassword:            unitPassword,
+					ServiceManagerGetter:    serviceManagerGetter,
+					RemoveBootstrapSSHKeys:  config.RemoveBootstrapSSHKeys,
+					Logger:                  config.Logger,
+					Clock:                   config.Clock,
+				})
+			} else {
+				operation, err = NewFreshBootstrap(FreshBootstrapConfig{
+					ControllerAgentBinaryStore: controllerDomainServices.ControllerAgentBinaryStore(),
+					ControllerConfigService:    controllerDomainServices.ControllerConfig(),
+					ControllerNodeService:      controllerDomainServices.ControllerNode(),
+					UserService:                controllerDomainServices.Access(),
+					StorageService:             controllerModelDomainServices.Storage(),
+					AgentPasswordService:       controllerModelDomainServices.AgentPassword(),
+					ApplicationService:         applicationService,
+					ControllerModel:            controllerModel,
+					ModelConfigService:         controllerModelDomainServices.Config(),
+					ModelInfoService:           controllerModelDomainServices.ModelInfo(),
+					MachineService:             controllerModelDomainServices.Machine(),
+					KeyManagerService:          controllerModelDomainServices.KeyManager(),
+					NetworkService:             controllerModelDomainServices.Network(),
+					BakeryConfigService:        controllerDomainServices.Macaroon(),
+					DataDir:                    config.DataDir,
+					APIPort:                    config.APIPort,
+					AgentBinaryUploader:        config.AgentBinaryUploader,
+					ControllerCharmDeployer:    config.ControllerCharmDeployer,
+					PopulateControllerCharm:    config.PopulateControllerCharm,
+					AgentFinalizer:             config.AgentFinalizer,
+					RemoveBootstrapSSHKeys:     config.RemoveBootstrapSSHKeys,
+					AgentPassword:              config.AgentPassword,
+					ApplicationPassword:        applicationPassword,
+					CharmhubHTTPClient:         charmhubHTTPClient,
+					UnitPassword:               unitPassword,
+					ServiceManagerGetter:       serviceManagerGetter,
+					BootstrapAddressFinder:     config.BootstrapAddressFinderGetter(providerFactory, controllerModel.UUID.String()),
+					Logger:                     config.Logger,
+					Clock:                      config.Clock,
+				})
+			}
 			if err != nil {
 				return nil, errors.Capture(err)
 			}

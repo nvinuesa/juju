@@ -51,11 +51,84 @@ func (s *validateSuite) TestValidateArchive(c *tc.C) {
 	c.Check(info.Models[1].CloudType, tc.Equals, "lxd")
 }
 
+func (s *validateSuite) TestArchivedCloudRegionAndCredential(c *tc.C) {
+	files := validFiles()
+	dump := string(files["juju-backup/dump/controller.yaml"])
+	dump = strings.Replace(dump, "name: lxd\n    cloud_type_id: 1\n    endpoint: ''", "name: lxd\n    cloud_type_id: 1\n    endpoint: https://source.example", 1)
+	dump = strings.Replace(dump, "name: controller\n", "name: controller\n    cloud_region_uuid: source-region\n    cloud_credential_uuid: source-credential\n", 1)
+	dump += `  cloud_region:
+  - uuid: source-region
+    cloud_uuid: cloud-lxd
+    name: original-region
+    endpoint: https://region.example
+  auth_type:
+  - id: 1
+    type: userpass
+  cloud_auth_type:
+  - cloud_uuid: cloud-lxd
+    auth_type_id: 1
+  cloud_ca_cert:
+  - cloud_uuid: cloud-lxd
+    ca_cert: source-cloud-ca
+  cloud_credential:
+  - uuid: source-credential
+    cloud_uuid: cloud-lxd
+    name: original-credential
+    auth_type_id: '1'
+    revoked: false
+    invalid: false
+  cloud_credential_attribute:
+  - cloud_credential_uuid: source-credential
+    key: username
+    value: source-user
+`
+	files["juju-backup/dump/controller.yaml"] = []byte(dump)
+	path, sum := writeArchive(c, files)
+	info, err := recovery.ValidateArchive(c.Context(), path, sum)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(info.Cloud.Endpoint, tc.Equals, "https://source.example")
+	c.Check(info.Region, tc.Equals, "original-region")
+	c.Check(info.Cloud.Regions[0].Endpoint, tc.Equals, "https://region.example")
+	c.Check(info.Cloud.CACertificates, tc.DeepEquals, []string{"source-cloud-ca"})
+	c.Assert(info.Credential, tc.NotNil)
+	c.Check(info.Credential.AuthType, tc.Equals, "userpass")
+	c.Check(info.Credential.Attributes["username"], tc.Equals, "source-user")
+	for _, field := range []string{"cloud_region_uuid", "cloud_credential_uuid"} {
+		broken := strings.Replace(dump, field+": source-", field+": unknown-", 1)
+		files["juju-backup/dump/controller.yaml"] = []byte(broken)
+		path, sum := writeArchive(c, files)
+		_, err := recovery.ValidateArchive(c.Context(), path, sum)
+		c.Check(err, tc.ErrorMatches, "controller model references an unknown cloud (region|credential)")
+	}
+}
+
 func (s *validateSuite) TestValidateArchiveChecksumMismatch(c *tc.C) {
 	path, _ := writeArchive(c, validFiles())
 
 	_, err := recovery.ValidateArchive(c.Context(), path, "deadbeef")
 	c.Assert(err, tc.ErrorMatches, "archive checksum mismatch: expected sha256 .deadbeef., archive is .*")
+}
+
+func (s *validateSuite) TestModelConfigUsesStoredStrings(c *tc.C) {
+	files := validFiles()
+	files["juju-backup/dump/models/"+testControllerModelUUID+".yaml"] = []byte(`payload:
+  model_config:
+  - key: no-proxy
+    value: 127.0.0.1,localhost,::1
+  - key: project
+    value: '123'
+  - key: enable-os-upgrade
+    value: 'false'
+  - key: image-metadata-url
+    value: ''
+`)
+	path, sum := writeArchive(c, files)
+	info, err := recovery.ValidateArchive(c.Context(), path, sum)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(info.ModelConfig, tc.DeepEquals, map[string]string{
+		"no-proxy": "127.0.0.1,localhost,::1", "project": "123",
+		"enable-os-upgrade": "false", "image-metadata-url": "",
+	})
 }
 
 func (s *validateSuite) TestValidateArchiveMissingMetadata(c *tc.C) {

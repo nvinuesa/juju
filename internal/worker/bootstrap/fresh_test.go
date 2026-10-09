@@ -249,12 +249,9 @@ func (s *freshBootstrapSuite) TestSetControllerApplicationPassword(c *tc.C) {
 	s.applicationService.EXPECT().GetApplicationUUIDByName(gomock.Any(), "controller").Return(applicationUUID, nil)
 	s.agentPasswordService.EXPECT().SetApplicationPassword(gomock.Any(), applicationUUID, "application-password")
 
-	w := &freshBootstrap{cfg: FreshBootstrapConfig{
-		ApplicationService:   s.applicationService,
-		AgentPasswordService: s.agentPasswordService,
-		ApplicationPassword:  "application-password",
-	}}
-	c.Assert(w.setControllerApplicationPassword(c.Context()), tc.ErrorIsNil)
+	c.Assert(setControllerApplicationPassword(
+		c.Context(), s.applicationService, s.agentPasswordService, "application-password",
+	), tc.ErrorIsNil)
 }
 
 func (s *freshBootstrapSuite) newWorker(c *tc.C) worker.Worker {

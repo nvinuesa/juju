@@ -38,6 +38,7 @@ import (
 	internalstorage "github.com/juju/juju/internal/storage"
 	"github.com/juju/juju/internal/testhelpers"
 	coretesting "github.com/juju/juju/internal/testing"
+	coretools "github.com/juju/juju/internal/tools"
 	jujutesting "github.com/juju/juju/juju/testing"
 )
 
@@ -851,7 +852,40 @@ func (suite *maasEnvironSuite) TestWaitForNodeDeploymentError(c *tc.C) {
 				Timeout: coretesting.LongWait,
 			},
 		})
-	c.Assert(err, tc.ErrorMatches, "bootstrap instance started but did not change to Deployed state.*")
+	c.Assert(err, tc.ErrorMatches,
+		`bootstrap failed after instance "Bruce Sterling" started: bootstrap instance started but did not change to Deployed state.*`)
+	// The deploy-wait failure names the started node: a failed recovery
+	// bootstrap stops exactly that node instead of destroying by tag.
+	id, ok := environs.BootstrapInstanceID(err)
+	c.Assert(ok, tc.IsTrue)
+	c.Check(id, tc.Equals, instance.Id(machine.SystemID()))
+}
+
+func (suite *maasEnvironSuite) TestBootstrapRecordsInstanceID(c *tc.C) {
+	machine := newFakeMachine("Bruce Sterling", arch.HostArch(), "Deployed")
+	controller := newFakeController()
+	controller.allocateMachine = machine
+	controller.allocateMachineMatches = gomaasapi.ConstraintMatches{
+		Storage: map[string][]gomaasapi.StorageDevice{},
+	}
+	controller.machines = []gomaasapi.Machine{machine}
+	suite.injectController(controller)
+	suite.setupFakeTools(c)
+	env := suite.makeEnviron(c, nil)
+
+	result, err := env.Bootstrap(envtesting.BootstrapTestContext(c), environs.BootstrapParams{
+		ControllerConfig:        coretesting.FakeControllerConfig(),
+		SupportedBootstrapBases: coretesting.FakeSupportedJujuBases,
+		AvailableTools: coretools.List{&coretools.Tools{Version: semversion.Binary{
+			Number:  coretesting.FakeVersionNumber,
+			Arch:    arch.HostArch(),
+			Release: "ubuntu",
+		}}},
+	})
+	c.Assert(err, tc.ErrorIsNil)
+	// The result records the started node so a recovery bootstrap can
+	// stop exactly it when a later step fails.
+	c.Check(result.InstanceID, tc.Equals, instance.Id(machine.SystemID()))
 }
 
 func (suite *maasEnvironSuite) TestWaitForNodeDeploymentRetry(c *tc.C) {
