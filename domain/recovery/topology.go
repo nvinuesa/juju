@@ -133,3 +133,65 @@ func intOf(i *int64) int64 {
 	}
 	return *i
 }
+
+// ValidateSingleController checks that the archive's controller topology
+// supports a single-node replacement: one controller application, one live
+// controller unit for the replacement, no workload units sharing controller
+// hosts and no containers hosted on controller machines. It mirrors the
+// checks SingleControllerDump makes before rewriting, for the preflight
+// topology bag read offline.
+func ValidateSingleController(topology *ControllerTopology, controllerID string) error {
+	if topology == nil || len(topology.ApplicationController) != 1 {
+		return errors.New("archive must identify one controller application")
+	}
+	application := topology.ApplicationController[0].ApplicationUUID
+
+	nodes := make(map[string]bool)
+	units := make(map[string]bool)
+	var replacementNode string
+	var retainedUnit string
+	for _, machine := range topology.Machines {
+		if machine.Name == controllerID && machine.LifeID == 0 {
+			replacementNode = machine.NetNodeUUID
+		}
+	}
+	for _, unit := range topology.Units {
+		if unit.ApplicationUUID != application {
+			continue
+		}
+		nodes[unit.NetNodeUUID] = true
+		units[unit.UUID] = true
+		selected := replacementNode != "" && unit.NetNodeUUID == replacementNode
+		if len(topology.Machines) == 0 {
+			selected = unit.Name == "controller/"+controllerID
+		}
+		if selected && unit.LifeID == 0 {
+			if retainedUnit != "" {
+				return errors.New("replacement maps to multiple controller units")
+			}
+			retainedUnit = unit.UUID
+		}
+	}
+	if retainedUnit == "" {
+		return errors.New("archive has no live controller unit for the replacement")
+	}
+	for _, unit := range topology.Units {
+		if !units[unit.UUID] && nodes[unit.NetNodeUUID] && unit.LifeID != 2 {
+			return errors.Errorf(
+				"controller shares a machine with workload unit %q; recovery would replace or retire its host",
+				unit.Name)
+		}
+	}
+	machines := make(map[string]bool)
+	for _, machine := range topology.Machines {
+		if nodes[machine.NetNodeUUID] {
+			machines[machine.UUID] = true
+		}
+	}
+	for _, parent := range topology.MachineParents {
+		if machines[parent.ParentUUID] {
+			return errors.New("controller machine hosts containers; recovery would replace or retire their host")
+		}
+	}
+	return nil
+}

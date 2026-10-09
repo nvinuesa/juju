@@ -100,7 +100,7 @@ func Initialise(ctx context.Context, config agent.ConfigSetter, params recovery.
 		if err != nil {
 			return errors.Capture(err)
 		}
-		_, err = recovery.Load(ctx, recovery.LoadParams{
+		summary, err := recovery.Load(ctx, recovery.LoadParams{
 			Service: svc, ControllerID: params.MachineName,
 			Credentials: params.Credentials,
 			ArchivePath: params.ArchivePath, ExpectedSHA256: params.SHA256,
@@ -112,6 +112,14 @@ func Initialise(ctx context.Context, config agent.ConfigSetter, params recovery.
 		if err != nil {
 			return errors.Capture(err)
 		}
+		log.Infof(ctx,
+			"recovery complete: controller %q (%s), %d models, %d objects copied, "+
+				"%d dead controller machines, %d non-alive machines, %d non-alive applications, "+
+				"%d non-alive units, %d pending removals",
+			summary.ControllerUUID, summary.ControllerName,
+			summary.Models, summary.ObjectsCopied, len(summary.DeadControllerMachines),
+			summary.MachinesNotAlive, summary.ApplicationsNotAlive,
+			summary.UnitsNotAlive, summary.PendingRemovals)
 		// Only the recovery client admin password is rebound. Other users
 		// retain their archived credentials and permissions.
 		if err := accessrecovery.SetUserPassword(ctx, controllerRunner, user.AdminUserName, auth.NewPassword(config.OldPassword())); err != nil {

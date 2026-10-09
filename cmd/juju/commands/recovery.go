@@ -4,11 +4,13 @@
 package commands
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/juju/errors"
 	"github.com/juju/gnuflag"
@@ -42,16 +44,30 @@ func (c *recoveryCommand) Info() *cmd.Info {
 		Name: "recovery", Args: "<backup-file>", Purpose: "Recover a controller from a backup archive.",
 		Doc: `Recover a replacement controller using the cloud, region and controller name
 recorded in the archive. The controller UUID, model UUIDs and controller CA are
-preserved. The replacement runs the exact agent version recorded in the backup. Machine
-agents come from the archive; the CLI version does not select them.
+preserved. The replacement runs the exact agent version recorded in the backup.
+Machine agents come from the archive; the CLI version does not select them.
+Source constraints and observed hardware determine the replacement's capacity,
+with additional space reserved for archive staging and database import.
+
+Kubernetes backups record the running agent and controller charm image digests,
+platform, volume size, storage class and Service exposure. Recovery verifies
+those manifests directly; it does not resolve a current version tag. The image
+registry must still provide the archived manifests and layers.
 
 Fence the source controller before recovery. If its name is registered on this
 client, run juju unregister first. Kubernetes recovery requires the original
-cluster and surviving workload namespaces.
+cluster and surviving workload namespaces. Each workload model is checked on
+its own archived cluster before the replacement is created.
 
 The archive checksum is required. Local credentials are tried first; if none
-are available, the archived controller model credential is used. An ambiguous
+are available, the credential archived for each model cloud is used. An ambiguous
 credential selection or authentication failure stops recovery.
+
+Recovery produces one controller node. Lost controller peers are retired in the
+restored state without deleting their provider resources. Controller machines
+hosting other workload units or containers are refused before provisioning.
+The restored object store remains file-backed until the operator explicitly
+authorises an S3 transition with authorize-s3-transition=true.
 `,
 		Examples: "    juju recovery juju-backup.tar.gz --sha256 <checksum>",
 		SeeAlso:  []string{"bootstrap", "create-backup", "unregister"},
@@ -91,7 +107,9 @@ func (c *recoveryCommand) Run(ctx *cmd.Context) error {
 		return err
 	}
 	c.recoveryInfo = info
-	return c.provisionRecoveryController(ctx)
+	targetCtx, cancel := context.WithTimeout(ctx, 20*time.Minute)
+	defer cancel()
+	return c.provisionRecoveryController(ctx.With(targetCtx))
 }
 
 func (c *recoveryCommand) preflight(ctx *cmd.Context) (*recovery.ArchiveInfo, error) {
@@ -103,11 +121,29 @@ func (c *recoveryCommand) preflight(ctx *cmd.Context) (*recovery.ArchiveInfo, er
 	if err != nil {
 		return nil, errors.Annotate(err, "invalid recovery archive")
 	}
+	if info.CloudType == "manual" {
+		return nil, errors.NotSupportedf("automatic recovery provisioning on manual clouds")
+	}
 	if info.ControllerName == "" {
 		return nil, errors.New("recovery archive does not record the source controller name")
 	}
+	if info.CloudType == jujucloud.CloudTypeKubernetes {
+		if info.FormatVersion < 3 || info.Kubernetes == nil {
+			return nil, errors.New("Kubernetes recovery requires source provisioning metadata; create a new backup")
+		}
+		if info.Kubernetes.Architecture != info.ControllerArchitecture || info.Kubernetes.StorageSizeMiB == 0 {
+			return nil, errors.New("source Kubernetes provisioning disagrees with the archived controller")
+		}
+	}
 	if !names.IsValidCloud(info.CloudName) {
 		return nil, errors.NotValidf("archived cloud name %q", info.CloudName)
+	}
+	controllerID := info.MachineName
+	if info.CloudType == jujucloud.CloudTypeKubernetes {
+		controllerID = "0"
+	}
+	if err := recovery.ValidateSingleController(info.ControllerTopology, controllerID); err != nil {
+		return nil, err
 	}
 	return info, nil
 }

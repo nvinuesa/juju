@@ -214,10 +214,26 @@ func recoveryControllerDump(models ...[2]string) string {
 
 func recoveryArchiveFiles(agentVersion string, models ...[2]string) map[string][]byte {
 	files := map[string][]byte{
-		"juju-backup/metadata.json":                    []byte(recoveryMetadataJSON(agentVersion)),
-		"juju-backup/dump/controller.yaml":             []byte(recoveryControllerDump(models...)),
-		"juju-backup/dump/models/ctrl-model-uuid.yaml": []byte("payload:\n  net_node:\n  - uuid: nn\n"),
-		"juju-backup/root.tar":                         []byte("blobs"),
+		"juju-backup/metadata.json":        []byte(recoveryMetadataJSON(agentVersion)),
+		"juju-backup/dump/controller.yaml": []byte(recoveryControllerDump(models...)),
+		"juju-backup/dump/models/ctrl-model-uuid.yaml": []byte(`payload:
+  net_node:
+  - uuid: nn
+  application_controller:
+  - application_uuid: controller-app
+  unit:
+  - uuid: controller-unit
+    name: controller/0
+    application_uuid: controller-app
+    life_id: 0
+    net_node_uuid: nn
+  machine:
+  - uuid: controller-machine
+    name: "0"
+    net_node_uuid: nn
+    life_id: 0
+`),
+		"juju-backup/root.tar": []byte("blobs"),
 	}
 	for i := range models {
 		files[fmt.Sprintf("juju-backup/dump/models/model-uuid-%d.yaml", i)] =
