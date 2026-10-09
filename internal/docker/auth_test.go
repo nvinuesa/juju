@@ -4,6 +4,7 @@
 package docker_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -132,6 +133,20 @@ func (s *authSuite) TestSecretData(c *tc.C) {
 	data, err = imageRepoDetails.SecretData()
 	c.Assert(err, tc.ErrorIsNil)
 	c.Assert(len(data), tc.DeepEquals, 0)
+}
+
+func (s *authSuite) TestSecretDataAnonymousHTTP(c *tc.C) {
+	repo := docker.ImageRepoDetails{
+		Repository: "localhost:5000/juju", ServerAddress: "http://localhost:5000",
+	}
+	data, err := repo.SecretData()
+	c.Assert(err, tc.ErrorIsNil)
+	var config struct {
+		Auths map[string]docker.ImageRepoDetails `json:"auths"`
+	}
+	c.Assert(json.Unmarshal(data, &config), tc.ErrorIsNil)
+	c.Check(config.Auths["localhost:5000"].ServerAddress, tc.Equals, repo.ServerAddress)
+	c.Check(config.Auths["localhost:5000"].IsPrivate(), tc.IsFalse)
 }
 
 func (s *authSuite) TestIsPrivate(c *tc.C) {

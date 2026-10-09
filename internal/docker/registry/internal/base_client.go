@@ -157,6 +157,9 @@ func decideBaseURLCommon(version APIVersion, repoDetails *docker.ImageRepoDetail
 	if addr == "" {
 		return errors.NotValidf("empty server address for %q", repoDetails.Repository)
 	}
+	if !strings.Contains(addr, "://") && !strings.HasPrefix(addr, "//") {
+		addr = "https://" + addr
+	}
 	url, err := url.Parse(addr)
 	if err != nil {
 		return errors.Annotatef(err, "parsing server address %q", addr)
@@ -171,8 +174,13 @@ func decideBaseURLCommon(version APIVersion, repoDetails *docker.ImageRepoDetail
 	}
 	*baseURL = *url
 
-	serverAddressURL.Scheme = ""
-	repoDetails.ServerAddress = serverAddressURL.String()
+	// Preserve explicit HTTP endpoints for subsequent image verification.
+	if serverAddressURL.Scheme != "http" {
+		serverAddressURL.Scheme = ""
+	}
+	if strings.Contains(repoDetails.ServerAddress, "://") || strings.HasPrefix(repoDetails.ServerAddress, "//") {
+		repoDetails.ServerAddress = serverAddressURL.String()
+	}
 	logger.Tracef(context.TODO(), "baseClient repoDetails %s", repoDetails)
 	return nil
 }

@@ -174,7 +174,10 @@ type dockerConfigData struct {
 
 // SecretData returns secret data format.
 func (rid ImageRepoDetails) SecretData() ([]byte, error) {
-	if rid.BasicAuthConfig.Empty() && rid.TokenAuthConfig.Empty() {
+	// Anonymous HTTP repositories still need endpoint metadata when backup
+	// and recovery verify their images through the registry.
+	if rid.BasicAuthConfig.Empty() && rid.TokenAuthConfig.Empty() &&
+		!strings.HasPrefix(rid.ServerAddress, "http://") {
 		return nil, nil
 	}
 	repo := strings.Split(rid.Repository, "/")[0]

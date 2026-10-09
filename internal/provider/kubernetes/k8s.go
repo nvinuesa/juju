@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -424,9 +425,10 @@ func (k *kubernetesClient) CreateModelResources(ctx context.Context, args enviro
 	return errors.Trace(k.createNamespace(ctx, k.namespace))
 }
 
-// EnsureImageRepoSecret ensures the image pull secret gets created.
+// EnsureImageRepoSecret stores image credentials and explicit HTTP endpoints
+// needed when verifying images for backup and recovery.
 func (k *kubernetesClient) EnsureImageRepoSecret(ctx context.Context, imageRepo docker.ImageRepoDetails) error {
-	if !imageRepo.IsPrivate() {
+	if !imageRepo.IsPrivate() && !strings.HasPrefix(imageRepo.ServerAddress, "http://") {
 		return nil
 	}
 	logger.Debugf(ctx, "creating secret for image repo %q", imageRepo.Repository)
@@ -472,6 +474,9 @@ func (k *kubernetesClient) Bootstrap(ctx environs.BootstrapContext, args environ
 			return errors.Trace(err)
 		}
 
+		if err := pinControllerImages(ctx, pcfg); err != nil {
+			return err
+		}
 		logger.Debugf(ctx, "controller pod config: name %q, id %q, version %v",
 			pcfg.ControllerName, pcfg.ControllerId, pcfg.JujuVersion)
 

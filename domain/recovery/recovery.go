@@ -39,7 +39,7 @@ type ApplicationInfo struct {
 	// so they are reported only as scale context, never checked.
 	Units []string
 
-	// FilesystemProviderIDs lists the kubernetes persistent volume claim
+	// FilesystemProviderIDs lists the Kubernetes persistent volume or claim
 	// names the archived storage filesystems record, one per attached
 	// volume. A claim that no longer exists comes back empty at the
 	// first reconcile, so it is reported as missing substrate.
@@ -103,6 +103,11 @@ type ArchiveInfo struct {
 	// AgentVersion is the exact agent version of the source controller,
 	// read from metadata.json.
 	AgentVersion semversion.Number
+
+	// ControllerArchitecture and ControllerCharmBase describe the archived
+	// Kubernetes controller application platform used by the replacement pod.
+	ControllerArchitecture string
+	ControllerCharmBase    string
 
 	// SourceBase is the operating system base recorded in metadata.json.
 	SourceBase string

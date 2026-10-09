@@ -22,8 +22,8 @@ type RecoveryApplication struct {
 	// Units lists the archived unit names of the application.
 	Units []string
 
-	// PersistentVolumeClaims lists the kubernetes persistent volume
-	// claim names the archived storage filesystems record.
+	// PersistentVolumeClaims lists Kubernetes persistent volume or claim
+	// names recorded by the archived storage filesystems.
 	PersistentVolumeClaims []string
 }
 
@@ -73,6 +73,9 @@ type RecoverySubstrateParams struct {
 // reconcile will re-create (workload objects) or find empty (volumes)
 // before the recovered controller starts.
 type RecoverySubstrateReport struct {
+	// HostCloudRegion is cluster metadata read during recovery preparation.
+	// It supplies Kubernetes bootstrap configuration absent from database dumps.
+	HostCloudRegion string
 	// MissingWorkloads names archived applications whose Kubernetes
 	// workload objects (the StatefulSet named after the application)
 	// are gone from the surviving namespace.
