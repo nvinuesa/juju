@@ -27,6 +27,7 @@ import (
 	"github.com/juju/juju/internal/auth"
 	"github.com/juju/juju/internal/bootstrap"
 	"github.com/juju/juju/internal/cloudconfig/instancecfg"
+	"github.com/juju/juju/internal/controllerinit"
 	"github.com/juju/juju/internal/errors"
 	"github.com/juju/juju/internal/password"
 	k8sconstants "github.com/juju/juju/internal/provider/kubernetes/constants"
@@ -59,7 +60,7 @@ func DeleteBootstrapSSHKeys(keys []string) error {
 // A restoration operation can call FinaliseIAASAgent with its chosen identity.
 func IAASAgentFinalizer(
 	ctx context.Context,
-	agentPasswordService AgentPasswordService,
+	agentPasswordService controllerinit.AgentPasswordService,
 	machineService MachineService,
 	bootstrapParams instancecfg.StateInitializationParams,
 	agentPassword string,
@@ -70,15 +71,15 @@ func IAASAgentFinalizer(
 
 // K8sAgentFinalizer selects the controller identity and nonce file for fresh
 // bootstrap. A restoration operation supplies its own identity to
-// FinaliseK8sAgent.
+// controllerinit.FinaliseK8sAgent.
 func K8sAgentFinalizer(
 	ctx context.Context,
-	agentPasswordService AgentPasswordService,
+	agentPasswordService controllerinit.AgentPasswordService,
 	_ MachineService,
 	_ instancecfg.StateInitializationParams,
 	agentPassword string,
 ) error {
-	return FinaliseK8sAgent(ctx, agentPasswordService, agent.BootstrapControllerId,
+	return controllerinit.FinaliseK8sAgent(ctx, agentPasswordService, agent.BootstrapControllerId,
 		agentPassword, k8sconstants.ControllerNonceFilePath)
 }
 
@@ -93,7 +94,7 @@ type FreshBootstrapConfig struct {
 	ControllerNodeService      ControllerNodeService
 	UserService                UserService
 	StorageService             StorageService
-	AgentPasswordService       AgentPasswordService
+	AgentPasswordService       controllerinit.AgentPasswordService
 	ApplicationService         ApplicationService
 	ControllerModel            coremodel.Model
 	ModelConfigService         ModelConfigService

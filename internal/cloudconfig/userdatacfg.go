@@ -387,7 +387,11 @@ func (w *userdataConfig) ConfigureJuju() error {
 		return errors.Trace(err)
 	}
 
-	if w.icfg.Bootstrap != nil {
+	if w.icfg.Initialisation != nil {
+		if err := w.configureControllerInitialisation(); err != nil {
+			return err
+		}
+	} else if w.icfg.Bootstrap != nil {
 		if err = w.addLocalControllerCharmsUpload(); err != nil {
 			return errors.Trace(err)
 		}
@@ -723,3 +727,25 @@ func (p packageManagerProxySettings) SnapStoreProxyID() string { return p.snapSt
 
 // SnapStoreProxyURL implements cloudinit.PackageManagerProxyConfig.
 func (p packageManagerProxySettings) SnapStoreProxyURL() string { return p.snapStoreProxyURL }
+
+// configureControllerInitialisation launches a controller-owned workflow.
+func (w *userdataConfig) configureControllerInitialisation() error {
+	cfg := w.icfg.Initialisation
+	if cfg.Command == "" || cfg.ParamsPath == "" || cfg.ModePath == "" || cfg.Prepare == nil || cfg.Timeout <= 0 {
+		return errors.New("incomplete controller initialisation configuration")
+	}
+	params, err := cfg.Prepare(w.icfg)
+	if err != nil {
+		return err
+	}
+	w.conf.AddRunTextFile(path.Join(w.icfg.DataDir, cfg.ParamsPath), string(params), 0600)
+	w.conf.AddRunTextFile(path.Join(w.icfg.DataDir, cfg.ModePath), cfg.Mode, 0600)
+	args := []string{shquote(path.Join(w.icfg.JujuTools(), jujunames.JujuAgentd)), cfg.Command,
+		"--data-dir", shquote(w.icfg.DataDir), "--timeout", cfg.Timeout.String(), "--show-log"}
+	command := strings.Join(args, " ")
+	if features := featureflag.AsEnvironmentValue(); features != "" {
+		command = osenv.JujuFeatureFlagEnvKey + "=" + shquote(features) + " " + command
+	}
+	w.conf.AddScripts(command + " || exit 1")
+	return nil
+}

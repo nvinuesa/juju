@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"os"
+	"strings"
 	stdtesting "testing"
 
 	"github.com/juju/tc"
@@ -415,6 +416,130 @@ func (s *loadSuite) TestLoadStageHAWorkloadMachineNotDead(c *tc.C) {
 	// The dead controller machine "0" is listed; the patch target "1"
 	// and the workload machine "5" are not.
 	c.Check(summary.DeadControllerMachines, tc.DeepEquals, []string{"0"})
+}
+
+// credentialControllerDumpYAML augments a controller dump with an archived
+// credential bound to the controller model, seeded with a stale attribute
+// and marked invalid.
+const credentialControllerDumpYAML = `  user:
+  - uuid: admin-uuid
+    name: admin
+    external: false
+    removed: false
+    created_by_uuid: admin-uuid
+    created_at: 2026-01-01T00:00:00Z
+  auth_type:
+  - id: 2
+    type: userpass
+  - id: 10
+    type: certificate
+  cloud_credential:
+  - uuid: source-credential
+    cloud_uuid: cloud-lxd
+    auth_type_id: '2'
+    owner_uuid: admin-uuid
+    name: original
+    invalid: true
+    revoked: false
+  cloud_credential_attribute:
+  - cloud_credential_uuid: source-credential
+    key: password
+    value: stale
+`
+
+// credentialArchive renders an archive whose controller model carries the
+// archived credential from credentialControllerDumpYAML.
+func credentialArchive(c *tc.C) (string, string) {
+	dump := controllerDump(
+		modelRow(testControllerModelUUID, "controller", "cloud-lxd"),
+		modelRow(testModelAUUID, "workload-a", "cloud-lxd"),
+		modelRow(testModelBUUID, "workload-b", "cloud-lxd"),
+	)
+	dump = strings.Replace(dump, "name: controller\n",
+		"name: controller\n    cloud_credential_uuid: source-credential\n", 1)
+	dump += credentialControllerDumpYAML
+	return writeArchive(c, map[string][]byte{
+		"juju-backup/metadata.json":                                    []byte(metadataJSON("4.1.0")),
+		"juju-backup/dump/controller.yaml":                             []byte(dump),
+		"juju-backup/dump/models/" + testControllerModelUUID + ".yaml": []byte(controllerModelDumpYAML),
+		"juju-backup/dump/models/" + testModelAUUID + ".yaml":          []byte(emptyModelDumpYAML),
+		"juju-backup/dump/models/" + testModelBUUID + ".yaml":          []byte(emptyModelDumpYAML),
+		"juju-backup/root.tar":                                         rootTar(c),
+	})
+}
+
+func (s *loadSuite) TestLoadStageControllerCredentialPatched(c *tc.C) {
+	archivePath, sum := credentialArchive(c)
+
+	_, err := recovery.Load(c.Context(), recovery.LoadParams{
+		ControllerDB: s.DB(),
+		OpenModelDB: func(_ context.Context, modelUUID string) (*sql.DB, error) {
+			return s.openModelDB(c, modelUUID), nil
+		},
+		ArchivePath:         archivePath,
+		ExpectedSHA256:      sum,
+		BundleDir:           c.MkDir(),
+		DataDir:             c.MkDir(),
+		ControllerModelUUID: testControllerModelUUID,
+		ControllerCredential: &recovery.CredentialPatch{
+			AuthType:   "certificate",
+			Attributes: map[string]string{"client-cert": "crt"},
+		},
+		Logger: loggertesting.WrapCheckLog(c),
+	})
+	c.Assert(err, tc.ErrorIsNil)
+
+	// The archived credential kept its identity but its authentication was
+	// rebound to the replacement: auth type switched, flags cleared and
+	// attributes replaced.
+	var authTypeID int
+	c.Assert(s.DB().QueryRow(
+		"SELECT auth_type_id FROM cloud_credential WHERE uuid = 'source-credential'").Scan(&authTypeID), tc.ErrorIsNil)
+	c.Check(authTypeID, tc.Equals, 10)
+	var invalid bool
+	c.Assert(s.DB().QueryRow(
+		"SELECT invalid FROM cloud_credential WHERE uuid = 'source-credential'").Scan(&invalid), tc.ErrorIsNil)
+	c.Check(invalid, tc.IsFalse)
+	var count int
+	c.Assert(s.DB().QueryRow(
+		"SELECT COUNT(*) FROM cloud_credential_attribute WHERE cloud_credential_uuid = 'source-credential' AND key = 'password'").Scan(&count), tc.ErrorIsNil)
+	c.Check(count, tc.Equals, 0)
+	var value string
+	c.Assert(s.DB().QueryRow(
+		"SELECT value FROM cloud_credential_attribute WHERE cloud_credential_uuid = 'source-credential' AND key = 'client-cert'").Scan(&value), tc.ErrorIsNil)
+	c.Check(value, tc.Equals, "crt")
+}
+
+func (s *loadSuite) TestLoadStageControllerCredentialUntouched(c *tc.C) {
+	archivePath, sum := credentialArchive(c)
+
+	_, err := recovery.Load(c.Context(), recovery.LoadParams{
+		ControllerDB: s.DB(),
+		OpenModelDB: func(_ context.Context, modelUUID string) (*sql.DB, error) {
+			return s.openModelDB(c, modelUUID), nil
+		},
+		ArchivePath:         archivePath,
+		ExpectedSHA256:      sum,
+		BundleDir:           c.MkDir(),
+		DataDir:             c.MkDir(),
+		ControllerModelUUID: testControllerModelUUID,
+		Logger:              loggertesting.WrapCheckLog(c),
+	})
+	c.Assert(err, tc.ErrorIsNil)
+
+	// Without a credential patch the archived credential is untouched.
+	var authTypeID int
+	c.Assert(s.DB().QueryRow(
+		"SELECT auth_type_id FROM cloud_credential WHERE uuid = 'source-credential'").Scan(&authTypeID), tc.ErrorIsNil)
+	c.Check(authTypeID, tc.Equals, 2)
+	var invalid bool
+	c.Assert(s.DB().QueryRow(
+		"SELECT invalid FROM cloud_credential WHERE uuid = 'source-credential'").Scan(&invalid), tc.ErrorIsNil)
+	c.Check(invalid, tc.IsTrue)
+	var value string
+	c.Assert(s.DB().QueryRow(
+		"SELECT value FROM cloud_credential_attribute WHERE cloud_credential_uuid = 'source-credential' AND key = 'password'").Scan(&value), tc.ErrorIsNil)
+	c.Check(value, tc.Equals, "stale")
 }
 
 func (s *loadSuite) TestLoadStageChecksumMismatch(c *tc.C) {

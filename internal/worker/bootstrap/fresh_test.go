@@ -35,6 +35,7 @@ import (
 	"github.com/juju/juju/internal/bootstrap"
 	"github.com/juju/juju/internal/cloudconfig"
 	"github.com/juju/juju/internal/cloudconfig/instancecfg"
+	"github.com/juju/juju/internal/controllerinit"
 	"github.com/juju/juju/internal/errors"
 	"github.com/juju/juju/internal/storage"
 	"github.com/juju/juju/internal/testhelpers"
@@ -295,7 +296,7 @@ func (s *freshBootstrapSuite) newWorkerWithFunc(c *tc.C, controllerCharmDeployer
 		BootstrapAddressFinder: func(context.Context, instance.Id) (network.ProviderAddresses, error) {
 			return nil, nil
 		},
-		AgentFinalizer: func(ctx context.Context, aps AgentPasswordService, ms MachineService, sip instancecfg.StateInitializationParams, password string) error {
+		AgentFinalizer: func(ctx context.Context, aps controllerinit.AgentPasswordService, ms MachineService, sip instancecfg.StateInitializationParams, password string) error {
 			return nil
 		},
 		Logger: s.logger,

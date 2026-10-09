@@ -1,0 +1,95 @@
+// Copyright 2026 Canonical Ltd.
+// Licensed under the AGPLv3, see LICENCE file for details.
+
+package environs
+
+import (
+	"context"
+)
+
+// RecoveryApplication identifies one archived workload application for
+// recovery substrate checks.
+type RecoveryApplication struct {
+	// Name is the application's name; on Kubernetes it is also the name
+	// of its StatefulSet in the model namespace.
+	Name string
+
+	// UUID is the application's logical identity, preserved by recovery.
+	UUID string
+
+	// Units lists the archived unit names of the application.
+	Units []string
+
+	// PersistentVolumeClaims lists the kubernetes persistent volume
+	// claim names the archived storage filesystems record.
+	PersistentVolumeClaims []string
+}
+
+// RecoveryModel identifies one archived model for recovery substrate
+// checks.
+type RecoveryModel struct {
+	// Name is the model's name; on Kubernetes it is also the model's
+	// namespace name.
+	Name string
+
+	// UUID is the model's logical identity, preserved by recovery.
+	UUID string
+
+	// Applications lists the archived workload applications whose
+	// substrate the check inventories. It excludes the controller
+	// application: the controller namespace is disposable bootstrap
+	// output, not surviving substrate.
+	Applications []RecoveryApplication
+}
+
+// RecoverySubstrateParams describes the surviving substrate a provider
+// must verify before a recovery bootstrap provisions anything.
+type RecoverySubstrateParams struct {
+	// ControllerUUID is the archived source controller's identity.
+	ControllerUUID string
+
+	// ControllerName is the archived source controller's name; on
+	// Kubernetes the controller namespace derives from it.
+	ControllerName string
+
+	// ControllerModelUUID identifies the controller model; its namespace
+	// is the controller namespace, checked separately.
+	ControllerModelUUID string
+
+	// Models is the archived model inventory, including the controller
+	// model.
+	Models []RecoveryModel
+}
+
+// RecoverySubstrateReport lists the archived workload substrate the
+// surviving target no longer holds. Missing substrate never aborts
+// recovery: it is reported so the operator knows what the first
+// reconcile will re-create (workload objects) or find empty (volumes)
+// before the recovered controller starts.
+type RecoverySubstrateReport struct {
+	// MissingWorkloads names archived applications whose Kubernetes
+	// workload objects (the StatefulSet named after the application)
+	// are gone from the surviving namespace.
+	MissingWorkloads []string
+
+	// MissingPersistentVolumeClaims names archived volume claims that no
+	// longer exist in the surviving namespace. A re-created claim comes
+	// back empty: this is data loss surfaced, not healed.
+	MissingPersistentVolumeClaims []string
+}
+
+// Empty reports whether the target holds every piece of archived
+// substrate the check looked for.
+func (r *RecoverySubstrateReport) Empty() bool {
+	return r == nil || (len(r.MissingWorkloads) == 0 && len(r.MissingPersistentVolumeClaims) == 0)
+}
+
+// RecoverySubstrateChecker is implemented by providers that can verify a
+// recovery target's surviving substrate before provisioning. The check is
+// read-only; any failure aborts bootstrap before anything is created.
+// Providers that can inventory workload substrate report what is missing
+// in the returned report instead of failing: missing substrate is
+// degraded recovery, not a refusal.
+type RecoverySubstrateChecker interface {
+	CheckRecoverySubstrate(ctx context.Context, params RecoverySubstrateParams) (*RecoverySubstrateReport, error)
+}

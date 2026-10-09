@@ -53,7 +53,20 @@ type LoadParams struct {
 	// Nil on Kubernetes, where there is no machine to patch.
 	MachinePatch *domainrecovery.MachinePatch
 
+	// ControllerCredential rebinds the archived controller credential's
+	// authentication to the credential used to provision the replacement.
+	// Nil leaves the archived credential untouched.
+	ControllerCredential *CredentialPatch
+
 	Logger logger.Logger
+}
+
+// CredentialPatch carries the replacement authentication for the archived
+// controller credential: its identity is retained while the auth type and
+// attributes are rebound.
+type CredentialPatch struct {
+	AuthType   string
+	Attributes map[string]string
 }
 
 // Load executes the recovery stage: validate the uploaded archive, load
@@ -135,7 +148,10 @@ func Load(ctx context.Context, params LoadParams) (*domainrecovery.Summary, erro
 	var patchTarget string
 	if params.MachinePatch != nil {
 		patch := *params.MachinePatch
-		patchTarget, err = recoverystate.ControllerMachineName(ctx, controllerModelDB)
+		patchTarget = patch.MachineName
+		if patchTarget == "" {
+			patchTarget, err = recoverystate.ControllerMachineName(ctx, controllerModelDB)
+		}
 		if err != nil {
 			return nil, errors.Capture(err)
 		}
@@ -153,6 +169,14 @@ func Load(ctx context.Context, params LoadParams) (*domainrecovery.Summary, erro
 			return nil, errors.Capture(err)
 		}
 		if err := recoverystate.PatchControllerUnitAddresses(ctx, controllerModelDB, patch); err != nil {
+			return nil, errors.Capture(err)
+		}
+	}
+
+	if params.ControllerCredential != nil {
+		patch := params.ControllerCredential
+		if err := recoverystate.PatchControllerCredential(ctx, params.ControllerDB,
+			params.ControllerModelUUID, patch.AuthType, patch.Attributes); err != nil {
 			return nil, errors.Capture(err)
 		}
 	}

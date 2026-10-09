@@ -62,6 +62,7 @@ import (
 	internallogger "github.com/juju/juju/internal/logger"
 	"github.com/juju/juju/internal/pki"
 	k8sconstants "github.com/juju/juju/internal/provider/kubernetes/constants"
+	internalrecovery "github.com/juju/juju/internal/recovery"
 	"github.com/juju/juju/internal/service"
 	"github.com/juju/juju/internal/storage/looputil"
 	internalupgrade "github.com/juju/juju/internal/upgrade"
@@ -657,6 +658,23 @@ func (a *MachineAgent) makeEngineCreator(
 ) func(context.Context) (worker.Worker, error) {
 	return func(ctx context.Context) (worker.Worker, error) {
 		agentConfig := a.CurrentConfig()
+		isRecovery, err := internalrecovery.IsRecovery(agentConfig.DataDir())
+		if err != nil {
+			return nil, err
+		}
+		if isRecovery {
+			params, err := internalrecovery.ReadParams(agentConfig.DataDir())
+			if err != nil {
+				return nil, err
+			}
+			initialised, err := internalrecovery.HasMarker(agentConfig.DataDir(), internalrecovery.InitialisedFile, params.SHA256)
+			if err != nil {
+				return nil, err
+			}
+			if !initialised {
+				return nil, errors.New("recovery import has not completed")
+			}
+		}
 		engineConfigFunc := agentengine.DependencyEngineConfig
 		metrics := agentengine.NewMetrics()
 		controllerMetricsSink := metrics.ForModel(agentConfig.Model())
@@ -684,6 +702,7 @@ func (a *MachineAgent) makeEngineCreator(
 		bootstrapAPIPort, bootstrapAgentPassword := bootstrapStartupValues(agentConfig)
 
 		manifoldsCfg := machine.ManifoldsConfig{
+			IsRecovery:                        isRecovery,
 			PreviousAgentVersion:              previousAgentVersion,
 			AgentName:                         agentName,
 			ControllerID:                      agentConfig.Tag().Id(),

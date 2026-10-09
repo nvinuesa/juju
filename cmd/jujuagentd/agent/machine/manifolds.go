@@ -109,6 +109,7 @@ import (
 	"github.com/juju/juju/internal/worker/proxyupdater"
 	"github.com/juju/juju/internal/worker/querylogger"
 	"github.com/juju/juju/internal/worker/reboot"
+	"github.com/juju/juju/internal/worker/recovery"
 	"github.com/juju/juju/internal/worker/secretbackendrotate"
 	"github.com/juju/juju/internal/worker/singular"
 	"github.com/juju/juju/internal/worker/sshkeyupdater"
@@ -134,6 +135,9 @@ import (
 
 // ManifoldsConfig allows specialisation of the result of Manifolds.
 type ManifoldsConfig struct {
+	// IsRecovery is read from the mode file on the provisioned controller.
+	IsRecovery bool
+
 	// AgentName is the name of the machine agent, like "machine-12".
 	// This will never change during the execution of an agent, and
 	// is used to provide this as config into a worker rather than
@@ -1535,9 +1539,19 @@ func K8sManifolds(config ManifoldsConfig) dependency.Manifolds {
 	})
 }
 
+const recoveryName = "recovery"
+
 func mergeManifolds(config ManifoldsConfig, manifolds dependency.Manifolds) dependency.Manifolds {
 	result := commonManifolds(config)
 	maps.Copy(result, manifolds)
+	if config.IsRecovery {
+		delete(result, bootstrapName)
+		result[recoveryName] = ifControllerProxyReady(ifDatabaseUpgradeComplete(recovery.Manifold(recovery.ManifoldConfig{
+			GateName: isBootstrapGateName, DomainServicesName: domainServicesName,
+			ProviderFactoryName: providerTrackerName, DataDir: config.DataDir,
+			APIPort: config.APIPort, AgentPassword: config.AgentPassword, ControllerID: config.ControllerID,
+		})))
+	}
 	return result
 }
 

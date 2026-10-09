@@ -14,20 +14,13 @@ func (s *recoverySuite) TestCheckAgentVersion(c *tc.C) {
 	info := &recovery.ArchiveInfo{AgentVersion: semversion.MustParse("4.1.0")}
 	c.Check(info.CheckAgentVersion(semversion.MustParse("4.1.0")), tc.ErrorIsNil)
 
-	// The official build number is packaging, not a schema difference:
-	// an archive from a released 4.1-beta3.1 recovers onto a dev
-	// 4.1-beta3 binary.
-	info.AgentVersion = semversion.MustParse("4.1-beta3.1")
-	c.Check(info.CheckAgentVersion(semversion.MustParse("4.1-beta3")), tc.ErrorIsNil)
-	info.AgentVersion = semversion.MustParse("4.1.0")
-	c.Check(info.CheckAgentVersion(semversion.MustParse("4.1.0.1")), tc.ErrorIsNil)
-
-	err := info.CheckAgentVersion(semversion.MustParse("4.1.1"))
-	c.Assert(err, tc.ErrorMatches,
-		"archive was created by agent version 4.1.0 but this binary is 4.1.1.*")
-	err = info.CheckAgentVersion(semversion.MustParse("4.1-beta1"))
-	c.Assert(err, tc.ErrorMatches,
-		"archive was created by agent version 4.1.0 but this binary is 4.1-beta1.*")
+	for _, recorded := range []string{"4.1.0", "4.1.0.7", "4.1-beta3.1"} {
+		info.AgentVersion = semversion.MustParse(recorded)
+		c.Assert(info.CheckAgentVersion(info.AgentVersion), tc.ErrorIsNil)
+		for _, target := range []string{"4.0.0", "4.1.1", "4.1.0.8", "4.1-beta3"} {
+			c.Check(info.CheckAgentVersion(semversion.MustParse(target)), tc.ErrorMatches, "archive agent version .* differs from replacement agent .*")
+		}
+	}
 }
 
 func (s *recoverySuite) TestModelFamily(c *tc.C) {
