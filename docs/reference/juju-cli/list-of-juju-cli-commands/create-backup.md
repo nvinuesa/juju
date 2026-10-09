@@ -39,4 +39,15 @@ The model config attribute `backup-dir` only serves as scratch space
 during backup creation; no archive is kept there once the command
 finishes.
 
+Only one backup archive can be created at a time across the controller.
+If another creation is running, retry after it finishes. The creation
+lock is released before the completed archive is downloaded.
+
+Each database (the controller database and every model database) is
+exported in its own transaction at a slightly different moment: the
+archive is not a single point-in-time snapshot of the whole controller.
+Create the backup during a quiet window, when models are not being
+deployed, destroyed or upgraded, so that concurrent changes cannot
+produce an inconsistent archive.
+
 Use `--verbose` to see extra information about backup.

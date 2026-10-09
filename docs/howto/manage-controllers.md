@@ -47,7 +47,7 @@ See more: {ref}`manage-constraints-for-a-controller`, {ref}`make-a-controller-hi
 ```
 ````
 ````{dropdown} Tips for production - Kubernetes
-Juju does not currently support high-availability and backup and restore for Kubernetes controllers. Consider bootstrapping your controller on a machine cloud and then adding your Kubernetes cloud(s) to it, in a multi-cloud controller setup (`juju add-k8s myk8scloud --controller mymachinecontroller`).
+Kubernetes controllers do not currently support high availability. Single-replica Kubernetes controllers can be backed up (`juju create-backup`) and recovered (`juju recovery`); recovery requires the same cluster, the same controller name, and excludes controllers that also manage machine models. Consider bootstrapping your controller on a machine cloud and then adding your Kubernetes cloud(s) to it, in a multi-cloud controller setup (`juju add-k8s myk8scloud --controller mymachinecontroller`) when you need machine-model workloads under the same controller.
 
 ```{ibnote}
 See more: {ref}`add-a-cloud`
@@ -474,6 +474,63 @@ scrape_configs:
 ```
 
 (upgrade-a-controller)=
+## Back up a controller
+
+To create a controller backup, run:
+
+```text
+juju create-backup --filename juju-backup.tar.gz
+```
+
+The command downloads the archive and reports its SHA-256 checksum. Keep both
+for recovery. Only one archive can be created at a time across the controller;
+if another creation is running, retry after it finishes. Downloading an archive
+that has already been created does not hold the creation lock.
+
+```{ibnote}
+See more: {ref}`command-juju-create-backup`
+```
+
+## Recover a controller
+
+To recover a lost controller, first fence its old controller nodes so they cannot
+resume managing workloads. Preserve the workload substrate. On Kubernetes,
+remove the old controller namespace after stopping its controller pods, while
+keeping the workload namespaces and their persistent volumes.
+
+Use a Juju client and local agent binary matching the backup's agent version.
+If the controller name is still registered locally, unregister it:
+
+```text
+juju unregister oldcontroller
+```
+
+```{ibnote}
+See more: {ref}`command-juju-unregister`
+```
+
+Recover using the downloaded archive and its reported checksum:
+
+```text
+juju recovery juju-backup.tar.gz --sha256 <checksum>
+```
+
+The archive determines the cloud, region and controller name. Recovery preserves
+the controller UUID, model UUIDs and controller CA. It uses local default or
+detected credentials first, and falls back to the archived controller model
+credential only when none are available locally. An ambiguous local selection or
+a credential failure stops recovery; configure a local default and retry.
+
+Recovery creates one replacement controller node. Arrange endpoint handoff for
+surviving machine agents, then check that workloads reconnect. Review the
+recovery summary and controller log: pending removals and other recorded work
+resume immediately, and missing Kubernetes volumes are recreated empty. Rebuild
+high availability after verifying the replacement.
+
+```{ibnote}
+See more: {ref}`command-juju-recovery`
+```
+
 ## Upgrade a controller
 
 The procedure depends on whether you're upgrading your controller's patch version (e.g. `4.0.14` &rarr; `4.0.15`) or rather its minor or major version (e.g., `4.0` &rarr; `4.1` or `3.6` &rarr; `4.0`).
