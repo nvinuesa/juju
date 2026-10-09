@@ -15,6 +15,8 @@ import (
 	"github.com/juju/juju/core/user"
 	"github.com/juju/juju/core/version"
 	accessrecovery "github.com/juju/juju/domain/access/recovery"
+	controllernodeservice "github.com/juju/juju/domain/controllernode/service"
+	controllernodestate "github.com/juju/juju/domain/controllernode/state"
 	domainrecovery "github.com/juju/juju/domain/recovery"
 	recoverystate "github.com/juju/juju/domain/recovery/state"
 	"github.com/juju/juju/domain/schema"
@@ -55,7 +57,11 @@ func Initialise(ctx context.Context, config agent.ConfigSetter, params recovery.
 		if err != nil {
 			return errors.Capture(err)
 		}
-		if _, err := controllerDB.ExecContext(ctx, "INSERT INTO controller_node (controller_id, dqlite_node_id, dqlite_bind_address) VALUES (?, ?, ?)", params.MachineName, session.NodeID(), session.BindAddress()); err != nil {
+		nodes := controllernodeservice.NewService(controllernodestate.NewState(
+			func(context.Context) (coredatabase.TxnRunner, error) {
+				return controllerRunner, nil
+			}), log)
+		if err := nodes.AddDqliteNode(ctx, params.MachineName, session.NodeID(), session.BindAddress()); err != nil {
 			return errors.Capture(err)
 		}
 
