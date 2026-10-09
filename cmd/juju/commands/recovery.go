@@ -119,7 +119,14 @@ func (c *recoveryCommand) Run(ctx *cmd.Context) error {
 	c.recoveryInfo = info
 	targetCtx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
-	return c.provisionRecoveryController(ctx.With(targetCtx))
+	if err := c.provisionRecoveryController(ctx.With(targetCtx)); err != nil {
+		return err
+	}
+	// Land the operator on the recovered controller, as bootstrap does
+	// for a fresh one.
+	return errors.Annotate(
+		c.ClientStore().SetCurrentController(info.ControllerName),
+		"selecting recovered controller")
 }
 
 func (c *recoveryCommand) preflight(ctx *cmd.Context) (*recovery.ArchiveInfo, error) {
