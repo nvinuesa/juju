@@ -51,3 +51,11 @@ type Summary struct {
 	// and forced removals that execute once the controller starts.
 	PendingRemovals int
 }
+
+// RecoveryCounts contains persisted lifecycle counts for one model.
+type RecoveryCounts struct {
+	MachinesNotAlive     int
+	ApplicationsNotAlive int
+	UnitsNotAlive        int
+	PendingRemovals      int
+}

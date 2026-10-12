@@ -120,13 +120,13 @@ func (s *validateSuite) TestReadArchiveRejectsOversizedModelDump(c *tc.C) {
 	c.Check(entries, tc.HasLen, 0)
 }
 
-func (s *validateSuite) TestUnpackObjectsBundle(c *tc.C) {
+func (s *validateSuite) TestUnpackObjectsArchive(c *tc.C) {
 	files := validFiles()
 	files["juju-backup/root.tar"] = rootTar(c)
 	archivePath, _ := writeArchive(c, files)
 
 	dest := c.MkDir()
-	err := recovery.UnpackObjectsBundle(c.Context(), archivePath, dest)
+	err := recovery.UnpackObjectsArchive(c.Context(), archivePath, dest)
 	c.Assert(err, tc.ErrorIsNil)
 
 	content, err := os.ReadFile(filepath.Join(dest, "var", "lib", "juju", "objectstore", "some-ns", "somehash"))
@@ -134,7 +134,7 @@ func (s *validateSuite) TestUnpackObjectsBundle(c *tc.C) {
 	c.Check(string(content), tc.Equals, "blob content")
 }
 
-func (s *validateSuite) TestUnpackObjectsBundleRejectsTraversal(c *tc.C) {
+func (s *validateSuite) TestUnpackObjectsArchiveRejectsTraversal(c *tc.C) {
 	var inner bytes.Buffer
 	tw := tar.NewWriter(&inner)
 	content := []byte("x")
@@ -149,15 +149,15 @@ func (s *validateSuite) TestUnpackObjectsBundleRejectsTraversal(c *tc.C) {
 	files["juju-backup/root.tar"] = inner.Bytes()
 	archivePath, _ := writeArchive(c, files)
 
-	err = recovery.UnpackObjectsBundle(c.Context(), archivePath, c.MkDir())
-	c.Assert(err, tc.ErrorMatches, "object bundle contains unsafe path .*")
+	err = recovery.UnpackObjectsArchive(c.Context(), archivePath, c.MkDir())
+	c.Assert(err, tc.ErrorMatches, "object archive contains unsafe path .*")
 }
 
-func (s *validateSuite) TestUnpackObjectsBundleSkipsSymlinks(c *tc.C) {
+func (s *validateSuite) TestUnpackObjectsArchiveSkipsSymlinks(c *tc.C) {
 	// k8s controllers archive their tools binaries as symlinks; the
-	// bundle unpacker skips them (recovery installs only referenced
+	// archive unpacker skips them (recovery installs only referenced
 	// object-store blobs) instead of failing. The symlink comes FIRST
-	// here: skipping must never stop the rest of the bundle from being
+	// here: skipping must never stop the rest of the archive from being
 	// unpacked.
 	var inner bytes.Buffer
 	tw := tar.NewWriter(&inner)
@@ -179,7 +179,7 @@ func (s *validateSuite) TestUnpackObjectsBundleSkipsSymlinks(c *tc.C) {
 	archivePath, _ := writeArchive(c, files)
 
 	dest := c.MkDir()
-	err = recovery.UnpackObjectsBundle(c.Context(), archivePath, dest)
+	err = recovery.UnpackObjectsArchive(c.Context(), archivePath, dest)
 	c.Assert(err, tc.ErrorIsNil)
 
 	got, err := os.ReadFile(filepath.Join(dest, "var", "lib", "juju", "objectstore", "ns", "somehash"))
@@ -190,9 +190,9 @@ func (s *validateSuite) TestUnpackObjectsBundleSkipsSymlinks(c *tc.C) {
 	}
 }
 
-func (s *validateSuite) TestUnpackObjectsBundleAcceptsTypeRegA(c *tc.C) {
+func (s *validateSuite) TestUnpackObjectsArchiveAcceptsTypeRegA(c *tc.C) {
 	// Archives written by tars that do not set the typeflag carry
-	// regular files as TypeRegA; the bundle must still be found.
+	// regular files as TypeRegA; the archive must still be found.
 	var inner bytes.Buffer
 	tw := tar.NewWriter(&inner)
 	content := []byte("old-tar blob")
@@ -209,7 +209,7 @@ func (s *validateSuite) TestUnpackObjectsBundleAcceptsTypeRegA(c *tc.C) {
 	archivePath, _ := writeArchive(c, files)
 
 	dest := c.MkDir()
-	err = recovery.UnpackObjectsBundle(c.Context(), archivePath, dest)
+	err = recovery.UnpackObjectsArchive(c.Context(), archivePath, dest)
 	c.Assert(err, tc.ErrorIsNil)
 
 	got, err := os.ReadFile(filepath.Join(dest, "var", "lib", "juju", "objectstore", "ns", "oldhash"))

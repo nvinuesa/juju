@@ -5,10 +5,10 @@
 // bootstrapped controller and model databases during recovery bootstrap.
 //
 // The load is a one-shot operation run before any worker starts: one
-// transaction per database, foreign keys disabled while replaying,
+// transaction per database, foreign key checks deferred while replaying,
 // foreign_key_check proving integrity before commit. Every archived
-// table replaces the target's rows except the few policy-skip tables
-// that carry the replacement's identity or runtime state. After the
-// replay the controller row is swapped to the source identity and object
-// store placements are rebuilt for the single replacement node.
+// table replaces the target's rows except the few tables selected by service policy
+// that carry the replacement's identity or runtime state. The
+// replay restores the source controller identity and rebuilds object store
+// placements for the single replacement node.
 package state

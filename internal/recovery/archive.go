@@ -390,13 +390,13 @@ func checkManifest(data []byte, digests map[string]entryDigest) error {
 	return nil
 }
 
-// UnpackObjectsBundle streams the archive once and unpacks only the
-// object blob bundle (root.tar) into destDir, applying the same entry
+// UnpackObjectsArchive streams the archive once and unpacks only the
+// object blob archive (root.tar) into destDir, applying the same entry
 // hardening as the metadata read: directories and regular files only, no
 // absolute paths, parent traversal, duplicates or links. Files land with
 // owner-only permissions; archived executables, agent configs and raw
 // database files are never executed or trusted.
-func UnpackObjectsBundle(ctx context.Context, archivePath, destDir string) error {
+func UnpackObjectsArchive(ctx context.Context, archivePath, destDir string) error {
 	f, err := os.Open(archivePath)
 	if err != nil {
 		return errors.Errorf("opening archive: %w", err)
@@ -436,17 +436,17 @@ func unpackTar(ctx context.Context, r io.Reader, destDir string) error {
 			return nil
 		}
 		if err != nil {
-			return errors.Errorf("reading object bundle: %w", err)
+			return errors.Errorf("reading object archive: %w", err)
 		}
 		if err := ctx.Err(); err != nil {
 			return errors.Capture(err)
 		}
 		if strings.HasPrefix(hdr.Name, "/") || slices.Contains(strings.Split(hdr.Name, "/"), "..") {
-			return errors.Errorf("object bundle contains unsafe path %q", hdr.Name)
+			return errors.Errorf("object archive contains unsafe path %q", hdr.Name)
 		}
 		name := path.Clean(hdr.Name)
 		if _, dup := seen[name]; dup {
-			return errors.Errorf("object bundle contains duplicate path %q", name)
+			return errors.Errorf("object archive contains duplicate path %q", name)
 		}
 		seen[name] = struct{}{}
 
@@ -477,7 +477,7 @@ func unpackTar(ctx context.Context, r io.Reader, destDir string) error {
 			// consumed: recovery installs only referenced object-store
 			// blobs, which are regular files under the objectstore
 			// namespace directories. Skip them and keep unpacking the
-			// rest of the bundle: returning here would silently
+			// rest of the archive: returning here would silently
 			// truncate every entry after the first special file.
 			continue
 		}

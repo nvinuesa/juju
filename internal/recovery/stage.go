@@ -5,26 +5,33 @@ package recovery
 
 import (
 	"context"
-	"database/sql"
 	"os"
 	"sort"
 
 	"github.com/juju/juju/core/logger"
+	coremodel "github.com/juju/juju/core/model"
 	domainrecovery "github.com/juju/juju/domain/recovery"
-	recoverystate "github.com/juju/juju/domain/recovery/state"
 	"github.com/juju/juju/internal/errors"
 )
 
+// RecoveryService provides persistence behind the domain service boundary.
+// It operates within an exclusive bootstrap database session. Loads commit
+// independently; a later failure requires discarding the target.
+type RecoveryService interface {
+	LoadControllerDump(context.Context, []byte) error
+	LoadModelDump(context.Context, coremodel.UUID, []byte) error
+	GetObjectInventory(context.Context, []coremodel.UUID) ([]domainrecovery.ObjectInventory, error)
+	PatchControllerMachine(context.Context, coremodel.UUID, domainrecovery.MachinePatch) (string, error)
+	PatchControllerUnitAddresses(context.Context, coremodel.UUID, []string) error
+	BuildSummary(context.Context, *domainrecovery.ArchiveInfo, []coremodel.UUID, string, int) (*domainrecovery.Summary, error)
+}
+
 // LoadParams carries everything the recovery load stage needs. It runs
-// inside bootstrap, after Dqlite is initialized and before any agent, API
+// inside bootstrap, after Dqlite is initialised and before any agent, API
 // or worker starts; the stage owns every database exclusively.
 type LoadParams struct {
-	// ControllerDB is the freshly bootstrapped controller database.
-	ControllerDB *sql.DB
-
-	// OpenModelDB opens the database for one model UUID, creating the
-	// namespace and applying the model schema when it does not exist yet.
-	OpenModelDB func(ctx context.Context, modelUUID string) (*sql.DB, error)
+	// Service is fully constructed before recovery begins.
+	Service RecoveryService
 
 	// ArchivePath is the uploaded archive on the target's disk.
 	ArchivePath string
@@ -32,8 +39,8 @@ type LoadParams struct {
 	// ExpectedSHA256 is the operator-supplied archive checksum (hex).
 	ExpectedSHA256 string
 
-	// BundleDir is private staging for the unpacked object blob bundle.
-	BundleDir string
+	// ObjectsArchiveDir is private staging for the unpacked object files.
+	ObjectsArchiveDir string
 
 	// DataDir is the replacement's data directory; blobs install into
 	// its objectstore tree.
@@ -69,11 +76,10 @@ func Load(ctx context.Context, params LoadParams) (*domainrecovery.Summary, erro
 	params.Logger.Infof(ctx, "recovering controller %q from backup finished at %s",
 		info.ControllerUUID, info.BackupFinished)
 
-	controllerDump, err := domainrecovery.DecodeDump(contents.ControllerDump)
-	if err != nil {
-		return nil, errors.Capture(err)
+	if params.Service == nil {
+		return nil, errors.New("missing recovery service")
 	}
-	if err := recoverystate.LoadControllerDump(ctx, params.ControllerDB, controllerDump); err != nil {
+	if err := params.Service.LoadControllerDump(ctx, contents.ControllerDump); err != nil {
 		return nil, errors.Capture(err)
 	}
 
@@ -83,47 +89,40 @@ func Load(ctx context.Context, params LoadParams) (*domainrecovery.Summary, erro
 	}
 	sort.Strings(modelUUIDs)
 
-	modelDBs := make(map[string]*sql.DB, len(modelUUIDs))
-	var controllerModelDB *sql.DB
+	models := make([]coremodel.UUID, 0, len(modelUUIDs))
+	controllerModelFound := false
 	for _, modelUUID := range modelUUIDs {
 		if err := ctx.Err(); err != nil {
 			return nil, errors.Capture(err)
-		}
-		db, err := params.OpenModelDB(ctx, modelUUID)
-		if err != nil {
-			return nil, errors.Errorf("opening database for model %q: %w", modelUUID, err)
 		}
 		data, err := os.ReadFile(contents.ModelDumps[modelUUID])
 		if err != nil {
 			return nil, errors.Errorf("reading dump for model %q: %w", modelUUID, err)
 		}
-		dump, err := domainrecovery.DecodeDump(data)
-		if err != nil {
-			return nil, errors.Errorf("model %q: %w", modelUUID, err)
+		model := coremodel.UUID(modelUUID)
+		if err := params.Service.LoadModelDump(ctx, model, data); err != nil {
+			return nil, errors.Capture(err)
 		}
-		if err := recoverystate.LoadModelDump(ctx, db, dump); err != nil {
-			return nil, errors.Errorf("model %q: %w", modelUUID, err)
-		}
-		modelDBs[modelUUID] = db
+		models = append(models, model)
 		if modelUUID == params.ControllerModelUUID {
-			controllerModelDB = db
+			controllerModelFound = true
 		}
 		params.Logger.Tracef(ctx, "loaded database for model %s", modelUUID)
 	}
-	if controllerModelDB == nil {
+	if !controllerModelFound {
 		return nil, errors.Errorf("controller model %q has no database dump", params.ControllerModelUUID)
 	}
 
 	// Install the archived object blobs after every database is loaded:
 	// object metadata lives in the model databases too.
-	if err := UnpackObjectsBundle(ctx, params.ArchivePath, params.BundleDir); err != nil {
+	if err := UnpackObjectsArchive(ctx, params.ArchivePath, params.ObjectsArchiveDir); err != nil {
 		return nil, errors.Capture(err)
 	}
-	objectDBs := []ObjectDB{{Namespace: "controller", DB: params.ControllerDB}}
-	for _, modelUUID := range modelUUIDs {
-		objectDBs = append(objectDBs, ObjectDB{Namespace: modelUUID, DB: modelDBs[modelUUID]})
+	inventories, err := params.Service.GetObjectInventory(ctx, models)
+	if err != nil {
+		return nil, errors.Capture(err)
 	}
-	copied, err := LoadObjects(ctx, objectDBs, params.BundleDir, params.DataDir)
+	copied, err := LoadObjects(ctx, inventories, params.ObjectsArchiveDir, params.DataDir)
 	if err != nil {
 		return nil, errors.Capture(err)
 	}
@@ -134,13 +133,9 @@ func Load(ctx context.Context, params LoadParams) (*domainrecovery.Summary, erro
 	// an assumed name.
 	var patchTarget string
 	if params.MachinePatch != nil {
-		patch := *params.MachinePatch
-		patchTarget, err = recoverystate.ControllerMachineName(ctx, controllerModelDB)
+		patchTarget, err = params.Service.PatchControllerMachine(ctx,
+			coremodel.UUID(params.ControllerModelUUID), *params.MachinePatch)
 		if err != nil {
-			return nil, errors.Capture(err)
-		}
-		patch.MachineName = patchTarget
-		if err := recoverystate.PatchControllerMachine(ctx, controllerModelDB, patch); err != nil {
 			return nil, errors.Capture(err)
 		}
 	}
@@ -148,16 +143,13 @@ func Load(ctx context.Context, params LoadParams) (*domainrecovery.Summary, erro
 	if len(params.ControllerUnitAddresses) > 0 {
 		// Synchronise the unit's IP and DNS observations with the
 		// replacement before workers can publish them.
-		patch, err := domainrecovery.NewControllerUnitAddressPatch(params.ControllerUnitAddresses)
-		if err != nil {
-			return nil, errors.Capture(err)
-		}
-		if err := recoverystate.PatchControllerUnitAddresses(ctx, controllerModelDB, patch); err != nil {
+		if err := params.Service.PatchControllerUnitAddresses(ctx,
+			coremodel.UUID(params.ControllerModelUUID), params.ControllerUnitAddresses); err != nil {
 			return nil, errors.Capture(err)
 		}
 	}
 
-	summary, err := recoverystate.BuildSummary(ctx, info, controllerModelDB, modelDBs, patchTarget, copied)
+	summary, err := params.Service.BuildSummary(ctx, info, models, patchTarget, copied)
 	if err != nil {
 		return nil, errors.Capture(err)
 	}

@@ -5,64 +5,78 @@ package state
 
 import (
 	"context"
-	"database/sql"
 
+	"github.com/canonical/sqlair"
+
+	domainrecovery "github.com/juju/juju/domain/recovery"
 	"github.com/juju/juju/internal/errors"
 )
 
-// ObjectBlob describes one object-store blob recorded in a loaded
-// database.
-type ObjectBlob struct {
-	SHA384 string
-	Size   int64
-}
-
-// ObjectMetadataPath pairs a metadata path with its blob hash.
-type ObjectMetadataPath struct {
-	Path   string
-	SHA384 string
-}
-
-// QueryObjects reads every object-store metadata row from one loaded
-// database.
-func QueryObjects(ctx context.Context, db *sql.DB) ([]ObjectBlob, error) {
-	rows, err := db.QueryContext(ctx,
-		"SELECT sha_384, size FROM object_store_metadata")
+// GetObjects retrieves the blobs referenced by this database.
+func (st *State) GetObjects(ctx context.Context) ([]domainrecovery.ObjectBlob, error) {
+	type blob struct {
+		SHA384 string `db:"sha_384"`
+		Size   int64  `db:"size"`
+	}
+	stmt, err := st.Prepare(`SELECT osm.sha_384 AS &blob.sha_384,
+    osm.size AS &blob.size FROM object_store_metadata AS osm ORDER BY osm.sha_384`, blob{})
 	if err != nil {
-		return nil, errors.Errorf("querying object store metadata: %w", err)
+		return nil, errors.Capture(err)
 	}
-	defer func() { _ = rows.Close() }()
-
-	var blobs []ObjectBlob
-	for rows.Next() {
-		var blob ObjectBlob
-		if err := rows.Scan(&blob.SHA384, &blob.Size); err != nil {
-			return nil, errors.Errorf("reading object store metadata: %w", err)
+	db, err := st.DB(ctx)
+	if err != nil {
+		return nil, errors.Capture(err)
+	}
+	var rows []blob
+	err = db.Txn(ctx, func(ctx context.Context, tx *sqlair.TX) error {
+		err := tx.Query(ctx, stmt).GetAll(&rows)
+		if errors.Is(err, sqlair.ErrNoRows) {
+			return nil
 		}
-		blobs = append(blobs, blob)
+		return err
+	})
+	if err != nil {
+		return nil, errors.Capture(err)
 	}
-	return blobs, errors.Capture(rows.Err())
+	result := make([]domainrecovery.ObjectBlob, len(rows))
+	for i, row := range rows {
+		result[i] = domainrecovery.ObjectBlob{SHA384: row.SHA384, Size: row.Size}
+	}
+	return result, nil
 }
 
-// ObjectMetadataPaths reads every object_store_metadata_path row of one
-// loaded database, joined with its metadata hash.
-func ObjectMetadataPaths(ctx context.Context, db *sql.DB) ([]ObjectMetadataPath, error) {
-	rows, err := db.QueryContext(ctx, `
-SELECT osmp.path, osm.sha_384
-FROM object_store_metadata_path osmp
-JOIN object_store_metadata osm ON osmp.metadata_uuid = osm.uuid`)
+// GetObjectMetadataPaths retrieves each path and its blob hash.
+func (st *State) GetObjectMetadataPaths(ctx context.Context) ([]domainrecovery.ObjectMetadataPath, error) {
+	type path struct {
+		Path   string `db:"path"`
+		SHA384 string `db:"sha_384"`
+	}
+	stmt, err := st.Prepare(`
+SELECT osmp.path AS &path.path, osm.sha_384 AS &path.sha_384
+FROM object_store_metadata_path AS osmp
+JOIN object_store_metadata AS osm ON osmp.metadata_uuid = osm.uuid
+ORDER BY osmp.path`, path{})
 	if err != nil {
-		return nil, errors.Errorf("querying object store metadata paths: %w", err)
+		return nil, errors.Capture(err)
 	}
-	defer func() { _ = rows.Close() }()
-
-	var paths []ObjectMetadataPath
-	for rows.Next() {
-		var p ObjectMetadataPath
-		if err := rows.Scan(&p.Path, &p.SHA384); err != nil {
-			return nil, errors.Errorf("reading object store metadata paths: %w", err)
+	db, err := st.DB(ctx)
+	if err != nil {
+		return nil, errors.Capture(err)
+	}
+	var rows []path
+	err = db.Txn(ctx, func(ctx context.Context, tx *sqlair.TX) error {
+		err := tx.Query(ctx, stmt).GetAll(&rows)
+		if errors.Is(err, sqlair.ErrNoRows) {
+			return nil
 		}
-		paths = append(paths, p)
+		return err
+	})
+	if err != nil {
+		return nil, errors.Capture(err)
 	}
-	return paths, errors.Capture(rows.Err())
+	result := make([]domainrecovery.ObjectMetadataPath, len(rows))
+	for i, row := range rows {
+		result[i] = domainrecovery.ObjectMetadataPath{Path: row.Path, SHA384: row.SHA384}
+	}
+	return result, nil
 }

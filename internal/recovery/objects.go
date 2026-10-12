@@ -6,25 +6,15 @@ package recovery
 import (
 	"context"
 	"crypto/sha512"
-	"database/sql"
 	"encoding/hex"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
-	recoverystate "github.com/juju/juju/domain/recovery/state"
+	domainrecovery "github.com/juju/juju/domain/recovery"
 	"github.com/juju/juju/internal/errors"
 )
-
-// ObjectDB associates a loaded database with its object-store namespace:
-// the directory under <dataDir>/objectstore that holds the database's
-// blobs ("controller" for the controller database, the model UUID for a
-// model database).
-type ObjectDB struct {
-	Namespace string
-	DB        *sql.DB
-}
 
 // LoadObjects copies the archived object-store blobs into the replacement's
 // file-backed object store. Object metadata lives in the controller and model
@@ -34,18 +24,14 @@ type ObjectDB struct {
 // database is checked to exist in its own namespace directory: a merged
 // metadata row without its blob would only fail later, on first Get.
 //
-// bundleRoot is the directory the archive's root.tar was unpacked into
+// archiveRoot is the directory the archive's root.tar was unpacked into
 // (mirroring the source data directory); dataDir is the replacement's data
 // directory. Blobs already present with matching hash — the replacement's
 // own bootstrap blobs — are skipped.
-func LoadObjects(ctx context.Context, dbs []ObjectDB, bundleRoot, dataDir string) (int, error) {
-	blobSet := make(map[string]recoverystate.ObjectBlob)
-	for _, odb := range dbs {
-		blobs, err := recoverystate.QueryObjects(ctx, odb.DB)
-		if err != nil {
-			return 0, errors.Capture(err)
-		}
-		for _, blob := range blobs {
+func LoadObjects(ctx context.Context, inventories []domainrecovery.ObjectInventory, archiveRoot, dataDir string) (int, error) {
+	blobSet := make(map[string]domainrecovery.ObjectBlob)
+	for _, inventory := range inventories {
+		for _, blob := range inventory.Blobs {
 			if existing, ok := blobSet[blob.SHA384]; ok && existing.Size != blob.Size {
 				return 0, errors.Errorf(
 					"object metadata conflict: sha384 %q is recorded with size %d and %d",
@@ -55,11 +41,11 @@ func LoadObjects(ctx context.Context, dbs []ObjectDB, bundleRoot, dataDir string
 		}
 	}
 
-	// The bundle mirrors the source filesystem root: the backup walks
+	// The archive mirrors the source filesystem root: the backup walks
 	// the source data directory (/var/lib/juju) under its absolute path,
 	// so the object store lands at var/lib/juju/objectstore below the
 	// unpack root.
-	bundleStore := filepath.Join(bundleRoot, "var", "lib", "juju", "objectstore")
+	archiveStore := filepath.Join(archiveRoot, "var", "lib", "juju", "objectstore")
 	targetStore := filepath.Join(dataDir, "objectstore")
 
 	copied := 0
@@ -67,7 +53,7 @@ func LoadObjects(ctx context.Context, dbs []ObjectDB, bundleRoot, dataDir string
 		if err := ctx.Err(); err != nil {
 			return 0, errors.Capture(err)
 		}
-		n, err := installObject(blob, bundleStore, targetStore)
+		n, err := installObject(blob, archiveStore, targetStore)
 		if err != nil {
 			return 0, errors.Capture(err)
 		}
@@ -79,14 +65,12 @@ func LoadObjects(ctx context.Context, dbs []ObjectDB, bundleRoot, dataDir string
 	// sha384 inside the database's own namespace directory; anything
 	// missing here is a deferred failure, so fail the load now.
 	var missing []string
-	for _, odb := range dbs {
-		paths, err := recoverystate.ObjectMetadataPaths(ctx, odb.DB)
-		if err != nil {
-			return 0, errors.Capture(err)
-		}
-		for _, p := range paths {
-			if _, err := os.Stat(filepath.Join(targetStore, odb.Namespace, p.SHA384)); errors.Is(err, os.ErrNotExist) {
-				missing = append(missing, odb.Namespace+"/"+p.Path)
+	for _, inventory := range inventories {
+		for _, p := range inventory.Paths {
+			if _, err := os.Stat(filepath.Join(targetStore, inventory.Namespace, p.SHA384)); errors.Is(err, os.ErrNotExist) {
+				missing = append(missing, inventory.Namespace+"/"+p.Path)
+			} else if err != nil {
+				return 0, errors.Capture(err)
 			}
 		}
 	}
@@ -99,10 +83,10 @@ func LoadObjects(ctx context.Context, dbs []ObjectDB, bundleRoot, dataDir string
 }
 
 // installObject verifies and installs one blob under every namespace
-// directory that holds it in the bundle, returning the number of copies
+// directory that holds it in the archive, returning the number of copies
 // installed.
-func installObject(blob recoverystate.ObjectBlob, bundleStore, targetStore string) (int, error) {
-	namespaces, err := findBlobNamespaces(bundleStore, blob.SHA384)
+func installObject(blob domainrecovery.ObjectBlob, archiveStore, targetStore string) (int, error) {
+	namespaces, err := findBlobNamespaces(archiveStore, blob.SHA384)
 	if err != nil {
 		return 0, errors.Capture(err)
 	}
@@ -112,7 +96,7 @@ func installObject(blob recoverystate.ObjectBlob, bundleStore, targetStore strin
 
 	installed := 0
 	for _, namespace := range namespaces {
-		src := filepath.Join(bundleStore, namespace, blob.SHA384)
+		src := filepath.Join(archiveStore, namespace, blob.SHA384)
 		dest := filepath.Join(targetStore, namespace, blob.SHA384)
 		ok, err := installObjectFile(blob, src, dest)
 		if err != nil {
@@ -125,22 +109,22 @@ func installObject(blob recoverystate.ObjectBlob, bundleStore, targetStore strin
 	return installed, nil
 }
 
-// findBlobNamespaces returns the bundle objectstore namespace directories
+// findBlobNamespaces returns the archive objectstore namespace directories
 // containing a file named hash.
-func findBlobNamespaces(bundleStore, hash string) ([]string, error) {
-	entries, err := os.ReadDir(bundleStore)
+func findBlobNamespaces(archiveStore, hash string) ([]string, error) {
+	entries, err := os.ReadDir(archiveStore)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, errors.Errorf("reading object store bundle: %w", err)
+		return nil, errors.Errorf("reading extracted object store: %w", err)
 	}
 	var namespaces []string
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(bundleStore, entry.Name(), hash)); err == nil {
+		if _, err := os.Stat(filepath.Join(archiveStore, entry.Name(), hash)); err == nil {
 			namespaces = append(namespaces, entry.Name())
 		}
 	}
@@ -151,7 +135,7 @@ func findBlobNamespaces(bundleStore, hash string) ([]string, error) {
 // and installs it at dest with restricted permissions, atomically. A dest
 // already holding the same content — the replacement's bootstrap blobs —
 // is left untouched.
-func installObjectFile(blob recoverystate.ObjectBlob, src, dest string) (bool, error) {
+func installObjectFile(blob domainrecovery.ObjectBlob, src, dest string) (bool, error) {
 	if same, err := fileMatches(dest, blob); err != nil {
 		return false, errors.Capture(err)
 	} else if same {
@@ -202,7 +186,7 @@ func installObjectFile(blob recoverystate.ObjectBlob, src, dest string) (bool, e
 
 // fileMatches reports whether path exists, has the declared size and
 // hashes to the declared SHA-384.
-func fileMatches(path string, blob recoverystate.ObjectBlob) (bool, error) {
+func fileMatches(path string, blob domainrecovery.ObjectBlob) (bool, error) {
 	f, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil

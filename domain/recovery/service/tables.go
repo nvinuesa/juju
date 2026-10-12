@@ -1,7 +1,7 @@
 // Copyright 2026 Canonical Ltd.
 // Licensed under the AGPLv3, see LICENCE file for details.
 
-package state
+package service
 
 // tablePolicy classifies how one dumped table is loaded into the freshly
 // bootstrapped database.
@@ -15,8 +15,8 @@ const (
 	// gate, so replace is semantically idempotent).
 	policyReplace tablePolicy = iota
 
-	// policySkip keeps the target's bootstrapped content: controller
-	// identity and node-local state that is regenerated or observed by
+	// policySkip keeps the target's bootstrapped content: controller-node
+	// identity and local state that is regenerated or observed by
 	// the running replacement and must never be imported stale.
 	policySkip
 )
@@ -102,13 +102,7 @@ var modelTablePolicies = map[string]tablePolicy{
 	"schema": policySkip,
 }
 
-// specialTables are handled outside the generic replay and must never be
-// reached by it.
+// specialTables are rebuilt transactionally rather than replayed.
 var specialTables = map[string]bool{
-	// The seed row the replacement bootstrapped with is deleted and the
-	// source row recovered (nothing references controller.uuid).
-	"controller": true,
-	// Placements are rebuilt for the single replacement node after the
-	// metadata merge.
 	"object_store_placement": true,
 }

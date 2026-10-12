@@ -9,11 +9,14 @@ import (
 	stdtesting "testing"
 
 	"github.com/juju/tc"
+	"gopkg.in/yaml.v3"
 
 	"github.com/juju/juju/core/database"
+	coremodel "github.com/juju/juju/core/model"
 	"github.com/juju/juju/core/network"
 	networkstate "github.com/juju/juju/domain/network/state"
 	domainrecovery "github.com/juju/juju/domain/recovery"
+	recoveryservice "github.com/juju/juju/domain/recovery/service"
 	recoverystate "github.com/juju/juju/domain/recovery/state"
 	"github.com/juju/juju/domain/schema"
 	schematesting "github.com/juju/juju/domain/schema/testing"
@@ -54,10 +57,10 @@ func (s *loadSuite) seedTargetController(c *tc.C) {
 	c.Assert(err, tc.ErrorIsNil)
 }
 
-func (s *loadSuite) controllerDump() *domainrecovery.Dump {
-	return &domainrecovery.Dump{
+func (s *loadSuite) controllerDump() *testDump {
+	return &testDump{
 		Version: "4.1.0",
-		Tables: map[string][]domainrecovery.Row{
+		Tables: map[string][]testRow{
 			"controller": {{
 				"uuid":           sourceControllerUUID,
 				"model_uuid":     sourceModelUUID,
@@ -135,7 +138,7 @@ func (s *loadSuite) controllerDump() *domainrecovery.Dump {
 func (s *loadSuite) TestLoadControllerDump(c *tc.C) {
 	s.seedTargetController(c)
 
-	err := recoverystate.LoadControllerDump(c.Context(), s.DB(), s.controllerDump())
+	err := s.recoveryService(c).LoadControllerDump(c.Context(), dumpYAML(c, s.controllerDump()))
 	c.Assert(err, tc.ErrorIsNil)
 
 	// The controller row carries the source identity.
@@ -203,7 +206,7 @@ func (s *loadSuite) TestLoadControllerDump(c *tc.C) {
 
 func (s *loadSuite) TestLoadControllerDumpForeignKeyViolation(c *tc.C) {
 	dump := s.controllerDump()
-	dump.Tables["model"] = []domainrecovery.Row{{
+	dump.Tables["model"] = []testRow{{
 		"uuid":          sourceModelUUID,
 		"activated":     true,
 		"cloud_uuid":    "99999999-0000-0000-0000-000000000000",
@@ -214,7 +217,7 @@ func (s *loadSuite) TestLoadControllerDumpForeignKeyViolation(c *tc.C) {
 	}}
 	delete(dump.Tables, "cloud")
 
-	err := recoverystate.LoadControllerDump(c.Context(), s.DB(), dump)
+	err := s.recoveryService(c).LoadControllerDump(c.Context(), dumpYAML(c, dump))
 	c.Assert(err, tc.ErrorMatches, ".*fails foreign key integrity.*")
 
 	// The failed load rolled back: no model row remains.
@@ -232,10 +235,10 @@ func (s *loadSuite) openModelDB(c *tc.C, modelUUID string) *sql.DB {
 	return db
 }
 
-func (s *loadSuite) modelDump() *domainrecovery.Dump {
-	return &domainrecovery.Dump{
+func (s *loadSuite) modelDump() *testDump {
+	return &testDump{
 		Version: "4.1.0",
-		Tables: map[string][]domainrecovery.Row{
+		Tables: map[string][]testRow{
 			"net_node": {{"uuid": "nn-0"}},
 			"machine": {{
 				"uuid":          "machine-uuid-0",
@@ -263,7 +266,7 @@ func (s *loadSuite) TestLoadModelDump(c *tc.C) {
 	db := s.openModelDB(c, sourceModelUUID)
 	defer db.Close()
 
-	err := recoverystate.LoadModelDump(c.Context(), db, s.modelDump())
+	err := s.recoveryService(c).LoadModelDump(c.Context(), coremodel.UUID(sourceModelUUID), dumpYAML(c, s.modelDump()))
 	c.Assert(err, tc.ErrorIsNil)
 
 	var machineName string
@@ -282,9 +285,9 @@ func (s *loadSuite) TestLoadModelDump(c *tc.C) {
 func (s *loadSuite) TestPatchControllerMachine(c *tc.C) {
 	db := s.openModelDB(c, sourceModelUUID)
 	defer db.Close()
-	c.Assert(recoverystate.LoadModelDump(c.Context(), db, s.modelDump()), tc.ErrorIsNil)
+	c.Assert(s.recoveryService(c).LoadModelDump(c.Context(), coremodel.UUID(sourceModelUUID), dumpYAML(c, s.modelDump())), tc.ErrorIsNil)
 
-	err := recoverystate.PatchControllerMachine(c.Context(), db, domainrecovery.MachinePatch{
+	err := s.modelState(c).PatchControllerMachine(c.Context(), domainrecovery.MachinePatch{
 		MachineName: "0",
 		InstanceID:  "replacement-instance",
 		DisplayName: "replacement-display",
@@ -308,13 +311,13 @@ func (s *loadSuite) TestPatchControllerMachine(c *tc.C) {
 func (s *loadSuite) TestPatchControllerMachineMissing(c *tc.C) {
 	db := s.openModelDB(c, sourceModelUUID)
 	defer db.Close()
-	c.Assert(recoverystate.LoadModelDump(c.Context(), db, s.modelDump()), tc.ErrorIsNil)
+	c.Assert(s.recoveryService(c).LoadModelDump(c.Context(), coremodel.UUID(sourceModelUUID), dumpYAML(c, s.modelDump())), tc.ErrorIsNil)
 
-	err := recoverystate.PatchControllerMachine(c.Context(), db, domainrecovery.MachinePatch{
+	err := s.modelState(c).PatchControllerMachine(c.Context(), domainrecovery.MachinePatch{
 		MachineName: "9",
 		InstanceID:  "x",
 	})
-	c.Assert(err, tc.ErrorMatches, `archived controller machine "9" not found`)
+	c.Assert(err, tc.ErrorMatches, `archived controller machine not found`)
 }
 
 func (s *loadSuite) TestLoadControllerDumpRejectsUnknownVersion(c *tc.C) {
@@ -322,31 +325,31 @@ func (s *loadSuite) TestLoadControllerDumpRejectsUnknownVersion(c *tc.C) {
 
 	dump := s.controllerDump()
 	dump.Version = "3.6.0"
-	err := recoverystate.LoadControllerDump(c.Context(), s.DB(), dump)
+	err := s.recoveryService(c).LoadControllerDump(c.Context(), dumpYAML(c, dump))
 	c.Assert(err, tc.ErrorMatches, "controller dump: unsupported dump format version \"3.6.0\".*")
 
 	dump.Version = ""
-	err = recoverystate.LoadControllerDump(c.Context(), s.DB(), dump)
+	err = s.recoveryService(c).LoadControllerDump(c.Context(), dumpYAML(c, dump))
 	c.Assert(err, tc.ErrorMatches, "controller dump: dump records no format version")
 }
 
 func (s *loadSuite) TestLoadControllerDiscardsBackupLease(c *tc.C) {
 	s.seedTargetController(c)
 	dump := s.controllerDump()
-	dump.Tables["lease_type"] = []domainrecovery.Row{
+	dump.Tables["lease_type"] = []testRow{
 		{"id": 0, "type": "singular-controller"},
 		{"id": 1, "type": "application-leadership"},
 		{"id": 2, "type": "backup-creation"},
 	}
-	dump.Tables["lease"] = []domainrecovery.Row{
+	dump.Tables["lease"] = []testRow{
 		{"uuid": "backup", "lease_type_id": 2, "holder": "request", "model_uuid": sourceModelUUID},
 		{"uuid": "leadership", "lease_type_id": 1, "holder": "app/0", "model_uuid": sourceModelUUID},
 	}
-	dump.Tables["lease_pin"] = []domainrecovery.Row{
+	dump.Tables["lease_pin"] = []testRow{
 		{"uuid": "backup-pin", "lease_uuid": "backup", "entity_id": "request"},
 		{"uuid": "leader-pin", "lease_uuid": "leadership", "entity_id": "unit"},
 	}
-	err := recoverystate.LoadControllerDump(c.Context(), s.DB(), dump)
+	err := s.recoveryService(c).LoadControllerDump(c.Context(), dumpYAML(c, dump))
 	c.Assert(err, tc.ErrorIsNil)
 	var holder string
 	err = s.DB().QueryRowContext(c.Context(), "SELECT holder FROM lease").Scan(&holder)
@@ -369,7 +372,7 @@ func (s *loadSuite) TestLoadModelDumpRejectsUnknownVersion(c *tc.C) {
 
 	dump := s.modelDump()
 	dump.Version = "4.2.0"
-	err := recoverystate.LoadModelDump(c.Context(), db, dump)
+	err := s.recoveryService(c).LoadModelDump(c.Context(), coremodel.UUID(sourceModelUUID), dumpYAML(c, dump))
 	c.Assert(err, tc.ErrorMatches, "model dump: unsupported dump format version \"4.2.0\".*")
 }
 
@@ -401,9 +404,9 @@ func (s *loadSuite) TestPatchControllerUnitAddressesInsertsMissing(c *tc.C) {
 
 	// The replacement exposes two addresses but the archive recorded
 	// one: the old observation is replaced and the device is retained.
-	patch, err := domainrecovery.NewControllerUnitAddressPatch([]string{"10.1.0.1", "10.1.0.2"})
+	patch, err := recoveryservice.NewControllerUnitAddressPatch([]string{"10.1.0.1", "10.1.0.2"})
 	c.Assert(err, tc.ErrorIsNil)
-	err = recoverystate.PatchControllerUnitAddresses(c.Context(), db, patch)
+	err = s.modelState(c).PatchControllerUnitAddresses(c.Context(), patch)
 	c.Assert(err, tc.ErrorIsNil)
 
 	type addrRow struct {
@@ -455,9 +458,9 @@ func (s *loadSuite) TestPatchControllerUnitAddressesRepresentations(c *tc.C) {
 		{"next.example.com"},
 		{"10.1.0.2", "2001:db8::2"},
 	} {
-		patch, err := domainrecovery.NewControllerUnitAddressPatch(values)
+		patch, err := recoveryservice.NewControllerUnitAddressPatch(values)
 		c.Assert(err, tc.ErrorIsNil)
-		err = recoverystate.PatchControllerUnitAddresses(c.Context(), db, patch)
+		err = s.modelState(c).PatchControllerUnitAddresses(c.Context(), patch)
 		c.Assert(err, tc.ErrorIsNil)
 		observed, err := consumer.GetControllerUnitNetwork(c.Context(), "controller/0")
 		c.Assert(err, tc.ErrorIsNil)
@@ -490,13 +493,13 @@ func (s *loadSuite) TestPatchControllerUnitAddressesWithoutArchivedDevice(c *tc.
 	c.Assert(err, tc.ErrorIsNil)
 	_, err = db.ExecContext(c.Context(), "DELETE FROM link_layer_device")
 	c.Assert(err, tc.ErrorIsNil)
-	patch, err := domainrecovery.NewControllerUnitAddressPatch([]string{"pod.example.com"})
+	patch, err := recoveryservice.NewControllerUnitAddressPatch([]string{"pod.example.com"})
 	c.Assert(err, tc.ErrorIsNil)
-	err = recoverystate.PatchControllerUnitAddresses(c.Context(), db, patch)
+	err = s.modelState(c).PatchControllerUnitAddresses(c.Context(), patch)
 	c.Assert(err, tc.ErrorIsNil)
-	patch, err = domainrecovery.NewControllerUnitAddressPatch([]string{"10.1.0.1"})
+	patch, err = recoveryservice.NewControllerUnitAddressPatch([]string{"10.1.0.1"})
 	c.Assert(err, tc.ErrorIsNil)
-	err = recoverystate.PatchControllerUnitAddresses(c.Context(), db, patch)
+	err = s.modelState(c).PatchControllerUnitAddresses(c.Context(), patch)
 	c.Assert(err, tc.ErrorIsNil)
 	var deviceUUID string
 	err = db.QueryRowContext(c.Context(),
@@ -505,7 +508,7 @@ func (s *loadSuite) TestPatchControllerUnitAddressesWithoutArchivedDevice(c *tc.
 	c.Check(deviceUUID, tc.Equals, patch.DeviceUUID)
 	patch.Addresses[0].UUID = ""
 	patch.Addresses = append(patch.Addresses, patch.Addresses[0])
-	err = recoverystate.PatchControllerUnitAddresses(c.Context(), db, patch)
+	err = s.modelState(c).PatchControllerUnitAddresses(c.Context(), patch)
 	c.Assert(err, tc.ErrorMatches, ".*UNIQUE constraint failed.*")
 	// A failed replacement retains the previously committed observations.
 	err = db.QueryRowContext(c.Context(), "SELECT device_uuid FROM ip_address").Scan(&deviceUUID)
@@ -516,14 +519,43 @@ func (s *loadSuite) TestPatchControllerUnitAddressesWithoutArchivedDevice(c *tc.
 func (s *loadSuite) TestPatchControllerUnitAddressesMissingUnit(c *tc.C) {
 	db := s.openModelDB(c, sourceModelUUID)
 	defer db.Close()
-	patch, err := domainrecovery.NewControllerUnitAddressPatch(nil)
+	patch, err := recoveryservice.NewControllerUnitAddressPatch(nil)
 	c.Assert(err, tc.ErrorIsNil)
-	err = recoverystate.PatchControllerUnitAddresses(c.Context(), db, patch)
+	err = s.modelState(c).PatchControllerUnitAddresses(c.Context(), patch)
 	c.Assert(err, tc.ErrorIsNil)
-	_, err = domainrecovery.NewControllerUnitAddressPatch([]string{""})
+	_, err = recoveryservice.NewControllerUnitAddressPatch([]string{""})
 	c.Assert(err, tc.ErrorMatches, "empty controller unit address")
-	patch, err = domainrecovery.NewControllerUnitAddressPatch([]string{"pod.example.com"})
+	patch, err = recoveryservice.NewControllerUnitAddressPatch([]string{"pod.example.com"})
 	c.Assert(err, tc.ErrorIsNil)
-	err = recoverystate.PatchControllerUnitAddresses(c.Context(), db, patch)
+	err = s.modelState(c).PatchControllerUnitAddresses(c.Context(), patch)
 	c.Assert(err, tc.ErrorMatches, "controller unit not found")
 }
+
+func dumpYAML(c *tc.C, dump *testDump) []byte {
+	data, err := yaml.Marshal(struct {
+		Version string               `yaml:"version"`
+		Payload map[string][]testRow `yaml:"payload"`
+	}{dump.Version, dump.Tables})
+	c.Assert(err, tc.ErrorIsNil)
+	return data
+}
+
+func (s *loadSuite) modelState(c *tc.C) *recoverystate.State {
+	runner := s.ModelTxnRunner(c, sourceModelUUID)
+	return recoverystate.NewState(func(context.Context) (database.TxnRunner, error) { return runner, nil })
+}
+
+func (s *loadSuite) recoveryService(c *tc.C) *recoveryservice.Service {
+	svc, err := recoveryservice.NewService(recoverystate.NewState(s.TxnRunnerFactory()),
+		func(context.Context, string) (recoveryservice.State, error) { return s.modelState(c), nil })
+	c.Assert(err, tc.ErrorIsNil)
+	return svc
+}
+
+// testDump and testRow describe YAML fixtures, not service/state contracts.
+type testDump struct {
+	Version string
+	Tables  map[string][]testRow
+}
+
+type testRow map[string]any

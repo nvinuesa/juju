@@ -31,13 +31,13 @@ func (s *loadSuite) insertObjectMetadata(c *tc.C, uuid, sha384 string, size int6
 }
 
 func (s *loadSuite) TestLoadObjects(c *tc.C) {
-	bundle := c.MkDir()
+	archive := c.MkDir()
 	dataDir := c.MkDir()
 
-	blobHash := s.writeBlob(c, bundle, "model-ns", "charm blob content")
+	blobHash := s.writeBlob(c, archive, "model-ns", "charm blob content")
 	s.insertObjectMetadata(c, "metadata-uuid-1", blobHash, int64(len("charm blob content")))
 
-	copied, err := recovery.LoadObjects(c.Context(), []recovery.ObjectDB{{Namespace: "controller", DB: s.DB()}}, bundle, dataDir)
+	copied, err := recovery.LoadObjects(c.Context(), s.objectInventory(c), archive, dataDir)
 	c.Assert(err, tc.ErrorIsNil)
 	c.Check(copied, tc.Equals, 1)
 
@@ -51,10 +51,10 @@ func (s *loadSuite) TestLoadObjects(c *tc.C) {
 }
 
 func (s *loadSuite) TestLoadObjectsSkipsExistingIdentical(c *tc.C) {
-	bundle := c.MkDir()
+	archive := c.MkDir()
 	dataDir := c.MkDir()
 
-	blobHash := s.writeBlob(c, bundle, "model-ns", "same content")
+	blobHash := s.writeBlob(c, archive, "model-ns", "same content")
 	// The replacement already holds the same blob in its own object
 	// store (target layout: dataDir/objectstore).
 	existingDir := filepath.Join(dataDir, "objectstore", "model-ns")
@@ -62,47 +62,47 @@ func (s *loadSuite) TestLoadObjectsSkipsExistingIdentical(c *tc.C) {
 	c.Assert(os.WriteFile(filepath.Join(existingDir, blobHash), []byte("same content"), 0o600), tc.ErrorIsNil)
 	s.insertObjectMetadata(c, "metadata-uuid-1", blobHash, int64(len("same content")))
 
-	copied, err := recovery.LoadObjects(c.Context(), []recovery.ObjectDB{{Namespace: "controller", DB: s.DB()}}, bundle, dataDir)
+	copied, err := recovery.LoadObjects(c.Context(), s.objectInventory(c), archive, dataDir)
 	c.Assert(err, tc.ErrorIsNil)
 	c.Check(copied, tc.Equals, 0)
 }
 
 func (s *loadSuite) TestLoadObjectsMissingBlobFails(c *tc.C) {
-	bundle := c.MkDir()
+	archive := c.MkDir()
 	dataDir := c.MkDir()
-	c.Assert(os.MkdirAll(filepath.Join(bundle, "var", "lib", "juju", "objectstore"), 0o700), tc.ErrorIsNil)
+	c.Assert(os.MkdirAll(filepath.Join(archive, "var", "lib", "juju", "objectstore"), 0o700), tc.ErrorIsNil)
 	s.insertObjectMetadata(c, "metadata-uuid-1", "abcdef", 10)
 
-	_, err := recovery.LoadObjects(c.Context(), []recovery.ObjectDB{{Namespace: "controller", DB: s.DB()}}, bundle, dataDir)
+	_, err := recovery.LoadObjects(c.Context(), s.objectInventory(c), archive, dataDir)
 	c.Assert(err, tc.ErrorMatches,
 		`object blob "abcdef" referenced by metadata is not in the archive`)
 }
 
 func (s *loadSuite) TestLoadObjectsCorruptBlobFails(c *tc.C) {
-	bundle := c.MkDir()
+	archive := c.MkDir()
 	dataDir := c.MkDir()
 
-	blobHash := s.writeBlob(c, bundle, "model-ns", "good content")
-	// Corrupt the bundle blob without changing its name.
-	blobPath := filepath.Join(bundle, "var", "lib", "juju", "objectstore", "model-ns", blobHash)
+	blobHash := s.writeBlob(c, archive, "model-ns", "good content")
+	// Corrupt the archive blob without changing its name.
+	blobPath := filepath.Join(archive, "var", "lib", "juju", "objectstore", "model-ns", blobHash)
 	c.Assert(os.WriteFile(blobPath, []byte("corrupted!"), 0o600), tc.ErrorIsNil)
 	s.insertObjectMetadata(c, "metadata-uuid-1", blobHash, int64(len("good content")))
 
-	_, err := recovery.LoadObjects(c.Context(), []recovery.ObjectDB{{Namespace: "controller", DB: s.DB()}}, bundle, dataDir)
+	_, err := recovery.LoadObjects(c.Context(), s.objectInventory(c), archive, dataDir)
 	c.Assert(err, tc.ErrorMatches, ".*fails size or hash verification")
 }
 
 func (s *loadSuite) TestLoadObjectsMultiNamespace(c *tc.C) {
-	bundle := c.MkDir()
+	archive := c.MkDir()
 	dataDir := c.MkDir()
 
 	// The same blob placed in two namespaces (equal hashes remain
 	// distinct placements) is installed into both.
-	blobHash := s.writeBlob(c, bundle, "ns-a", "shared content")
-	s.writeBlob(c, bundle, "ns-b", "shared content")
+	blobHash := s.writeBlob(c, archive, "ns-a", "shared content")
+	s.writeBlob(c, archive, "ns-b", "shared content")
 	s.insertObjectMetadata(c, "metadata-uuid-1", blobHash, int64(len("shared content")))
 
-	copied, err := recovery.LoadObjects(c.Context(), []recovery.ObjectDB{{Namespace: "controller", DB: s.DB()}}, bundle, dataDir)
+	copied, err := recovery.LoadObjects(c.Context(), s.objectInventory(c), archive, dataDir)
 	c.Assert(err, tc.ErrorIsNil)
 	c.Check(copied, tc.Equals, 2)
 
@@ -120,44 +120,44 @@ func (s *loadSuite) insertObjectMetadataPath(c *tc.C, path, metadataUUID string)
 }
 
 func (s *loadSuite) TestLoadObjectsMissingPathBlobFails(c *tc.C) {
-	bundle := c.MkDir()
+	archive := c.MkDir()
 	dataDir := c.MkDir()
 
-	// The blob exists in the bundle under a foreign namespace: the
+	// The blob exists in the archive under a foreign namespace: the
 	// controller database's own namespace directory gets nothing, so
 	// the merged metadata_path row would only fail on first Get.
-	blobHash := s.writeBlob(c, bundle, "ns-foreign", "path blob content")
+	blobHash := s.writeBlob(c, archive, "ns-foreign", "path blob content")
 	s.insertObjectMetadata(c, "metadata-uuid-1", blobHash, int64(len("path blob content")))
 	s.insertObjectMetadataPath(c, "charms/foo", "metadata-uuid-1")
 
 	_, err := recovery.LoadObjects(c.Context(),
-		[]recovery.ObjectDB{{Namespace: "controller", DB: s.DB()}}, bundle, dataDir)
+		s.objectInventory(c), archive, dataDir)
 	c.Assert(err, tc.ErrorMatches,
 		`recovered object metadata references blobs that are not in the archive: controller/charms/foo`)
 }
 
 func (s *loadSuite) TestLoadObjectsPathBlobVerified(c *tc.C) {
-	bundle := c.MkDir()
+	archive := c.MkDir()
 	dataDir := c.MkDir()
 
-	blobHash := s.writeBlob(c, bundle, "controller", "path blob content")
+	blobHash := s.writeBlob(c, archive, "controller", "path blob content")
 	s.insertObjectMetadata(c, "metadata-uuid-1", blobHash, int64(len("path blob content")))
 	s.insertObjectMetadataPath(c, "charms/foo", "metadata-uuid-1")
 
 	copied, err := recovery.LoadObjects(c.Context(),
-		[]recovery.ObjectDB{{Namespace: "controller", DB: s.DB()}}, bundle, dataDir)
+		s.objectInventory(c), archive, dataDir)
 	c.Assert(err, tc.ErrorIsNil)
 	c.Check(copied, tc.Equals, 1)
 }
 
 func (s *loadSuite) TestLoadObjectsSizeConflictFails(c *tc.C) {
-	bundle := c.MkDir()
+	archive := c.MkDir()
 	dataDir := c.MkDir()
 
 	// Two databases record the same sha384 with different sizes: the
 	// archive is inconsistent and the load must fail instead of
 	// silently keeping one of the rows.
-	blobHash := s.writeBlob(c, bundle, "ns-a", "shared content")
+	blobHash := s.writeBlob(c, archive, "ns-a", "shared content")
 	s.insertObjectMetadata(c, "metadata-uuid-1", blobHash, int64(len("shared content")))
 	second := s.openModelDB(c, sourceModelUUID)
 	defer second.Close()
@@ -166,9 +166,6 @@ func (s *loadSuite) TestLoadObjectsSizeConflictFails(c *tc.C) {
 		"metadata-uuid-2", "ignored", blobHash, int64(len("shared content")+1))
 	c.Assert(err, tc.ErrorIsNil)
 
-	_, err = recovery.LoadObjects(c.Context(), []recovery.ObjectDB{
-		{Namespace: "controller", DB: s.DB()},
-		{Namespace: sourceModelUUID, DB: second},
-	}, bundle, dataDir)
+	_, err = recovery.LoadObjects(c.Context(), s.objectInventory(c, sourceModelUUID), archive, dataDir)
 	c.Assert(err, tc.ErrorMatches, `object metadata conflict: sha384 ".*" is recorded with size .* and .*`)
 }

@@ -11,9 +11,13 @@ import (
 
 	"github.com/juju/tc"
 
+	"github.com/juju/juju/core/database"
+	coremodel "github.com/juju/juju/core/model"
 	domainrecovery "github.com/juju/juju/domain/recovery"
+	recoveryservice "github.com/juju/juju/domain/recovery/service"
 	"github.com/juju/juju/domain/schema"
 	schematesting "github.com/juju/juju/domain/schema/testing"
+	"github.com/juju/juju/domain/services"
 	"github.com/juju/juju/internal/errors"
 	loggertesting "github.com/juju/juju/internal/logger/testing"
 	"github.com/juju/juju/internal/recovery"
@@ -270,11 +274,10 @@ func (s *loadSuite) TestLoadStageEndToEnd(c *tc.C) {
 	dataDir := c.MkDir()
 
 	summary, err := recovery.Load(c.Context(), recovery.LoadParams{
-		ControllerDB:        s.DB(),
-		OpenModelDB:         openModelDB,
+		Service:             s.recoveryService(c, openModelDB),
 		ArchivePath:         archivePath,
 		ExpectedSHA256:      sum,
-		BundleDir:           c.MkDir(),
+		ObjectsArchiveDir:   c.MkDir(),
 		DataDir:             dataDir,
 		ControllerModelUUID: testControllerModelUUID,
 		MachinePatch: &domainrecovery.MachinePatch{
@@ -337,11 +340,10 @@ func (s *loadSuite) TestLoadStageHAMachineSelection(c *tc.C) {
 		return s.openModelDB(c, modelUUID), nil
 	}
 	summary, err := recovery.Load(c.Context(), recovery.LoadParams{
-		ControllerDB:        s.DB(),
-		OpenModelDB:         openModelDB,
+		Service:             s.recoveryService(c, openModelDB),
 		ArchivePath:         archivePath,
 		ExpectedSHA256:      sum,
-		BundleDir:           c.MkDir(),
+		ObjectsArchiveDir:   c.MkDir(),
 		DataDir:             dataDir,
 		ControllerModelUUID: testControllerModelUUID,
 		MachinePatch: &domainrecovery.MachinePatch{
@@ -396,13 +398,10 @@ func (s *loadSuite) TestLoadStageHAWorkloadMachineNotDead(c *tc.C) {
 	archivePath, sum := writeArchive(c, files)
 
 	summary, err := recovery.Load(c.Context(), recovery.LoadParams{
-		ControllerDB: s.DB(),
-		OpenModelDB: func(_ context.Context, modelUUID string) (*sql.DB, error) {
-			return s.openModelDB(c, modelUUID), nil
-		},
+		Service:             s.recoveryService(c, nil),
 		ArchivePath:         archivePath,
 		ExpectedSHA256:      sum,
-		BundleDir:           c.MkDir(),
+		ObjectsArchiveDir:   c.MkDir(),
 		DataDir:             c.MkDir(),
 		ControllerModelUUID: testControllerModelUUID,
 		MachinePatch: &domainrecovery.MachinePatch{
@@ -423,10 +422,10 @@ func (s *loadSuite) TestLoadStageChecksumMismatch(c *tc.C) {
 	archivePath, _ := writeArchive(c, files)
 
 	_, err := recovery.Load(c.Context(), recovery.LoadParams{
-		ControllerDB:        s.DB(),
+		Service:             s.recoveryService(c, nil),
 		ArchivePath:         archivePath,
 		ExpectedSHA256:      "deadbeef",
-		BundleDir:           c.MkDir(),
+		ObjectsArchiveDir:   c.MkDir(),
 		DataDir:             c.MkDir(),
 		ControllerModelUUID: testControllerModelUUID,
 		Logger:              loggertesting.WrapCheckLog(c),
@@ -441,6 +440,9 @@ func (s *loadSuite) TestLoadStageChecksumMismatch(c *tc.C) {
 
 func (s *loadSuite) TestLoadStageCleansUpStagingOnFailure(c *tc.C) {
 	files := validFiles()
+	for _, model := range []string{testControllerModelUUID, testModelAUUID, testModelBUUID} {
+		files["juju-backup/dump/models/"+model+".yaml"] = []byte(emptyModelDumpYAML)
+	}
 	files["juju-backup/root.tar"] = rootTar(c)
 	archivePath, sum := writeArchive(c, files)
 	stagingDir := c.MkDir()
@@ -448,17 +450,41 @@ func (s *loadSuite) TestLoadStageCleansUpStagingOnFailure(c *tc.C) {
 	openErr := errors.New("cannot open model database")
 
 	_, err := recovery.Load(c.Context(), recovery.LoadParams{
-		ControllerDB: s.DB(),
-		OpenModelDB: func(context.Context, string) (*sql.DB, error) {
+		Service: s.recoveryService(c, func(context.Context, string) (*sql.DB, error) {
 			return nil, openErr
-		},
+		}),
 		ArchivePath:         archivePath,
 		ExpectedSHA256:      sum,
 		ControllerModelUUID: testControllerModelUUID,
 		Logger:              loggertesting.WrapCheckLog(c),
 	})
 	c.Check(err, tc.ErrorIs, openErr)
+	// Controller replay committed before the model opener failed. Recovery
+	// must discard this target, rather than assume cross-database rollback.
+	var controller string
+	c.Assert(s.DB().QueryRow("SELECT uuid FROM controller").Scan(&controller), tc.ErrorIsNil)
+	c.Check(controller, tc.Equals, testControllerUUID)
 	entries, err := os.ReadDir(stagingDir)
 	c.Assert(err, tc.ErrorIsNil)
 	c.Check(entries, tc.HasLen, 0)
+}
+
+func (s *loadSuite) recoveryService(c *tc.C, open func(context.Context, string) (*sql.DB, error)) *recoveryservice.Service {
+	svc, err := services.NewRecoveryService(s.TxnRunnerFactory(),
+		func(ctx context.Context, model string) (database.TxnRunner, error) {
+			if open != nil {
+				if _, err := open(ctx, model); err != nil {
+					return nil, err
+				}
+			}
+			return s.ModelTxnRunner(c, model), nil
+		})
+	c.Assert(err, tc.ErrorIsNil)
+	return svc
+}
+
+func (s *loadSuite) objectInventory(c *tc.C, models ...coremodel.UUID) []domainrecovery.ObjectInventory {
+	inventory, err := s.recoveryService(c, nil).GetObjectInventory(c.Context(), models)
+	c.Assert(err, tc.ErrorIsNil)
+	return inventory
 }

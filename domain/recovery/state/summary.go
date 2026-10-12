@@ -5,108 +5,90 @@ package state
 
 import (
 	"context"
-	"database/sql"
+
+	"github.com/canonical/sqlair"
 
 	domainrecovery "github.com/juju/juju/domain/recovery"
 	"github.com/juju/juju/internal/errors"
 )
 
-// lifeAlive is the life.id value for alive entities, fixed by the schema
-// seed data under the exact-version gate.
-const lifeAlive = 0
-
-// BuildSummary collects the report from the loaded databases. modelDBs
-// holds one open database per recovered model, keyed by model UUID; the
-// controller model's database is included.
-func BuildSummary(ctx context.Context, info *domainrecovery.ArchiveInfo, controllerModelDB *sql.DB, modelDBs map[string]*sql.DB, machineName string, objectsCopied int) (*domainrecovery.Summary, error) {
-	summary := &domainrecovery.Summary{
-		ControllerUUID:     info.ControllerUUID,
-		ControllerName:     info.ControllerName,
-		SourceAgentVersion: info.AgentVersion.String(),
-		HANodes:            info.HANodes,
-		Models:             len(info.Models),
-		ObjectsCopied:      objectsCopied,
+// GetOtherControllerMachines retrieves controller machines other than the
+// replacement. The view includes machines that also host workload units.
+func (st *State) GetOtherControllerMachines(ctx context.Context, machineName string) ([]string, error) {
+	type machine struct {
+		Name string `db:"name"`
 	}
-
-	// The dead controller machines are the archived controller
-	// application's machines other than the replacement, regardless of
-	// the manifest's HA node count: the manifest may understate the HA
-	// topology, and machines hosting units of the controller application
-	// are controller machines even when they also host workload units.
-	dead, err := otherControllerMachines(ctx, controllerModelDB, machineName)
+	input := machine{Name: machineName}
+	stmt, err := st.Prepare(`
+SELECT m.name AS &machine.name FROM machine AS m
+JOIN v_machine_is_controller AS vic ON vic.machine_uuid = m.uuid
+WHERE m.name != $machine.name ORDER BY m.name`, input)
 	if err != nil {
 		return nil, errors.Capture(err)
 	}
-	summary.DeadControllerMachines = dead
-
-	for _, db := range modelDBs {
-		machines, err := countNotAlive(ctx, db, "machine")
-		if err != nil {
-			return nil, errors.Capture(err)
-		}
-		apps, err := countNotAlive(ctx, db, "application")
-		if err != nil {
-			return nil, errors.Capture(err)
-		}
-		units, err := countNotAlive(ctx, db, "unit")
-		if err != nil {
-			return nil, errors.Capture(err)
-		}
-		removals, err := countRows(ctx, db, "removal")
-		if err != nil {
-			return nil, errors.Capture(err)
-		}
-		summary.MachinesNotAlive += machines
-		summary.ApplicationsNotAlive += apps
-		summary.UnitsNotAlive += units
-		summary.PendingRemovals += removals
+	db, err := st.DB(ctx)
+	if err != nil {
+		return nil, errors.Capture(err)
 	}
-	return summary, nil
+	var rows []machine
+	err = db.Txn(ctx, func(ctx context.Context, tx *sqlair.TX) error {
+		err := tx.Query(ctx, stmt, input).GetAll(&rows)
+		if errors.Is(err, sqlair.ErrNoRows) {
+			return nil
+		}
+		return err
+	})
+	if err != nil {
+		return nil, errors.Capture(err)
+	}
+	result := make([]string, len(rows))
+	for i, row := range rows {
+		result[i] = row.Name
+	}
+	return result, nil
 }
 
-// otherControllerMachines lists the machines hosting units of the
-// controller application, other than the replacement's machine. They are
-// the source's other controller machines, awaiting operator removal after
-// recovery.
-func otherControllerMachines(ctx context.Context, db *sql.DB, machineName string) ([]string, error) {
-	rows, err := db.QueryContext(ctx, `
-SELECT m.name FROM machine m
-JOIN v_machine_is_controller vic ON vic.machine_uuid = m.uuid
-WHERE m.name != ?
-ORDER BY m.name`, machineName)
-	if err != nil {
-		return nil, errors.Errorf("listing dead controller machines: %w", err)
+// GetRecoveryCounts retrieves lifecycle and scheduled removal counts.
+func (st *State) GetRecoveryCounts(ctx context.Context) (domainrecovery.RecoveryCounts, error) {
+	statements := []string{
+		`SELECT COUNT(*) AS &recoveryCounts.machines FROM machine AS m WHERE m.life_id != 0`,
+		`SELECT COUNT(*) AS &recoveryCounts.applications FROM application AS a WHERE a.life_id != 0`,
+		`SELECT COUNT(*) AS &recoveryCounts.units FROM unit AS u WHERE u.life_id != 0`,
+		`SELECT COUNT(*) AS &recoveryCounts.removals FROM removal AS r`,
 	}
-	defer func() { _ = rows.Close() }()
-
-	var names []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, errors.Capture(err)
+	var prepared []*sqlair.Statement
+	for _, query := range statements {
+		stmt, err := st.Prepare(query, recoveryCounts{})
+		if err != nil {
+			return domainrecovery.RecoveryCounts{}, errors.Capture(err)
 		}
-		names = append(names, name)
+		prepared = append(prepared, stmt)
 	}
-	return names, errors.Capture(rows.Err())
+	db, err := st.DB(ctx)
+	if err != nil {
+		return domainrecovery.RecoveryCounts{}, errors.Capture(err)
+	}
+	var result recoveryCounts
+	err = db.Txn(ctx, func(ctx context.Context, tx *sqlair.TX) error {
+		for _, stmt := range prepared {
+			if err := tx.Query(ctx, stmt).Get(&result); err != nil {
+				return errors.Capture(err)
+			}
+		}
+		return nil
+	})
+	return domainrecovery.RecoveryCounts{
+		MachinesNotAlive:     result.MachinesNotAlive,
+		ApplicationsNotAlive: result.ApplicationsNotAlive,
+		UnitsNotAlive:        result.UnitsNotAlive,
+		PendingRemovals:      result.PendingRemovals,
+	}, errors.Capture(err)
 }
 
-// countNotAlive counts entities whose life is not alive.
-func countNotAlive(ctx context.Context, db *sql.DB, table string) (int, error) {
-	var count int
-	err := db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM "+table+" WHERE life_id != ?", lifeAlive).Scan(&count)
-	if err != nil {
-		return 0, errors.Errorf("counting %s rows: %w", table, err)
-	}
-	return count, nil
-}
-
-// countRows counts every row in table.
-func countRows(ctx context.Context, db *sql.DB, table string) (int, error) {
-	var count int
-	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&count)
-	if err != nil {
-		return 0, errors.Errorf("counting %s rows: %w", table, err)
-	}
-	return count, nil
+// recoveryCounts is the Sqlair representation of the aggregate query results.
+type recoveryCounts struct {
+	MachinesNotAlive     int `db:"machines"`
+	ApplicationsNotAlive int `db:"applications"`
+	UnitsNotAlive        int `db:"units"`
+	PendingRemovals      int `db:"removals"`
 }

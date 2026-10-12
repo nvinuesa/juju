@@ -1,7 +1,7 @@
 // Copyright 2026 Canonical Ltd.
 // Licensed under the AGPLv3, see LICENCE file for details.
 
-package state
+package service
 
 import (
 	"os"
@@ -57,7 +57,7 @@ func (s *tablesSuite) TestTablePoliciesCoverSchema(c *tc.C) {
 			name:          "controller",
 			patterns:      []string{"domain/schema/controller/sql/*.sql"},
 			policies:      controllerTablePolicies,
-			specialTables: []string{"controller", "object_store_placement"},
+			specialTables: []string{"object_store_placement"},
 		},
 		{
 			name:          "model",
@@ -95,10 +95,10 @@ func (s *tablesSuite) TestTablePoliciesCoverSchema(c *tc.C) {
 	}
 }
 
-// TestUnknownTableIsPolicyReplace pins the loader's default behaviour:
-// the zero tablePolicy value is policyReplace, so an unclassified table
-// that reaches the load is deleted-then-inserted from the archive.
-func (s *tablesSuite) TestUnknownTableIsPolicyReplace(c *tc.C) {
+// TestOrdinaryTablesAreReplaced pins the default for known schema tables.
+// Unknown archive tables are rejected by generated decoding before policy runs.
+func (s *tablesSuite) TestOrdinaryTablesAreReplaced(c *tc.C) {
 	c.Check(tablePolicy(0), tc.Equals, policyReplace)
-	c.Check(controllerTablePolicies["no-such-table"], tc.Equals, policyReplace)
+	c.Check(controllerTablePolicies["cloud"], tc.Equals, policyReplace)
+	c.Check(modelTablePolicies["machine"], tc.Equals, policyReplace)
 }

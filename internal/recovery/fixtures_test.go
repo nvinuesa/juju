@@ -313,7 +313,7 @@ func withManifest(c *tc.C, files map[string][]byte) map[string][]byte {
 	return files
 }
 
-// rootTar renders the archive's root.tar bundle with one object blob.
+// rootTar renders the archive's root.tar file with one object blob.
 func rootTar(c *tc.C) []byte {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
