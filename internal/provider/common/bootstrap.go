@@ -451,6 +451,13 @@ var FinishBootstrap = func(
 	}
 	defer cleanup()
 
+	if instanceConfig.Initialisation != nil {
+		for _, file := range instanceConfig.Initialisation.Files {
+			if err := uploadInitialisationFile(ctx, client, addr, file, sshOptions); err != nil {
+				return err
+			}
+		}
+	}
 	return ConfigureMachine(ctx, client, addr, instanceConfig, sshOptions)
 }
 

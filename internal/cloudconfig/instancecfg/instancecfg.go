@@ -50,6 +50,9 @@ var logger = internallogger.GetLogger("juju.cloudconfig.instancecfg")
 
 // InstanceConfig represents initialization information for a new juju instance.
 type InstanceConfig struct {
+	// ProvisioningRecovery reuses source model resources while creating the
+	// replacement instance. It is independent of the installed agent mode.
+	ProvisioningRecovery bool
 	// Tags is a set of tags to set on the instance, if supported. This
 	// should be populated using the InstanceTags method in this package.
 	Tags map[string]string
@@ -57,6 +60,9 @@ type InstanceConfig struct {
 	// Bootstrap contains bootstrap-specific configuration. If this is set,
 	// Controller must also be set.
 	Bootstrap *BootstrapConfig
+
+	// Initialisation supplies a separate controller initialisation workflow.
+	Initialisation *ControllerInitialisation
 
 	// Controller contains configuration for the controller
 	// used to manage this new instance.
