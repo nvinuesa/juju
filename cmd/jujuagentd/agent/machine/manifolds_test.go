@@ -12,10 +12,12 @@ import (
 	"github.com/juju/names/v6"
 	"github.com/juju/tc"
 	"github.com/juju/worker/v5/dependency"
+	dt "github.com/juju/worker/v5/dependency/testing"
 	"github.com/juju/worker/v5/workertest"
 
 	"github.com/juju/juju/agent"
 	"github.com/juju/juju/agent/agenttest"
+	"github.com/juju/juju/agent/engine"
 	"github.com/juju/juju/api"
 	"github.com/juju/juju/cmd/jujuagentd/agent/machine"
 	"github.com/juju/juju/controller"
@@ -66,6 +68,39 @@ func (s *ManifoldsSuite) TestDependencyGraphsAreAcyclic(c *tc.C) {
 	}
 }
 
+func (s *ManifoldsSuite) TestRecoveryWorkerSelection(c *tc.C) {
+	for _, isRecovery := range []bool{false, true} {
+		config := machine.ManifoldsConfig{IsRecovery: isRecovery, Agent: &mockAgent{}, PreUpgradeSteps: preUpgradeSteps}
+		for _, manifolds := range []dependency.Manifolds{machine.IAASManifolds(config), machine.K8sManifolds(config)} {
+			c.Assert(dependency.Validate(manifolds), tc.ErrorIsNil)
+			c.Check(slices.Contains(manifolds["recovery"].Inputs, "is-bootstrap-gate"), tc.IsTrue)
+			c.Check(slices.Contains(manifolds["recovery"].Inputs, "http-client"), tc.IsFalse)
+			for _, branch := range []struct {
+				name, flag string
+				enabled    bool
+			}{
+				{"bootstrap", "is-not-recovery-flag", !isRecovery},
+				{"recovery", "is-recovery-flag", isRecovery},
+			} {
+				flagWorker, err := manifolds[branch.flag].Start(c.Context(), dt.StubGetter(nil))
+				c.Assert(err, tc.ErrorIsNil)
+				defer workertest.CleanKill(c, flagWorker)
+				var flag engine.Flag
+				c.Assert(manifolds[branch.flag].Output(flagWorker, &flag), tc.ErrorIsNil)
+				c.Check(flag.Check(), tc.Equals, branch.enabled)
+				// Only the mode flag is supplied: no other dependency may
+				// be acquired by the disabled operation.
+				_, err = manifolds[branch.name].Start(c.Context(), dt.StubGetter(map[string]any{branch.flag: flag}))
+				if branch.enabled {
+					c.Check(err, tc.ErrorMatches, "unexpected resource name: controller-proxy-ready-flag")
+				} else {
+					c.Check(err, tc.ErrorIs, dependency.ErrMissing)
+				}
+			}
+		}
+	}
+}
+
 func (*ManifoldsSuite) assertStartFuncs(c *tc.C, manifolds dependency.Manifolds) {
 	for name, manifold := range manifolds {
 		c.Logf("checking %q manifold", name)
@@ -93,6 +128,9 @@ func (s *ManifoldsSuite) TestManifoldNamesIAAS(c *tc.C) {
 			"audit-config-updater",
 			"backup-creator",
 			"bootstrap",
+			"recovery",
+			"is-recovery-flag",
+			"is-not-recovery-flag",
 			"broker-tracker",
 			"certificate-updater",
 			"certificate-watcher",
@@ -209,6 +247,9 @@ func (s *ManifoldsSuite) TestManifoldNamesK8s(c *tc.C) {
 			"backup-creator",
 			"bootstrap",
 			"certificate-updater",
+			"recovery",
+			"is-recovery-flag",
+			"is-not-recovery-flag",
 			"certificate-watcher",
 			"change-stream-pruner",
 			"change-stream",
@@ -322,6 +363,9 @@ func (s *ManifoldsSuite) TestMigrationGuardsUsed(c *tc.C) {
 		"audit-config-updater",
 		"backup-creator",
 		"bootstrap",
+		"recovery",
+		"is-recovery-flag",
+		"is-not-recovery-flag",
 		"certificate-updater",
 		"certificate-watcher",
 		"change-stream-pruner",
@@ -463,6 +507,7 @@ func (*ManifoldsSuite) TestSingularGuardsUsed(c *tc.C) {
 		"api-server",
 		"audit-config-updater",
 		"bootstrap",
+		"recovery",
 		"certificate-updater",
 		"change-stream",
 		"control-socket",
@@ -490,6 +535,7 @@ func (*ManifoldsSuite) TestSingularGuardsUsed(c *tc.C) {
 	dbUpgradedWorkers := set.NewStrings(
 		"audit-config-updater",
 		"bootstrap",
+		"recovery",
 		"control-socket",
 		"object-store",
 		"object-store-s3-caller",
@@ -1281,6 +1327,52 @@ var expectedMachineManifoldsWithDependenciesIAAS = map[string][]string{
 		"upgrade-steps-flag",
 		"upgrade-steps-gate",
 	},
+	"is-recovery-flag":     {},
+	"is-not-recovery-flag": {},
+	"recovery": {
+		"agent",
+		"api-caller",
+		"api-config-watcher",
+		"api-remote-caller",
+		"change-stream",
+		"controller-agent-config",
+		"controller-log-sink",
+		"controller-proxy-ready-flag",
+		"controller-proxy-ready-gate",
+		"controller-trace",
+		"db-accessor",
+		"domain-services",
+		"file-notify-watcher",
+		"http-client",
+		"is-bootstrap-gate",
+		"is-controller-flag",
+		"is-not-controller-flag",
+		"lease-manager",
+		"controller-log-router",
+		"log-router",
+		"log-sink",
+		"migration-fortress",
+		"migration-inactive-flag",
+		"non-controller-log-sink",
+		"object-store",
+		"object-store-facade",
+		"object-store-fortress",
+		"object-store-s3-caller",
+		"object-store-services",
+		"provider-services",
+		"provider-tracker",
+		"query-logger",
+		"state-config-watcher",
+		"storage-registry",
+		"trace-services",
+		"upgrade-check-flag",
+		"upgrade-check-gate",
+		"upgrade-database-flag",
+		"upgrade-database-gate",
+		"upgrade-steps-flag",
+		"upgrade-steps-gate",
+		"is-recovery-flag",
+	},
 	"bootstrap": {
 		"agent",
 		"api-caller",
@@ -1323,6 +1415,7 @@ var expectedMachineManifoldsWithDependenciesIAAS = map[string][]string{
 		"upgrade-database-gate",
 		"upgrade-steps-flag",
 		"upgrade-steps-gate",
+		"is-not-recovery-flag",
 	},
 	"broker-tracker": {
 		"agent",
@@ -3040,6 +3133,52 @@ var expectedMachineManifoldsWithDependenciesK8s = map[string][]string{
 		"upgrade-steps-flag",
 		"upgrade-steps-gate",
 	},
+	"is-recovery-flag":     {},
+	"is-not-recovery-flag": {},
+	"recovery": {
+		"agent",
+		"api-caller",
+		"api-config-watcher",
+		"api-remote-caller",
+		"change-stream",
+		"controller-agent-config",
+		"controller-log-sink",
+		"controller-proxy-ready-flag",
+		"controller-proxy-ready-gate",
+		"controller-trace",
+		"db-accessor",
+		"domain-services",
+		"file-notify-watcher",
+		"http-client",
+		"is-bootstrap-gate",
+		"is-controller-flag",
+		"is-not-controller-flag",
+		"lease-manager",
+		"controller-log-router",
+		"log-router",
+		"log-sink",
+		"migration-fortress",
+		"migration-inactive-flag",
+		"non-controller-log-sink",
+		"object-store",
+		"object-store-facade",
+		"object-store-fortress",
+		"object-store-s3-caller",
+		"object-store-services",
+		"provider-services",
+		"provider-tracker",
+		"query-logger",
+		"state-config-watcher",
+		"storage-registry",
+		"trace-services",
+		"upgrade-check-flag",
+		"upgrade-check-gate",
+		"upgrade-database-flag",
+		"upgrade-database-gate",
+		"upgrade-steps-flag",
+		"upgrade-steps-gate",
+		"is-recovery-flag",
+	},
 	"bootstrap": {
 		"agent",
 		"api-caller",
@@ -3082,6 +3221,7 @@ var expectedMachineManifoldsWithDependenciesK8s = map[string][]string{
 		"upgrade-database-gate",
 		"upgrade-steps-flag",
 		"upgrade-steps-gate",
+		"is-not-recovery-flag",
 	},
 	"certificate-watcher": {
 		"agent",
