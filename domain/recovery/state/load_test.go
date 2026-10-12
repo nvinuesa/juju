@@ -502,7 +502,7 @@ func (s *loadSuite) TestLoadControllerDump(c *tc.C) {
 	}
 	c.Assert(rows.Err(), tc.ErrorIsNil)
 	c.Check(placements, tc.DeepEquals, map[string]string{
-		sourceBlobUUID: "bootstrap-node",
+		sourceBlobUUID: "7",
 	})
 }
 
@@ -612,6 +612,7 @@ func (s *loadSuite) TestPatchControllerMachine(c *tc.C) {
 		DisplayName: "replacement-display",
 		Arch:        "amd64",
 		MemMB:       8192,
+		Nonce:       "replacement-nonce",
 	})
 	c.Assert(err, tc.ErrorIsNil)
 
@@ -625,6 +626,9 @@ func (s *loadSuite) TestPatchControllerMachine(c *tc.C) {
 	c.Check(displayName, tc.Equals, "replacement-display")
 	c.Check(arch, tc.Equals, "amd64")
 	c.Check(mem, tc.Equals, int64(8192))
+	var nonce string
+	c.Assert(db.QueryRow("SELECT nonce FROM machine WHERE name = '0'").Scan(&nonce), tc.ErrorIsNil)
+	c.Check(nonce, tc.Equals, "replacement-nonce")
 }
 
 func (s *loadSuite) TestPatchControllerMachineMissing(c *tc.C) {
@@ -869,7 +873,7 @@ func (s *loadSuite) modelState(c *tc.C) *state.State {
 
 func (s *loadSuite) recoveryService(c *tc.C) *service.Service {
 	svc, err := service.NewService(state.NewState(s.TxnRunnerFactory()),
-		func(context.Context, string) (service.State, error) { return s.modelState(c), nil }, "bootstrap-node")
+		func(context.Context, string) (service.State, error) { return s.modelState(c), nil }, "7")
 	c.Assert(err, tc.ErrorIsNil)
 	return svc
 }
@@ -881,3 +885,19 @@ type testDump struct {
 }
 
 type testRow map[string]any
+
+func (s *loadSuite) TestModelPlacementsUseReplacementControllerID(c *tc.C) {
+	db := s.openModelDB(c, sourceModelUUID)
+	defer db.Close()
+	dump := s.modelDump()
+	dump.Tables["object_store_metadata"] = []testRow{{
+		"uuid": sourceBlobUUID, "sha_256": "aa", "sha_384": "bb", "size": int64(1)}}
+	dump.Tables["object_store_placement"] = []testRow{{"uuid": sourceBlobUUID, "node_id": "old-node"}}
+	c.Assert(s.recoveryService(c).LoadModelDump(c.Context(), coremodel.UUID(sourceModelUUID), dumpYAML(c, dump)), tc.ErrorIsNil)
+
+	// Archived placements reference the source's nodes; they rebuild onto
+	// the replacement controller ID the state was constructed with.
+	var nodeID string
+	c.Assert(db.QueryRow("SELECT node_id FROM object_store_placement WHERE uuid = ?", sourceBlobUUID).Scan(&nodeID), tc.ErrorIsNil)
+	c.Check(nodeID, tc.Equals, "7")
+}

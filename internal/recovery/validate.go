@@ -276,9 +276,9 @@ func buildArchiveInfo(ctx context.Context, logger corelogger.Logger, meta *coreb
 
 	var modelDump struct {
 		Payload struct {
-			Machines              []domainrecovery.Row                `yaml:"machine"`
-			Units                 []domainrecovery.Row                `yaml:"unit"`
-			MachineParents        []domainrecovery.Row                `yaml:"machine_parent"`
+			Machines              []exportmodel.Machine               `yaml:"machine"`
+			Units                 []exportmodel.Unit                  `yaml:"unit"`
+			MachineParents        []exportmodel.MachineParent         `yaml:"machine_parent"`
 			ModelConfig           []struct{ Key, Value string }       `yaml:"model_config"`
 			StoragePool           []exportmodel.StoragePool           `yaml:"storage_pool"`
 			StoragePoolAttribute  []exportmodel.StoragePoolAttribute  `yaml:"storage_pool_attribute"`
@@ -303,14 +303,12 @@ func buildArchiveInfo(ctx context.Context, logger corelogger.Logger, meta *coreb
 	if err := yaml.NewDecoder(contextReader{ctx: ctx, reader: file}).Decode(&modelDump); err != nil {
 		return nil, errors.Errorf("parsing controller model configuration: %w", err)
 	}
-	controllerRows := make([]domainrecovery.Row, len(modelDump.Payload.ApplicationController))
-	for i, row := range modelDump.Payload.ApplicationController {
-		controllerRows[i] = domainrecovery.Row{"application_uuid": row.ApplicationUUID}
+	info.ControllerTopology = &domainrecovery.ControllerTopology{
+		ApplicationController: modelDump.Payload.ApplicationController,
+		Machines:              modelDump.Payload.Machines,
+		Units:                 modelDump.Payload.Units,
+		MachineParents:        modelDump.Payload.MachineParents,
 	}
-	info.ControllerTopology = &domainrecovery.Dump{Tables: map[string][]domainrecovery.Row{
-		"application_controller": controllerRows, "machine": modelDump.Payload.Machines,
-		"unit": modelDump.Payload.Units, "machine_parent": modelDump.Payload.MachineParents,
-	}}
 	info.Constraints, err = sourceConstraints(info, modelDump.Payload.Constraint,
 		modelDump.Payload.ConstraintSpace, modelDump.Payload.ConstraintTag, modelDump.Payload.ConstraintZone,
 		modelDump.Payload.MachineConstraint, modelDump.Payload.MachineCloudInstance, modelDump.Payload.ApplicationConstraint)

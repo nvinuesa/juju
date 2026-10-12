@@ -432,6 +432,7 @@ func (s *loadSuite) TestLoadStageEndToEnd(c *tc.C) {
 		ExpectedSHA256:      sum,
 		DataDir:             dataDir,
 		ControllerModelUUID: testControllerModelUUID,
+		ControllerID:        "0",
 		MachinePatch: &domainrecovery.MachinePatch{
 			MachineName: "0",
 			InstanceID:  "replacement-instance",
@@ -497,6 +498,7 @@ func (s *loadSuite) TestLoadStageHAMachineSelection(c *tc.C) {
 		ExpectedSHA256:      sum,
 		DataDir:             dataDir,
 		ControllerModelUUID: testControllerModelUUID,
+		ControllerID:        "1",
 		MachinePatch: &domainrecovery.MachinePatch{
 			InstanceID: "replacement-instance",
 		},
@@ -554,6 +556,7 @@ func (s *loadSuite) TestLoadStageHAWorkloadMachineNotDead(c *tc.C) {
 		ExpectedSHA256:      sum,
 		DataDir:             c.MkDir(),
 		ControllerModelUUID: testControllerModelUUID,
+		ControllerID:        "1",
 		MachinePatch: &domainrecovery.MachinePatch{
 			InstanceID: "replacement-instance",
 		},
@@ -604,7 +607,9 @@ func (s *loadSuite) TestLoadStageCleansUpStagingOnFailure(c *tc.C) {
 		}),
 		ArchivePath:         archivePath,
 		ExpectedSHA256:      sum,
+		DataDir:             c.MkDir(),
 		ControllerModelUUID: testControllerModelUUID,
+		ControllerID:        "0",
 		Logger:              loggertesting.WrapCheckLog(c),
 	})
 	c.Check(err, tc.ErrorIs, openErr)

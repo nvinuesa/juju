@@ -26,6 +26,9 @@ type State interface {
 	// Patches complete their writes before returning. Failure rolls back.
 	PatchControllerMachine(context.Context, domainrecovery.MachinePatch) error
 	PatchControllerUnitAddresses(context.Context, domainrecovery.ControllerUnitAddressPatch) error
+	// Credential patches rebind archived authentication to the replacement's.
+	PatchControllerCredential(context.Context, string, string, map[string]string) error
+	PatchCloudCredential(context.Context, string, string, map[string]string) error
 	// Summary queries return persisted observations after recovery patches.
 	GetOtherControllerMachines(context.Context, string) ([]string, error)
 	GetRecoveryCounts(context.Context) (domainrecovery.RecoveryCounts, error)
@@ -74,22 +77,38 @@ func (s *Service) GetObjectInventory(ctx context.Context, models []coremodel.UUI
 	return result, nil
 }
 
-// PatchControllerMachine resolves the live archived machine and applies the
-// replacement's physical facts, returning the chosen machine name.
+// PatchControllerMachine applies the replacement's physical facts to the
+// archived controller machine, returning the chosen machine name. A preset
+// patch name is honoured; otherwise the live archived machine is resolved
+// from the loaded dump.
 func (s *Service) PatchControllerMachine(ctx context.Context, model coremodel.UUID, patch domainrecovery.MachinePatch) (string, error) {
 	st, err := s.modelState(ctx, model)
 	if err != nil {
 		return "", errors.Capture(err)
 	}
-	name, err := st.GetControllerMachineName(ctx)
-	if err != nil {
-		return "", errors.Capture(err)
+	name := patch.MachineName
+	if name == "" {
+		if name, err = st.GetControllerMachineName(ctx); err != nil {
+			return "", errors.Capture(err)
+		}
 	}
 	patch.MachineName = name
 	if err := st.PatchControllerMachine(ctx, patch); err != nil {
 		return "", errors.Errorf("patching controller machine %q: %w", name, err)
 	}
 	return name, nil
+}
+
+// PatchControllerCredential rebinds the controller model credential's
+// authentication, retaining its archived identity.
+func (s *Service) PatchControllerCredential(ctx context.Context, modelUUID, authType string, attributes map[string]string) error {
+	return errors.Capture(s.controller.PatchControllerCredential(ctx, modelUUID, authType, attributes))
+}
+
+// PatchCloudCredential rebinds the named archived credential's
+// authentication, retaining its identity.
+func (s *Service) PatchCloudCredential(ctx context.Context, credentialUUID, authType string, attributes map[string]string) error {
+	return errors.Capture(s.controller.PatchCloudCredential(ctx, credentialUUID, authType, attributes))
 }
 
 // PatchControllerUnitAddresses prepares identifiers before persistence starts.
