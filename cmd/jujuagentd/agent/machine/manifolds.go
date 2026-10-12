@@ -111,6 +111,7 @@ import (
 	"github.com/juju/juju/internal/worker/proxyupdater"
 	"github.com/juju/juju/internal/worker/querylogger"
 	"github.com/juju/juju/internal/worker/reboot"
+	"github.com/juju/juju/internal/worker/recovery"
 	"github.com/juju/juju/internal/worker/secretbackendrotate"
 	"github.com/juju/juju/internal/worker/singular"
 	"github.com/juju/juju/internal/worker/sshkeyupdater"
@@ -136,6 +137,9 @@ import (
 
 // ManifoldsConfig allows specialisation of the result of Manifolds.
 type ManifoldsConfig struct {
+	// IsRecovery is read from the mode file on the provisioned controller.
+	IsRecovery bool
+
 	// AgentName is the name of the machine agent, like "machine-12".
 	// This will never change during the execution of an agent, and
 	// is used to provide this as config into a worker rather than
@@ -393,6 +397,16 @@ func commonManifolds(config ManifoldsConfig) dependency.Manifolds {
 		// The agent manifold references the enclosing agent, and is the
 		// foundation stone on which most other manifolds ultimately depend.
 		agentName: agent.Manifold(config.Agent),
+
+		// Recovery is provisioned provenance, not a mutable database flag.
+		isRecoveryFlagName:    staticFlagManifold(config.IsRecovery),
+		isNotRecoveryFlagName: staticFlagManifold(!config.IsRecovery),
+		recoveryName: ifRecovery(ifControllerProxyReady(ifDatabaseUpgradeComplete(recovery.Manifold(recovery.ManifoldConfig{
+			GateName: isBootstrapGateName, DomainServicesName: domainServicesName,
+			ProviderFactoryName: providerTrackerName, DataDir: config.DataDir,
+			APIPort: config.APIPort, AgentPassword: config.AgentPassword,
+			ControllerID: config.ControllerID,
+		})))),
 
 		// The upgrade database gate is used to coordinate workers that should
 		// not do anything until the upgrade-database worker has finished
@@ -1224,7 +1238,7 @@ func commonManifolds(config ManifoldsConfig) dependency.Manifolds {
 func IAASManifolds(config ManifoldsConfig) dependency.Manifolds {
 	manifolds := dependency.Manifolds{
 		// Bootstrap worker is responsible for setting up the initial machine.
-		bootstrapName: ifControllerProxyReady(ifDatabaseUpgradeComplete(bootstrap.Manifold(bootstrap.ManifoldConfig{
+		bootstrapName: ifNotRecovery(ifControllerProxyReady(ifDatabaseUpgradeComplete(bootstrap.Manifold(bootstrap.ManifoldConfig{
 			DomainServicesName:      domainServicesName,
 			HTTPClientName:          httpClientName,
 			BootstrapGateName:       isBootstrapGateName,
@@ -1245,7 +1259,7 @@ func IAASManifolds(config ManifoldsConfig) dependency.Manifolds {
 			BootstrapAddressFinderGetter:  bootstrap.IAASAddressFinder,
 			AgentFinalizer:                bootstrap.IAASAgentFinalizer,
 			RemoveBootstrapSSHKeys:        bootstrap.DeleteBootstrapSSHKeys,
-		}))),
+		})))),
 
 		// The controller proxy config updater uses local domain services
 		// instead of calling back through the controller API server.
@@ -1464,7 +1478,7 @@ func IAASManifolds(config ManifoldsConfig) dependency.Manifolds {
 func K8sManifolds(config ManifoldsConfig) dependency.Manifolds {
 	return mergeManifolds(config, dependency.Manifolds{
 		// Bootstrap worker is responsible for setting up the initial machine.
-		bootstrapName: ifControllerProxyReady(ifDatabaseUpgradeComplete(bootstrap.Manifold(bootstrap.ManifoldConfig{
+		bootstrapName: ifNotRecovery(ifControllerProxyReady(ifDatabaseUpgradeComplete(bootstrap.Manifold(bootstrap.ManifoldConfig{
 			DomainServicesName:      domainServicesName,
 			HTTPClientName:          httpClientName,
 			BootstrapGateName:       isBootstrapGateName,
@@ -1485,7 +1499,7 @@ func K8sManifolds(config ManifoldsConfig) dependency.Manifolds {
 			BootstrapAddressFinderGetter:  bootstrap.K8sAddressFinder,
 			AgentFinalizer:                bootstrap.K8sAgentFinalizer,
 			RemoveBootstrapSSHKeys:        func([]string) error { return nil },
-		}))),
+		})))),
 
 		// The controller proxy config updater uses local domain services
 		// instead of calling back through the controller API server.
@@ -1566,9 +1580,29 @@ func K8sManifolds(config ManifoldsConfig) dependency.Manifolds {
 	})
 }
 
+const (
+	recoveryName          = "recovery"
+	isRecoveryFlagName    = "is-recovery-flag"
+	isNotRecoveryFlagName = "is-not-recovery-flag"
+)
+
+// Keep selection outermost so a disabled operation acquires no dependencies.
+var ifRecovery = engine.Housing{Flags: []string{isRecoveryFlagName}}.Decorate
+var ifNotRecovery = engine.Housing{Flags: []string{isNotRecoveryFlagName}}.Decorate
+
+func staticFlagManifold(value bool) dependency.Manifold {
+	return dependency.Manifold{
+		Start: func(context.Context, dependency.Getter) (worker.Worker, error) {
+			return engine.NewStaticFlagWorker(value), nil
+		},
+		Output: engine.FlagOutput,
+	}
+}
+
 func mergeManifolds(config ManifoldsConfig, manifolds dependency.Manifolds) dependency.Manifolds {
 	result := commonManifolds(config)
 	maps.Copy(result, manifolds)
+
 	return result
 }
 
