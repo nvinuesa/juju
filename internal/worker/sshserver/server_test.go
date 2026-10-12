@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/canonical/gomock/gomock"
+	"github.com/juju/clock"
 	"github.com/juju/errors"
 	"github.com/juju/tc"
 	"github.com/juju/worker/v5/workertest"
@@ -35,6 +36,7 @@ type sshServerSuite struct {
 	authenticator *MockAuthenticator
 	authorizer    *MockAuthorizer
 	proxyFactory  *MockProxyFactory
+	serverFactory *TerminatingServerFactory
 	proxyHandlers *MockProxyHandlers
 }
 
@@ -63,6 +65,11 @@ func (s *sshServerSuite) SetUpMocks(c *tc.C) *gomock.Controller {
 	s.authorizer = NewMockAuthorizer(ctrl)
 	s.proxyFactory = NewMockProxyFactory(ctrl)
 	s.proxyHandlers = NewMockProxyHandlers(ctrl)
+	s.serverFactory = newTerminatingServerFactory(
+		s.proxyFactory,
+		stubSSHService{jumpHostKey: testHostKey, virtualHostKey: jujutesting.SSHServerHostKey},
+		clock.WallClock,
+	)
 	return ctrl
 }
 
@@ -77,8 +84,9 @@ func (s *sshServerSuite) newServer(c *tc.C) (*ServerWorker, *bufconn.Listener, f
 		MaxConcurrentConnections: maxConcurrentConnections,
 		Authenticator:            s.authenticator,
 		Authorizer:               s.authorizer,
-		ProxyFactory:             s.proxyFactory,
+		ServerFactory:            s.serverFactory,
 		Metrics:                  NewMetricsCollector(),
+		Clock:                    clock.WallClock,
 	}
 
 	worker, err := NewServerWorker(cfg)
@@ -149,11 +157,12 @@ func (s *sshServerSuite) testSSHServerSession(c *tc.C, auth gossh.AuthMethod, us
 	destination, err := virtualhostname.Parse(testVirtualHostname)
 	c.Assert(err, tc.ErrorIsNil)
 
-	// Authorize the user and setup the proxy factory and handlers.
+	// Authorize the user and setup the proxy factory and handlers. The handler
+	// expectations must precede server construction, which consumes them.
 	s.authorizer.EXPECT().Authorize(gomock.Any(), destination).Return(true, nil)
-	s.proxyFactory.EXPECT().New(destination).Return(s.proxyHandlers, nil)
 	s.proxyHandlers.EXPECT().DirectTCPIPHandler().Return(rejectDirectTCPIP)
 	s.proxyHandlers.EXPECT().SFTPHandler().Return(rejectSFTP)
+	s.proxyFactory.EXPECT().New(destination).Return(s.proxyHandlers, nil)
 
 	sessionOutput := fmt.Sprintf("Your final destination is: %s\n", testVirtualHostname)
 	s.proxyHandlers.EXPECT().SessionHandler(gomock.Any()).Do(func(session ssh.Session) {
@@ -199,7 +208,7 @@ func (s *sshServerSuite) TestValidate(c *tc.C) {
 	cfg = newServerWorkerConfig(l, "jumpHostKey", func(cfg *ServerWorkerConfig) {
 		cfg.Authenticator = s.authenticator
 		cfg.Authorizer = s.authorizer
-		cfg.ProxyFactory = s.proxyFactory
+		cfg.ServerFactory = s.serverFactory
 		cfg.Metrics = nil
 	})
 	c.Assert(cfg.Validate(), tc.ErrorMatches, ".*missing Metrics.*")
@@ -234,22 +243,28 @@ func (s *sshServerSuite) TestValidate(c *tc.C) {
 	})
 	c.Assert(cfg.Validate(), tc.ErrorIs, errors.NotValid)
 
-	// Test no ProxyFactory.
+	// Test no ServerFactory.
 	cfg = newServerWorkerConfig(l, "jumpHostKey", func(cfg *ServerWorkerConfig) {
-		cfg.ProxyFactory = nil
+		cfg.ServerFactory = nil
 	})
 	c.Assert(cfg.Validate(), tc.ErrorIs, errors.NotValid)
+
+	// Test no Clock.
+	cfg = newServerWorkerConfig(l, "jumpHostKey", func(cfg *ServerWorkerConfig) {
+		cfg.Authenticator = s.authenticator
+		cfg.Authorizer = s.authorizer
+		cfg.ServerFactory = s.serverFactory
+		cfg.Metrics = NewMetricsCollector()
+	})
+	c.Assert(cfg.Validate(), tc.ErrorMatches, ".*missing Clock.*")
 
 }
 
 func (s *sshServerSuite) TestSSHServerSession(c *tc.C) {
 	s.SetUpMocks(c)
 
-	// Test password authentication.
-	s.authenticator.EXPECT().PasswordAuthentication(gomock.Any(), "test-password").Return(true, nil)
-	s.testSSHServerSession(c, gossh.Password("test-password"), "test-user")
-
-	// Test public key authentication.
+	// Password authentication is no longer supported. Only public key
+	// authentication grants access to the jump server.
 	s.authenticator.EXPECT().PublicKeyAuthentication(gomock.Any(), s.userSigner.PublicKey()).Return(true, nil)
 	s.testSSHServerSession(c, gossh.PublicKeys(s.userSigner), "test-user")
 }
@@ -258,12 +273,13 @@ func (s *sshServerSuite) TestJumpServerAuthenticationForbidden(c *tc.C) {
 	s.SetUpMocks(c)
 
 	s.authenticator.EXPECT().PublicKeyAuthentication(gomock.Any(), s.userSigner.PublicKey()).Return(false, nil)
-	s.authenticator.EXPECT().PasswordAuthentication(gomock.Any(), "password").Return(false, nil)
 
 	_, listener, cleanup := s.newServer(c)
 	defer cleanup()
 	err := dialSSHServerWithError(c, listener, "alice", gossh.PublicKeys(s.userSigner))
 	c.Check(err, tc.ErrorMatches, ".*unable to authenticate.*")
+	// Password authentication is rejected outright, without consulting the
+	// authenticator.
 	err = dialSSHServerWithError(c, listener, "alice", gossh.Password("password"))
 	c.Check(err, tc.ErrorMatches, ".*unable to authenticate.*")
 }
@@ -272,7 +288,6 @@ func (s *sshServerSuite) TestJumpServerAuthenticationRejectErrors(c *tc.C) {
 	s.SetUpMocks(c)
 
 	s.authenticator.EXPECT().PublicKeyAuthentication(gomock.Any(), s.userSigner.PublicKey()).Return(false, errors.New("invalid key"))
-	s.authenticator.EXPECT().PasswordAuthentication(gomock.Any(), "password").Return(false, errors.New("invalid password"))
 
 	_, listener, cleanup := s.newServer(c)
 	defer cleanup()
@@ -295,7 +310,7 @@ func (s *sshServerSuite) TestTerminatingSSHServerReportsFactoryError(c *tc.C) {
 	defer cleanup()
 	client := dialSSHServer(c, listener, "alice", gossh.PublicKeys(s.userSigner))
 	_, err = client.Dial("tcp", fmt.Sprintf("%s:0", testVirtualHostname))
-	c.Check(err, tc.ErrorMatches, ".*failed to create embedded server: factory failed.*")
+	c.Check(err, tc.ErrorMatches, ".*failed to resolve destination: factory failed.*")
 }
 
 func (s *sshServerSuite) TestServerRejectsUnauthorizedDestination(c *tc.C) {
@@ -333,8 +348,9 @@ func (s *sshServerSuite) TestSSHServerMaxConnections(c *tc.C) {
 		SSHService:               stubSSHService{jumpHostKey: testHostKey, virtualHostKey: testHostKey},
 		Authenticator:            s.authenticator,
 		Authorizer:               s.authorizer,
-		ProxyFactory:             s.proxyFactory,
+		ServerFactory:            s.serverFactory,
 		Metrics:                  NewMetricsCollector(),
+		Clock:                    clock.WallClock,
 	})
 	c.Assert(err, tc.ErrorIsNil)
 	defer workertest.DirtyKill(c, worker)
@@ -425,8 +441,9 @@ func (s *sshServerSuite) TestSSHWorkerReport(c *tc.C) {
 		SSHService:               stubSSHService{jumpHostKey: testHostKey, virtualHostKey: testHostKey},
 		Authenticator:            s.authenticator,
 		Authorizer:               s.authorizer,
-		ProxyFactory:             s.proxyFactory,
+		ServerFactory:            s.serverFactory,
 		Metrics:                  NewMetricsCollector(),
+		Clock:                    clock.WallClock,
 	})
 	c.Assert(err, tc.ErrorIsNil)
 	defer workertest.DirtyKill(c, worker)

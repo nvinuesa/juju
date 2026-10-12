@@ -338,6 +338,7 @@ func registerCommands(r commandRegistry) {
 	r.Register(newVersionCommand())
 	// Creation commands.
 	r.Register(newBootstrapCommand())
+	r.Register(newRecoveryCommand())
 	r.Register(application.NewAddRelationCommand())
 
 	// Cross model relations commands.
@@ -389,7 +390,6 @@ func registerCommands(r commandRegistry) {
 
 	// Manage backups.
 	r.Register(backups.NewCreateCommand())
-	r.Register(backups.NewDownloadCommand())
 
 	// Manage authorized ssh keys.
 	r.Register(sshkeys.NewAddKeysCommand())

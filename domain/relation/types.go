@@ -293,12 +293,36 @@ type ImportRelationArg struct {
 	Scope     charm.RelationScope
 }
 
+// ImportRelationSettingsAndUnitsArgs are the arguments for importing the
+// settings and unit scope membership of relations that already exist.
+type ImportRelationSettingsAndUnitsArgs []ImportRelationSettingsAndUnitsArg
+
+// ImportRelationSettingsAndUnitsArg is the settings and unit scope data of
+// a single relation. The relation is located by its UUID, and Key is the
+// key it must have for the data to belong to it.
+type ImportRelationSettingsAndUnitsArg struct {
+	// UUID is the UUID of the relation the data belongs to.
+	UUID corerelation.UUID
+	// Key is the key the relation must have.
+	Key corerelation.Key
+	// Endpoints hold the application settings of each endpoint of the
+	// relation, and the settings of the units in its scope.
+	Endpoints []ImportEndpoint
+}
+
 // ImportEndpoint is a data to import for a single endpoint.
 type ImportEndpoint struct {
 	// The application which is participating in this end of the relation.
 	ApplicationName string
 	// The application's endpoint name for this end of the relation.
 	EndpointName string
+	// ConsumerProxy is true when the endpoint belongs to a legacy consumer
+	// proxy application. The cross model relation import represents every
+	// additional offer connection of such an application with a freshly
+	// named synthetic application, so the endpoint is located in the
+	// relation by endpoint name, and its application and units are
+	// resolved from the relation rather than by the legacy proxy name.
+	ConsumerProxy bool
 	// UnitSettings is a map by unit name containing a map of key value pairs
 	// comprising that unit's settings.
 	UnitSettings map[string]map[string]any

@@ -28,8 +28,11 @@ func ContainsRelationEndpointApplicationName(rel description.Relation, applicati
 	return false
 }
 
-// GetUniqueRemoteConsumersNames returns the set of remote consumer applications
-// that are involved in the given remote relations.
+// GetUniqueRemoteConsumersNames returns the set of names of the remote
+// applications that are consumer proxies, being the remote applications
+// standing in for the consumers of cross model relations. The consumer
+// proxy flag is the only way to tell the two sides of a cross model
+// relation apart, so a remote application without it is an offerer.
 func GetUniqueRemoteConsumersNames(remoteApps []description.RemoteApplication) set.Strings {
 	// If there are no remote applications, then there can't be any remote
 	// relations.
@@ -142,6 +145,45 @@ func UniqueRemoteOfferApplications(remoteApps []description.RemoteApplication) (
 	}
 
 	return unique, nil
+}
+
+// RewriteUnitSettings re-keys unit settings from the old application name
+// onto the new one using RewriteUnitName. Settings belonging to other
+// applications pass through unchanged. The input map is not modified;
+// the per-unit settings maps are shared with the result.
+func RewriteUnitSettings(
+	settings map[string]map[string]any,
+	oldApplicationName, newApplicationName string,
+) (map[string]map[string]any, error) {
+	out := make(map[string]map[string]any, len(settings))
+	for unitName, unitSettings := range settings {
+		rewritten, err := RewriteUnitName(
+			unitName, oldApplicationName, newApplicationName)
+		if err != nil {
+			return nil, err
+		}
+		out[rewritten] = unitSettings
+	}
+	return out, nil
+}
+
+// RewriteUnitNames rewrites unit names from the old application name onto
+// the new one using RewriteUnitName, preserving their order. Names belonging
+// to other applications pass through unchanged. The input slice is not modified.
+func RewriteUnitNames(
+	unitNames []string,
+	oldApplicationName, newApplicationName string,
+) ([]string, error) {
+	out := make([]string, len(unitNames))
+	for i, unitName := range unitNames {
+		rewritten, err := RewriteUnitName(
+			unitName, oldApplicationName, newApplicationName)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = rewritten
+	}
+	return out, nil
 }
 
 // RewriteUnitName rewrites a unit name belonging to the old application

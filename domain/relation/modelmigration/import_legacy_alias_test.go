@@ -77,7 +77,7 @@ func (s *importSuite) TestImportLegacyAliasPreservesRelationIdentityAndUnitSetti
 	c.Assert(err, tc.ErrorIsNil)
 	const token = "6049aa01-76c9-462d-8440-964a6e26aac2"
 	arg, err := (&importOperation{}).createRemoteImportArg(r, offerer,
-		[]relationRemoteEntity{{RelationKey: key, RelationUUID: token}},
+		[]domainmodelmigration.RelationRemoteEntity{{RelationKey: key, RelationUUID: token}},
 	)
 	c.Assert(err, tc.ErrorIsNil)
 	c.Check(arg.ID, tc.Equals, 42)
@@ -113,7 +113,7 @@ func (s *importSuite) TestImportLegacyAliasResolvesOwnTokenPerRelation(c *tc.C) 
 	c.Assert(err, tc.ErrorIsNil)
 	keyAlias, err := corerelation.NewKeyFromString(relAlias.Key())
 	c.Assert(err, tc.ErrorIsNil)
-	remoteEntities := []relationRemoteEntity{
+	remoteEntities := []domainmodelmigration.RelationRemoteEntity{
 		{RelationKey: keyPrimary, RelationUUID: tokenPrimary},
 		{RelationKey: keyAlias, RelationUUID: tokenAlias},
 	}
@@ -174,7 +174,7 @@ func (s *importSuite) TestImportLegacyAliasRemapsOnlyAliasUnitSettings(c *tc.C) 
 	c.Assert(err, tc.ErrorIsNil)
 	const token = "6049aa01-76c9-462d-8440-964a6e26aac2"
 	arg, err := (&importOperation{}).createRemoteImportArg(r, offerer,
-		[]relationRemoteEntity{{RelationKey: key, RelationUUID: token}},
+		[]domainmodelmigration.RelationRemoteEntity{{RelationKey: key, RelationUUID: token}},
 	)
 	c.Assert(err, tc.ErrorIsNil)
 	c.Assert(arg.Endpoints, tc.HasLen, 2)
@@ -314,44 +314,8 @@ func (s *importSuite) TestImportLegacyAliasInvalidRemoteEntityToken(c *tc.C) {
 	key, err := corerelation.NewKeyFromString(r.Key())
 	c.Assert(err, tc.ErrorIsNil)
 	arg, err := (&importOperation{}).createRemoteImportArg(r, offerer,
-		[]relationRemoteEntity{{RelationKey: key, RelationUUID: "not-a-uuid"}},
+		[]domainmodelmigration.RelationRemoteEntity{{RelationKey: key, RelationUUID: "not-a-uuid"}},
 	)
 	c.Assert(err, tc.ErrorIsNil)
 	c.Check(arg.UUID.String(), tc.Equals, "not-a-uuid")
-}
-
-// TestRenameUnitSettings checks the re-keying contract: only unit names whose
-// application segment matches the renamed alias are re-keyed. Unit names
-// belonging to a different application pass through unchanged, so a prefix
-// match cannot rename another application's units, and keys that are not
-// valid unit names are an error.
-func (s *importSuite) TestRenameUnitSettings(c *tc.C) {
-	settings, err := renameUnitSettings(map[string]map[string]any{
-		"second/0": {"token": "keep-me"},
-		"second/1": {"token": "and-me"},
-	}, "second", "first")
-	c.Assert(err, tc.ErrorIsNil)
-	c.Check(settings, tc.DeepEquals, map[string]map[string]any{
-		"first/0": {"token": "keep-me"},
-		"first/1": {"token": "and-me"},
-	})
-
-	settings, err = renameUnitSettings(map[string]map[string]any{
-		"secondaire/0": {"token": "other-app"},
-	}, "second", "first")
-	c.Assert(err, tc.ErrorIsNil)
-	c.Check(settings, tc.DeepEquals, map[string]map[string]any{
-		"secondaire/0": {"token": "other-app"},
-	})
-
-	// A key that is not a valid unit name is an error, rather than being
-	// passed through.
-	_, err = renameUnitSettings(map[string]map[string]any{
-		"second": {"token": "no-unit-number"},
-	}, "second", "first")
-	c.Assert(err, tc.ErrorMatches, `parsing unit name "second": invalid unit name: "second"`)
-
-	settings, err = renameUnitSettings(nil, "second", "first")
-	c.Assert(err, tc.ErrorIsNil)
-	c.Check(settings, tc.DeepEquals, map[string]map[string]any{})
 }

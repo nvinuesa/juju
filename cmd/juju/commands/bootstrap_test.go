@@ -171,7 +171,7 @@ func (s *BootstrapSuite) SetUpTest(c *tc.C) {
 	})
 
 	s.clock = testclock.NewClock(time.Now())
-	s.bootstrapCmd = bootstrapCommand{clock: s.clock}
+	s.bootstrapCmd = bootstrapCommand{controllerProvisioner: controllerProvisioner{clock: s.clock}}
 }
 
 func (s *BootstrapSuite) TearDownTest(c *tc.C) {

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/canonical/gomock/gomock"
+	"github.com/juju/clock"
 	"github.com/juju/tc"
 	"github.com/juju/worker/v5"
 	"github.com/juju/worker/v5/workertest"
@@ -53,7 +54,12 @@ func newServerWrapperWorkerConfig(
 func setMockServerDependencies(ctrl *gomock.Controller, cfg *ServerWrapperWorkerConfig) {
 	cfg.Authenticator = NewMockAuthenticator(ctrl)
 	cfg.Authorizer = NewMockAuthorizer(ctrl)
-	cfg.ProxyFactory = NewMockProxyFactory(ctrl)
+	cfg.ServerFactory = newTerminatingServerFactory(
+		NewMockProxyFactory(ctrl),
+		stubSSHService{jumpHostKey: testHostKey, virtualHostKey: testHostKey},
+		clock.WallClock,
+	)
+	cfg.Clock = clock.WallClock
 }
 
 func (s *workerSuite) TestValidate(c *tc.C) {
@@ -93,12 +99,12 @@ func (s *workerSuite) TestValidate(c *tc.C) {
 	)
 	c.Assert(cfg.Validate(), tc.ErrorMatches, ".*is required.*")
 
-	// Test no ProxyFactory.
+	// Test no ServerFactory.
 	cfg = newServerWrapperWorkerConfig(
 		c,
 		ctrl,
 		func(cfg *ServerWrapperWorkerConfig) {
-			cfg.ProxyFactory = nil
+			cfg.ServerFactory = nil
 		},
 	)
 	c.Assert(cfg.Validate(), tc.ErrorMatches, ".*is required.*")
@@ -112,6 +118,16 @@ func (s *workerSuite) TestValidate(c *tc.C) {
 		},
 	)
 	c.Assert(cfg.Validate(), tc.ErrorMatches, ".*is required.*")
+
+	// Test no Clock.
+	cfg = newServerWrapperWorkerConfig(
+		c,
+		ctrl,
+		func(cfg *ServerWrapperWorkerConfig) {
+			cfg.Clock = nil
+		},
+	)
+	c.Assert(cfg.Validate(), tc.ErrorMatches, ".*Clock is required.*")
 }
 
 func (s *workerSuite) TestSSHServerWrapperWorkerCanBeKilled(c *tc.C) {

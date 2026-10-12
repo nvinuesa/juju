@@ -5,7 +5,6 @@ package sshserver
 
 import (
 	"context"
-	"net"
 	"testing"
 
 	"github.com/canonical/gomock/gomock"
@@ -17,7 +16,6 @@ import (
 	dt "github.com/juju/worker/v5/dependency/testing"
 	"github.com/juju/worker/v5/workertest"
 	"github.com/prometheus/client_golang/prometheus"
-	gossh "golang.org/x/crypto/ssh"
 
 	"github.com/juju/juju/controller"
 	"github.com/juju/juju/core/model"
@@ -28,7 +26,6 @@ import (
 	"github.com/juju/juju/core/watcher/watchertest"
 	controllersshservice "github.com/juju/juju/domain/ssh/service/controller"
 	modelsshservice "github.com/juju/juju/domain/ssh/service/model"
-	"github.com/juju/juju/internal/jwtparser"
 	loggertesting "github.com/juju/juju/internal/logger/testing"
 	"github.com/juju/juju/internal/services"
 	internalTunneler "github.com/juju/juju/internal/sshtunneler"
@@ -131,6 +128,12 @@ func (s *manifoldSuite) TestConfigValidate(c *tc.C) {
 	})
 	c.Check(errors.Is(cfg.Validate(), errors.NotValid), tc.IsTrue)
 
+	// Missing Clock.
+	cfg = s.newManifoldConfig(c, func(cfg *ManifoldConfig) {
+		cfg.Clock = nil
+	})
+	c.Check(errors.Is(cfg.Validate(), errors.NotValid), tc.IsTrue)
+
 }
 
 func (s *manifoldSuite) TestManifoldStart(c *tc.C) {
@@ -139,9 +142,9 @@ func (s *manifoldSuite) TestManifoldStart(c *tc.C) {
 
 	// Setup the manifold
 	manifold := Manifold(ManifoldConfig{
+		Clock:                  clock.WallClock,
 		DomainServicesName:     "domain-services",
 		SSHTunnelerName:        "ssh-tunneler",
-		JWTParserName:          "jwt-parser",
 		ControllerID:           "0",
 		ControllerUUID:         "8419cd78-4993-4c3a-928e-c646226beeee",
 		NewServerWrapperWorker: NewServerWrapperWorker,
@@ -166,14 +169,13 @@ func (s *manifoldSuite) TestManifoldStart(c *tc.C) {
 	})
 
 	// Check the inputs are as expected
-	c.Assert(manifold.Inputs, tc.DeepEquals, []string{"domain-services", "ssh-tunneler", "jwt-parser"})
+	c.Assert(manifold.Inputs, tc.DeepEquals, []string{"domain-services", "ssh-tunneler"})
 
 	// Start the worker
 	result, err := manifold.Start(
 		c.Context(),
 		dt.StubGetter(map[string]any{
-			"ssh-tunneler": stubTunnelTracker{},
-			"jwt-parser":   &jwtparser.Parser{},
+			"ssh-tunneler": &internalTunneler.Tracker{},
 		}),
 	)
 	c.Assert(err, tc.ErrorIsNil)
@@ -230,9 +232,9 @@ func (s *manifoldSuite) setupMocks(c *tc.C) *gomock.Controller {
 
 func (s *manifoldSuite) newManifoldConfig(c *tc.C, modifier func(cfg *ManifoldConfig)) *ManifoldConfig {
 	cfg := &ManifoldConfig{
+		Clock:              clock.WallClock,
 		DomainServicesName: "domain-services",
 		SSHTunnelerName:    "ssh-tunneler",
-		JWTParserName:      "jwt-parser",
 		ControllerID:       "0",
 		ControllerUUID:     "8419cd78-4993-4c3a-928e-c646226beeee",
 		NewServerWrapperWorker: func(ServerWrapperWorkerConfig) (worker.Worker, error) {
@@ -267,9 +269,9 @@ func (s *manifoldSuite) TestManifoldMissingDependency(c *tc.C) {
 
 	// Setup the manifold
 	manifold := Manifold(ManifoldConfig{
+		Clock:                  clock.WallClock,
 		DomainServicesName:     "domain-services",
 		SSHTunnelerName:        "ssh-tunneler",
-		JWTParserName:          "jwt-parser",
 		ControllerID:           "0",
 		ControllerUUID:         "8419cd78-4993-4c3a-928e-c646226beeee",
 		NewServerWrapperWorker: NewServerWrapperWorker,
@@ -293,7 +295,7 @@ func (s *manifoldSuite) TestManifoldMissingDependency(c *tc.C) {
 	})
 
 	// Check the inputs are as expected
-	c.Assert(manifold.Inputs, tc.DeepEquals, []string{"domain-services", "ssh-tunneler", "jwt-parser"})
+	c.Assert(manifold.Inputs, tc.DeepEquals, []string{"domain-services", "ssh-tunneler"})
 
 	// Start the worker
 	_, err := manifold.Start(
@@ -333,14 +335,4 @@ func (s stubControllerSSHState) MatchesPublicKeyInModelForUser(_ context.Context
 
 func (stubDomainServicesGetter) ServicesForModel(context.Context, model.UUID) (services.DomainServices, error) {
 	return nil, errors.NotImplementedf("unexpected ServicesForModel call")
-}
-
-type stubTunnelTracker struct{}
-
-func (stubTunnelTracker) RequestTunnel(context.Context, internalTunneler.RequestArgs) (*gossh.Client, error) {
-	return nil, errors.NotImplementedf("unexpected RequestTunnel call")
-}
-
-func (stubTunnelTracker) PushTunnel(context.Context, string, string, net.Conn) (<-chan struct{}, error) {
-	return nil, errors.NotImplementedf("unexpected PushTunnel call")
 }

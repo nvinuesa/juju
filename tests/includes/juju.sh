@@ -147,7 +147,7 @@ bootstrap() {
 			export BOOTSTRAP_REUSE="false"
 		fi
 	fi
-	if [[ ${BOOTSTRAP_REUSE} == "true" && ${BOOTSTRAP_PROVIDER} != "k8s" ]]; then
+	if [[ ${BOOTSTRAP_REUSE} == "true" && ${BOOTSTRAP_PROVIDER} != "k8s" && ${BOOTSTRAP_PROVIDER} != "microk8s" ]]; then
 		# juju show-machine not supported with k8s controllers
 		OUT=$(juju show-machine -m "${bootstrapped_name}":controller --format=json | yq -r '.machines | .[] | .base | (.name + "@" + .channel)')
 		if [[ -n ${OUT} ]]; then
@@ -273,7 +273,7 @@ juju_bootstrap() {
 	shift
 
 	base=
-	if [[ ${BOOTSTRAP_PROVIDER} != "k8s" ]]; then
+	if [[ ${BOOTSTRAP_PROVIDER} != "k8s" && ${BOOTSTRAP_PROVIDER} != "microk8s" ]]; then
 		case "${BOOTSTRAP_BASE}" in
 		"${CURRENT_LTS}")
 			base="--bootstrap-base=${BOOTSTRAP_BASE} --config image-stream=daily --force"
@@ -295,7 +295,7 @@ juju_bootstrap() {
 	bash -c "exec ${command} $*" 2>&1 | OUTPUT "${output}"
 	echo "${name}" >>"${TEST_DIR}/jujus"
 
-	if [[ ${BOOTSTRAP_PROVIDER} != "k8s" ]]; then
+	if [[ ${BOOTSTRAP_PROVIDER} != "k8s" && ${BOOTSTRAP_PROVIDER} != "microk8s" ]]; then
 		juju switch "${name}:controller"
 		wait_for_machine_agent_status "0" "started"
 	fi
@@ -492,7 +492,7 @@ destroy_model() {
 		return
 	fi
 
-	local name
+	local name result
 
 	name=${1}
 	shift
@@ -507,17 +507,29 @@ destroy_model() {
 	output="${TEST_DIR}/${name}-destroy.log"
 
 	echo "====> Destroying juju model ${name}"
-	echo "${name}" | xargs -I % timeout "${DESTROY_TIMEOUT}" juju destroy-model --no-prompt --destroy-storage % >"${output}" 2>&1 || true
+	if timeout "${DESTROY_TIMEOUT}" juju destroy-model --no-prompt --destroy-storage "${name}" >"${output}" 2>&1; then
+		result=0
+	else
+		result=$?
+	fi
 	CHK=$(cat "${output}" | grep -e "^ERROR " || true)
-	if [[ -n ${CHK} ]]; then
-		printf '\nFound some issues destroying model\n'
+	if [[ ${result} -ne 0 || -n ${CHK} ]]; then
+		if [[ ${result} -eq 124 ]]; then
+			printf '\nTimed out after %s destroying model %s\n' "${DESTROY_TIMEOUT}" "${name}"
+		else
+			printf '\nFound some issues destroying model %s (exit %s)\n' "${name}" "${result}"
+		fi
 		cat "${output}"
 		# WARNING. This is a workaround for broken teardown process,
 		# where the model is not destroyed properly. This is a known issue
 		# and return will be reverted once the Clean-up infrastructure will
 		# be fixed. That will help to be move focus on issues in CI tests,
 		# rather than on the teardown.
-		#		return
+		# if [[ ${result} -eq 0 ]]; then
+		#	result=1
+		# fi
+		result=0
+		return "${result}"
 	fi
 	echo "====> Destroyed juju model ${name}"
 }
@@ -592,7 +604,7 @@ destroy_controller() {
 				while IFS= read -r model_uuid; do
 					(
 						while [[ -f ${resolve_sentinel} ]]; do
-							timeout 30s juju resolve --no-retry --all -m "${model_uuid}" >/dev/null 2>&1 || true
+							timeout 30s juju resolve --no-retry --all -m "${name}:${model_uuid}" >/dev/null 2>&1 || true
 							sleep 5
 						done
 					) &

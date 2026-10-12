@@ -440,6 +440,97 @@ func (c *controllerStack) uploadLocalControllerCharmWithRetry(ctx context.Contex
 	})
 }
 
+// uploadRecoveryArchiveWithRetry uploads the recovery archive to the
+// controller pod with the same retry policy as the local controller charm
+// upload. It is a no-op outside recovery mode.
+func (c *controllerStack) uploadRecoveryArchiveWithRetry(ctx context.Context, podName string) error {
+	if c.pcfg.Bootstrap == nil || c.pcfg.Bootstrap.RecoveryArchivePath == "" {
+		return nil
+	}
+	return retry.Call(retry.CallArgs{
+		Attempts: localControllerCharmUploadRetryAttempts,
+		Delay:    localControllerCharmUploadRetryDelay,
+		Stop:     ctx.Done(),
+		Clock:    c.broker.clock,
+		Func: func() error {
+			return c.uploadRecoveryArchive(ctx, podName)
+		},
+		NotifyFunc: func(err error, attempt int) {
+			logger.Debugf(ctx, "uploading recovery archive, attempt %d/%d failed: %v", attempt, localControllerCharmUploadRetryAttempts, err)
+		},
+	})
+}
+
+// uploadRecoveryArchive copies the recovery archive from the bootstrap
+// client into the controller pod and verifies its checksum remotely
+// before the agent is allowed to load it. The agent waits for the
+// archive to appear, so the transfer only needs to win against
+// bootstrap's own timeout.
+func (c *controllerStack) uploadRecoveryArchive(ctx context.Context, podName string) error {
+	params := c.pcfg.Bootstrap
+	execClient, err := c.controllerExecClient()
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	archivePath := params.RecoveryArchivePath
+	uploadPath := archivePath + ".uploading"
+	execCommand := func(commands []string) (string, error) {
+		var stdout, stderr bytes.Buffer
+		err := execClient.Exec(ctx, k8sexec.ExecParams{
+			PodName:       podName,
+			ContainerName: apiServerContainerName,
+			Commands:      commands,
+			Stdout:        &stdout,
+			Stderr:        &stderr,
+		}, nil)
+		if err != nil && stderr.Len() > 0 {
+			return "", errors.Annotate(err, strings.TrimSpace(stderr.String()))
+		}
+		return stdout.String(), err
+	}
+
+	if _, err := execCommand([]string{"mkdir", "-p", path.Dir(archivePath)}); err != nil {
+		return errors.Annotate(err, "creating recovery directory")
+	}
+
+	if err := execClient.Copy(ctx, k8sexec.CopyParams{
+		Src: k8sexec.FileResource{
+			Path: params.RecoverySourcePath,
+		},
+		Dest: k8sexec.FileResource{
+			Path:          uploadPath,
+			PodName:       podName,
+			ContainerName: apiServerContainerName,
+		},
+	}, nil); err != nil {
+		return errors.Annotate(err, "copying recovery archive")
+	}
+
+	if _, err := execCommand([]string{"chmod", "0600", uploadPath}); err != nil {
+		return errors.Annotate(err, "setting recovery archive permissions")
+	}
+	if _, err := execCommand([]string{"mv", "-f", uploadPath, archivePath}); err != nil {
+		return errors.Annotate(err, "installing recovery archive")
+	}
+
+	out, err := execCommand([]string{"sha256sum", archivePath})
+	if err != nil {
+		return errors.Annotate(err, "verifying recovery archive checksum")
+	}
+	fields := strings.Fields(out)
+	if len(fields) == 0 {
+		return errors.New("empty sha256sum output from controller pod")
+	}
+	got := fields[0]
+	if !strings.EqualFold(got, params.RecoverySHA256) {
+		return errors.Errorf(
+			"uploaded recovery archive checksum mismatch: expected sha256 %q, got %q",
+			params.RecoverySHA256, got)
+	}
+	return nil
+}
+
 func (c *controllerStack) controllerExecClient() (k8sexec.Executor, error) {
 	restConfig := c.broker.restConfig()
 	if restConfig == nil {
@@ -721,7 +812,7 @@ func (c *controllerStack) createControllerService(ctx context.Context) error {
 		spec.SetAnnotations(controllerSvcSpec.Annotations.ToMap())
 	}
 
-	logger.Debugf(context.TODO(), "creating controller service: \n%+v", spec)
+	logger.Debugf(ctx, "creating controller service %q", svcName)
 	if _, err := c.broker.ensureK8sService(ctx, spec); err != nil {
 		return errors.Trace(err)
 	}
@@ -800,7 +891,7 @@ func (c *controllerStack) createControllerHeadlessService(ctx context.Context) e
 		},
 	}
 
-	logger.Debugf(ctx, "creating controller headless service: \n%+v", spec)
+	logger.Debugf(ctx, "creating controller headless service %q", svcName)
 	if _, err := c.broker.ensureK8sService(ctx, spec); err != nil {
 		return errors.Trace(err)
 	}
@@ -864,7 +955,7 @@ func (c *controllerStack) ensureControllerConfigmapBootstrapParams(ctx context.C
 	if err != nil {
 		return errors.Trace(err)
 	}
-	logger.Tracef(context.TODO(), "bootstrapParams file content: \n%s", string(bootstrapParamsFileContent))
+	logger.Tracef(context.TODO(), "marshalled bootstrap params: %d bytes", len(bootstrapParamsFileContent))
 
 	cm, err := c.getControllerConfigMap(ctx)
 	if err != nil {
@@ -872,7 +963,7 @@ func (c *controllerStack) ensureControllerConfigmapBootstrapParams(ctx context.C
 	}
 	cm.Data[cloudconfig.FileNameBootstrapParams] = string(bootstrapParamsFileContent)
 
-	logger.Tracef(context.TODO(), "creating bootstrap-params configmap: \n%+v", cm)
+	logger.Tracef(context.TODO(), "creating bootstrap-params configmap %q", cm.Name)
 
 	cleanUp, err := c.broker.ensureConfigMap(ctx, cm)
 	c.addCleanUp(func() {
@@ -887,13 +978,13 @@ func (c *controllerStack) ensureControllerConfigmapAgentConf(ctx context.Context
 	if err != nil {
 		return errors.Trace(err)
 	}
-	logger.Tracef(context.TODO(), "controller agentConfig file content: \n%s", string(agentConfigFileContent))
+	logger.Tracef(context.TODO(), "rendered controller agent config: %d bytes", len(agentConfigFileContent))
 
 	unitAgentConfigFileContent, err := c.unitAgentConfig.Render()
 	if err != nil {
 		return errors.Trace(err)
 	}
-	logger.Tracef(context.TODO(), "controller unit agentConfig file content: \n%s", string(unitAgentConfigFileContent))
+	logger.Tracef(context.TODO(), "rendered controller unit agent config: %d bytes", len(unitAgentConfigFileContent))
 
 	cm, err := c.getControllerConfigMap(ctx)
 	if err != nil {
@@ -903,7 +994,7 @@ func (c *controllerStack) ensureControllerConfigmapAgentConf(ctx context.Context
 	cm.Data[constants.ControllerUnitAgentConfigFilename] = string(unitAgentConfigFileContent)
 	cm.Data[constants.ControllerNonceConfigMapKey(0)] = c.nonce
 
-	logger.Tracef(context.TODO(), "ensuring agent.conf configmap: \n%+v", cm)
+	logger.Tracef(context.TODO(), "ensuring agent.conf configmap %q", cm.Name)
 	cleanUp, err := c.broker.ensureConfigMap(ctx, cm)
 	c.addCleanUp(func() {
 		logger.Debugf(context.TODO(), "deleting %q template-agent.conf", cm.Name)
@@ -1047,7 +1138,8 @@ func (c *controllerStack) createControllerStatefulset(ctx context.Context) error
 		return errors.Trace(err)
 	}
 
-	logger.Tracef(context.TODO(), "creating controller statefulset: \n%+v", controllerStatefulSet)
+	logger.Tracef(context.TODO(), "creating controller statefulset %q with %d replicas",
+		controllerStatefulSet.Name, numberOfPods)
 	c.addCleanUp(func() {
 		logger.Debugf(ctx, "deleting %q statefulset", controllerStatefulSet.Name)
 		if err := c.broker.deleteStatefulSet(ctx, controllerStatefulSet.Name); err != nil {
@@ -1073,6 +1165,9 @@ func (c *controllerStack) createControllerStatefulset(ctx context.Context) error
 		}
 		if err = c.uploadLocalControllerCharmWithRetry(ctx, podName); err != nil {
 			return errors.Annotate(err, "uploading local controller charm")
+		}
+		if err = c.uploadRecoveryArchiveWithRetry(ctx, podName); err != nil {
+			return errors.Annotate(err, "uploading recovery archive")
 		}
 	}
 	return nil
@@ -1495,8 +1590,19 @@ func (c *controllerStack) buildContainerSpecForController() (*core.PodSpec, erro
 		bootstrapStateCmd = fmt.Sprintf("%s=%s %s", osenv.JujuFeatureFlagEnvKey, featureFlags, bootstrapStateCmd)
 	}
 	agentConfigPath := path.Join("$JUJU_DATA_DIR", agentConfigRelativePath)
+	recoveryMarkerPath := path.Join("$JUJU_DATA_DIR", cloudconfig.FileNameRecoveryComplete)
 	var bootstrapSetup string
-	if isLocalControllerCharmPath(c.pcfg.Bootstrap.ControllerCharmPath) {
+	switch {
+	case c.pcfg.Bootstrap != nil && c.pcfg.Bootstrap.RecoveryArchivePath != "":
+		// Init containers may seed agent.conf before recovery begins. Use
+		// dedicated markers to distinguish the first attempt from a restart
+		// after interrupted recovery, before the databases are fully loaded.
+		bootstrapSetup = recoveryBootstrapCommand(
+			recoveryMarkerPath,
+			path.Join("$JUJU_DATA_DIR", cloudconfig.FileNameRecoveryStarted),
+			bootstrapStateCmd,
+		)
+	case isLocalControllerCharmPath(c.pcfg.Bootstrap.ControllerCharmPath):
 		charmArchivePath := path.Join("$JUJU_DATA_DIR", "charms", environsbootstrap.ControllerCharmArchive)
 		bootstrapSetup = fmt.Sprintf(
 			"if ! test -e %s; then mkdir -p %s; until test -e %s; do sleep 1; done; %s; fi",
@@ -1505,11 +1611,11 @@ func (c *controllerStack) buildContainerSpecForController() (*core.PodSpec, erro
 			charmArchivePath,
 			bootstrapStateCmd,
 		)
-	} else {
+	default:
 		bootstrapSetup = fmt.Sprintf("test -e %s || %s", agentConfigPath, bootstrapStateCmd)
 	}
 	setupCmd := fmt.Sprintf(
-		`controller_id="${HOSTNAME##*-}"; if [ "${controller_id}" = "0" ]; then %s; else until test -e "$JUJU_DATA_DIR/agents/controller-${controller_id}/%s"; do sleep 1; done; fi`,
+		`controller_id="${HOSTNAME##*-}"; if [ "${controller_id}" = "0" ]; then %s || exit 1; else until test -e "$JUJU_DATA_DIR/agents/controller-${controller_id}/%s"; do sleep 1; done; fi`,
 		bootstrapSetup,
 		agentconstants.AgentConfigFilename,
 	)
@@ -1521,6 +1627,13 @@ func (c *controllerStack) buildContainerSpecForController() (*core.PodSpec, erro
 	)
 
 	return c.buildContainerSpecForCommands(setupCmd, machineCmd, jujudEnv)
+}
+
+func recoveryBootstrapCommand(completeMarker, startedMarker, bootstrapCmd string) string {
+	return fmt.Sprintf(
+		`if test -e %[1]s; then :; elif test -e %[2]s; then echo "recovery was interrupted; destroy the controller and re-run juju recover" >&2; exit 1; else mkdir -p %[4]s && touch %[2]s && %[3]s && test -e %[1]s || exit 1; fi`,
+		completeMarker, startedMarker, bootstrapCmd, path.Dir(startedMarker),
+	)
 }
 
 func (c *controllerStack) buildContainerSpecForCommands(setupCmd, machineCmd string, jujudEnv map[string]string) (*core.PodSpec, error) {

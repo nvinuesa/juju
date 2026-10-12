@@ -7,6 +7,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/juju/clock"
 	"github.com/juju/errors"
 	ssh "github.com/tailscale/gliderssh"
 
@@ -34,17 +35,38 @@ type ProxyFactory interface {
 	New(virtualhostname.Info) (ProxyHandlers, error)
 }
 
+// newTerminatingSSHServer returns an embedded SSH server that terminates an
+// SSH connection and proxies it to a routed target using the given handlers.
+// Callers may further configure the returned server (for example, adding a
+// PublicKeyHandler or host key) before serving a connection.
+func newTerminatingSSHServer(handlers ProxyHandlers) *ssh.Server {
+	return &ssh.Server{
+		ChannelHandlers: map[string]ssh.ChannelHandler{
+			"session":      ssh.DefaultSessionHandler,
+			"direct-tcpip": handlers.DirectTCPIPHandler(),
+		},
+		Handler: func(session ssh.Session) {
+			handlers.SessionHandler(session)
+		},
+		SubsystemHandlers: map[string]ssh.SubsystemHandler{
+			"sftp": handlers.SFTPHandler(),
+		},
+	}
+}
+
 type proxyFactory struct {
 	k8sResolver k8s.Resolver
 	logger      logger.Logger
 	connector   machine.SSHConnector
 	getExecutor k8s.ExecutorGetter
 	metrics     *Collector
+	clock       clock.Clock
 }
 
 type sessionMetrics struct {
 	collector *Collector
 	modelType string
+	clock     clock.Clock
 }
 
 func (m sessionMetrics) ObserveTimeToSession(ctx context.Context) {
@@ -52,7 +74,7 @@ func (m sessionMetrics) ObserveTimeToSession(ctx context.Context) {
 	if !ok {
 		return
 	}
-	m.collector.timeToSession.WithLabelValues(m.modelType).Observe(time.Since(started).Seconds())
+	m.collector.timeToSession.WithLabelValues(m.modelType).Observe(m.clock.Now().Sub(started).Seconds())
 }
 
 // New returns a set of handlers for the given target based
@@ -62,7 +84,7 @@ func (f proxyFactory) New(destination virtualhostname.Info) (ProxyHandlers, erro
 	if destination.Target() == virtualhostname.ContainerTarget {
 		modelType = "k8s"
 	}
-	var metrics common.Metrics = sessionMetrics{collector: f.metrics, modelType: modelType}
+	var metrics common.Metrics = sessionMetrics{collector: f.metrics, modelType: modelType, clock: f.clock}
 
 	switch destination.Target() {
 	case virtualhostname.ContainerTarget:
