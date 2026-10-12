@@ -1084,6 +1084,12 @@ WHERE      disabled = false`
 	return nil
 }
 
+// SetPasswordHashForRecovery sets the password hash and salt for the
+// user with the supplied name during exclusive recovery initialisation.
+func SetPasswordHashForRecovery(ctx context.Context, tx *sqlair.TX, name user.Name, passwordHash string, salt []byte) error {
+	return setPasswordHash(ctx, tx, name, passwordHash, salt)
+}
+
 // setPasswordHash sets the password hash and salt for the user with the
 // supplied uuid. If the user does not exist an error that satisfies
 // accesserrors.UserNotFound will be returned. If the user does not have their
