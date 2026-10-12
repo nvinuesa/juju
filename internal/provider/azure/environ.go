@@ -767,7 +767,7 @@ func (env *azureEnviron) startInstance(
 	}
 	err = env.createVirtualMachine(
 		ctx, vmName, vmTags, envTags,
-		instanceSpec, args, usePublicIP, true,
+		instanceSpec, args, usePublicIP, !args.InstanceConfig.ProvisioningRecovery,
 	)
 	// If there's a conflict, it's because another machine is
 	// being provisioned with the same availability set so
@@ -854,7 +854,7 @@ func (env *azureEnviron) createVirtualMachine(
 
 	var nicDependsOn, vmDependsOn []string
 	var res []armtemplates.Resource
-	bootstrapping := instanceConfig.Bootstrap != nil
+	bootstrapping := instanceConfig.Bootstrap != nil && !instanceConfig.ProvisioningRecovery
 	// We only need to deal with creating network resources
 	// if the user has not specified their own to use.
 	if bootstrapping && env.config.virtualNetworkName == "" && args.Placement == "" {
