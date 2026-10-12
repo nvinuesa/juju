@@ -20,7 +20,8 @@ import (
 //go:generate go run github.com/canonical/gomock/mockgen -package bootstrap -destination instance_mock_test.go github.com/juju/juju/environs/instances Instance
 //go:generate go run github.com/canonical/gomock/mockgen -package bootstrap -destination storage_mock_test.go github.com/juju/juju/core/storage StorageRegistryGetter
 //go:generate go run github.com/canonical/gomock/mockgen -package bootstrap -destination lock_mock_test.go github.com/juju/juju/internal/worker/gate Unlocker
-//go:generate go run github.com/canonical/gomock/mockgen -package bootstrap -destination bootstrap_mock_test.go github.com/juju/juju/internal/worker/bootstrap AgentBinaryStore,ControllerConfigService,FlagService,HTTPClient,StorageService,ApplicationService,ModelConfigService,NetworkService,UserService,BakeryConfigService,KeyManagerService,MachineService,AgentPasswordService,ControllerNodeService,ModelInfoService
+//go:generate go run github.com/canonical/gomock/mockgen -package bootstrap -destination bootstrap_mock_test.go github.com/juju/juju/internal/worker/bootstrap AgentBinaryStore,ControllerConfigService,FlagService,HTTPClient,StorageService,ApplicationService,ModelConfigService,NetworkService,UserService,BakeryConfigService,KeyManagerService,MachineService,ControllerNodeService,ModelInfoService
+//go:generate go run github.com/canonical/gomock/mockgen -package bootstrap -destination controllerinit_mock_test.go github.com/juju/juju/internal/controllerinit AgentPasswordService
 //go:generate go run github.com/canonical/gomock/mockgen -package bootstrap -destination http_client_mock_test.go github.com/juju/juju/core/http HTTPClientGetter
 //go:generate go run github.com/canonical/gomock/mockgen -package bootstrap -destination domainservices_mock_test.go github.com/juju/juju/internal/services DomainServices
 

@@ -23,6 +23,7 @@ import (
 	"github.com/juju/juju/domain/deployment/charm/repository"
 	"github.com/juju/juju/internal/bootstrap"
 	"github.com/juju/juju/internal/charmhub"
+	"github.com/juju/juju/internal/controllerinit"
 	k8sconstants "github.com/juju/juju/internal/provider/kubernetes/constants"
 )
 
@@ -50,7 +51,7 @@ type AgentBinaryBootstrapFunc func(
 // ControllerCharmDeployerConfig holds the configuration for the
 // ControllerCharmDeployer.
 type ControllerCharmDeployerConfig struct {
-	AgentPasswordService        AgentPasswordService
+	AgentPasswordService        controllerinit.AgentPasswordService
 	ApplicationService          ApplicationService
 	Model                       coremodel.Model
 	ModelConfigService          ModelConfigService

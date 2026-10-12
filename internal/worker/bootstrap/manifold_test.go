@@ -17,6 +17,7 @@ import (
 	"github.com/juju/juju/core/providertracker"
 	"github.com/juju/juju/internal/bootstrap"
 	"github.com/juju/juju/internal/cloudconfig/instancecfg"
+	"github.com/juju/juju/internal/controllerinit"
 	"github.com/juju/juju/internal/testhelpers"
 )
 
@@ -132,7 +133,7 @@ func (s *manifoldSuite) getConfig() ManifoldConfig {
 		RequiresBootstrap: func(context.Context, FlagService) (bool, error) {
 			return false, nil
 		},
-		AgentFinalizer: func(ctx context.Context, aps AgentPasswordService, ms MachineService, sip instancecfg.StateInitializationParams, password string) error {
+		AgentFinalizer: func(ctx context.Context, aps controllerinit.AgentPasswordService, ms MachineService, sip instancecfg.StateInitializationParams, password string) error {
 			return nil
 		},
 		RemoveBootstrapSSHKeys: func([]string) error {
