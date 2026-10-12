@@ -28,8 +28,6 @@ type loadSuite struct {
 	schematesting.ControllerModelSuite
 }
 
-const sourceModelUUID = "33333333-0000-0000-0000-000000000000"
-
 func TestLoadSuite(t *stdtesting.T) {
 	tc.Run(t, &loadSuite{})
 }
@@ -511,6 +509,7 @@ func (s *loadSuite) TestLoadStageEndToEnd(c *tc.C) {
 		ExpectedSHA256:      sum,
 		DataDir:             dataDir,
 		ControllerModelUUID: testControllerModelUUID,
+		ControllerID:        "0",
 		MachinePatch: &domainrecovery.MachinePatch{
 			MachineName: "0",
 			InstanceID:  "replacement-instance",
@@ -580,6 +579,7 @@ func (s *loadSuite) TestLoadStageKubernetes(c *tc.C) {
 		ExpectedSHA256:      sum,
 		DataDir:             c.MkDir(),
 		ControllerModelUUID: testControllerModelUUID,
+		ControllerID:        "0",
 		ControllerUnitAddresses: []string{
 			"10.152.183.75",
 			"controller-0.controller-endpoint.juju.svc",
@@ -638,6 +638,7 @@ func (s *loadSuite) TestLoadStageHAMachineSelection(c *tc.C) {
 		ExpectedSHA256:      sum,
 		DataDir:             dataDir,
 		ControllerModelUUID: testControllerModelUUID,
+		ControllerID:        "1",
 		MachinePatch: &domainrecovery.MachinePatch{
 			InstanceID: "replacement-instance",
 		},
@@ -695,6 +696,7 @@ func (s *loadSuite) TestLoadStageHAWorkloadMachineNotDead(c *tc.C) {
 		ExpectedSHA256:      sum,
 		DataDir:             c.MkDir(),
 		ControllerModelUUID: testControllerModelUUID,
+		ControllerID:        "1",
 		MachinePatch: &domainrecovery.MachinePatch{
 			InstanceID: "replacement-instance",
 		},
@@ -829,6 +831,7 @@ func (s *loadSuite) TestLoadStageCleansUpStagingOnFailure(c *tc.C) {
 		ExpectedSHA256:      sum,
 		DataDir:             c.MkDir(),
 		ControllerModelUUID: testControllerModelUUID,
+		ControllerID:        "0",
 		Logger:              loggertesting.WrapCheckLog(c),
 	})
 	c.Check(err, tc.ErrorIs, openErr)

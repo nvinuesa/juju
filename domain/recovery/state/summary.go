@@ -12,8 +12,9 @@ import (
 	"github.com/juju/juju/internal/errors"
 )
 
-// GetOtherControllerMachines retrieves controller machines other than the
-// replacement. The view includes machines that also host workload units.
+// GetOtherControllerMachines retrieves dead controller machines other than
+// the replacement. Lost peers load as dead; the operator removes them after
+// recovery. The view includes machines that also host workload units.
 func (st *State) GetOtherControllerMachines(ctx context.Context, machineName string) ([]string, error) {
 	type machine struct {
 		Name string `db:"name"`
@@ -22,7 +23,7 @@ func (st *State) GetOtherControllerMachines(ctx context.Context, machineName str
 	stmt, err := st.Prepare(`
 SELECT m.name AS &machine.name FROM machine AS m
 JOIN v_machine_is_controller AS vic ON vic.machine_uuid = m.uuid
-WHERE m.name != $machine.name ORDER BY m.name`, input)
+WHERE m.name != $machine.name AND m.life_id = 2 ORDER BY m.name`, input)
 	if err != nil {
 		return nil, errors.Capture(err)
 	}

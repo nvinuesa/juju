@@ -50,21 +50,27 @@ WHERE m.life_id = 0 AND u.life_id = 0 ORDER BY m.name LIMIT 1`, machine{})
 // values: the record describes the physical replacement, and an empty display
 // name is a genuine observation on providers that do not set one. Zero arch,
 // memory, core and root-disk observations leave the archived values in place.
+// Stale network observations are removed in the same transaction so workers
+// cannot republish them; shared network definitions are retained for the
+// replacement's first discovery.
 func (st *State) PatchControllerMachine(ctx context.Context, patch domainrecovery.MachinePatch) error {
 	type machinePatch struct {
 		Name        string `db:"name"`
 		UUID        string `db:"uuid"`
+		NetNodeUUID string `db:"net_node_uuid"`
 		InstanceID  string `db:"instance_id"`
 		DisplayName string `db:"display_name"`
 		Arch        string `db:"arch"`
 		Mem         uint64 `db:"mem"`
 		Cores       uint64 `db:"cores"`
 		Disk        uint64 `db:"disk"`
+		Nonce       string `db:"nonce"`
 	}
 	input := machinePatch{Name: patch.MachineName, InstanceID: patch.InstanceID,
 		DisplayName: patch.DisplayName, Arch: patch.Arch, Mem: patch.MemMB,
-		Cores: patch.Cores, Disk: patch.RootDiskMB}
-	get, err := st.Prepare(`SELECT m.uuid AS &machinePatch.uuid
+		Cores: patch.Cores, Disk: patch.RootDiskMB, Nonce: patch.Nonce}
+	get, err := st.Prepare(`SELECT m.uuid AS &machinePatch.uuid,
+m.net_node_uuid AS &machinePatch.net_node_uuid
 FROM machine AS m WHERE m.name = $machinePatch.name`, input)
 	if err != nil {
 		return errors.Capture(err)
@@ -78,6 +84,11 @@ SET instance_id = $machinePatch.instance_id,
     cpu_cores = CASE WHEN $machinePatch.cores > 0 THEN $machinePatch.cores ELSE mci.cpu_cores END,
     root_disk = CASE WHEN $machinePatch.disk > 0 THEN $machinePatch.disk ELSE mci.root_disk END
 WHERE mci.machine_uuid = $machinePatch.uuid`, input)
+	if err != nil {
+		return errors.Capture(err)
+	}
+	updateNonce, err := st.Prepare(`UPDATE machine AS m SET nonce = $machinePatch.nonce
+WHERE m.uuid = $machinePatch.uuid`, input)
 	if err != nil {
 		return errors.Capture(err)
 	}
@@ -102,7 +113,15 @@ WHERE mci.machine_uuid = $machinePatch.uuid`, input)
 		if affected == 0 {
 			return errors.New("archived controller machine has no cloud instance record")
 		}
-		return nil
+		if input.Nonce != "" {
+			if err := tx.Query(ctx, updateNonce, input).Run(); err != nil {
+				return errors.Capture(err)
+			}
+		}
+		if err := deleteNodeAddresses(ctx, tx, input.NetNodeUUID); err != nil {
+			return errors.Capture(err)
+		}
+		return errors.Capture(deleteNodeDevices(ctx, tx, input.NetNodeUUID))
 	}))
 }
 
@@ -156,52 +175,8 @@ LIMIT 1`, observation{}, target{})
 			return errors.Errorf("finding controller unit: %w", err)
 		}
 
-		type addressUUIDs []string
-		selectNames, err := sqlair.Prepare(`
-SELECT nnfa.address_uuid AS &observation.uuid
-FROM net_node_fqdn_address AS nnfa
-WHERE nnfa.net_node_uuid = $observation.net_node_uuid`, observation{})
-		if err != nil {
+		if err := deleteNodeAddresses(ctx, tx, node.NetNodeUUID); err != nil {
 			return errors.Capture(err)
-		}
-		var oldNames []observation
-		if err := tx.Query(ctx, selectNames, node).GetAll(&oldNames); err != nil && !errors.Is(err, sqlair.ErrNoRows) {
-			return errors.Capture(err)
-		}
-		for _, statement := range []string{
-			`WITH old_ips AS (
-    SELECT ipa.uuid AS uuid FROM ip_address AS ipa
-    WHERE ipa.net_node_uuid = $observation.net_node_uuid
-)
-DELETE FROM provider_ip_address AS pia WHERE pia.address_uuid IN old_ips`,
-			`DELETE FROM ip_address AS ipa WHERE ipa.net_node_uuid = $observation.net_node_uuid`,
-			`DELETE FROM net_node_fqdn_address AS nnfa WHERE nnfa.net_node_uuid = $observation.net_node_uuid`,
-		} {
-			query, err := sqlair.Prepare(statement, observation{})
-			if err != nil {
-				return errors.Capture(err)
-			}
-			if err := tx.Query(ctx, query, node).Run(); err != nil {
-				return errors.Errorf("removing stale controller unit addresses: %w", err)
-			}
-		}
-		if len(oldNames) > 0 {
-			ids := make(addressUUIDs, len(oldNames))
-			for i, name := range oldNames {
-				ids[i] = name.UUID
-			}
-			query, err := sqlair.Prepare(`
-WITH referenced AS (
-    SELECT nnfa.address_uuid AS uuid FROM net_node_fqdn_address AS nnfa
-)
-DELETE FROM fqdn_address AS fa
-WHERE fa.uuid IN ($addressUUIDs[:]) AND fa.uuid NOT IN referenced`, ids)
-			if err != nil {
-				return errors.Capture(err)
-			}
-			if err := tx.Query(ctx, query, ids).Run(); err != nil {
-				return errors.Errorf("removing stale controller unit DNS names: %w", err)
-			}
 		}
 
 		for _, address := range patch.Addresses {
@@ -277,4 +252,93 @@ VALUES ($observation.uuid, $observation.net_node_uuid, $observation.device_uuid,
 		}
 		return nil
 	}))
+}
+
+// deleteNodeAddresses removes observations without deleting shared DNS names.
+func deleteNodeAddresses(ctx context.Context, tx *sqlair.TX, netNodeUUID string) error {
+	type observation struct {
+		UUID        string `db:"uuid"`
+		NetNodeUUID string `db:"net_node_uuid"`
+	}
+	node := observation{NetNodeUUID: netNodeUUID}
+
+	type addressUUIDs []string
+	selectNames, err := sqlair.Prepare(`
+SELECT nnfa.address_uuid AS &observation.uuid
+FROM net_node_fqdn_address AS nnfa
+WHERE nnfa.net_node_uuid = $observation.net_node_uuid`, observation{})
+	if err != nil {
+		return errors.Capture(err)
+	}
+	var oldNames []observation
+	if err := tx.Query(ctx, selectNames, node).GetAll(&oldNames); err != nil && !errors.Is(err, sqlair.ErrNoRows) {
+		return errors.Capture(err)
+	}
+	for _, statement := range []string{
+		`WITH old_ips AS (
+    SELECT ipa.uuid AS uuid FROM ip_address AS ipa
+    WHERE ipa.net_node_uuid = $observation.net_node_uuid
+)
+DELETE FROM provider_ip_address AS pia WHERE pia.address_uuid IN old_ips`,
+		`DELETE FROM ip_address AS ipa WHERE ipa.net_node_uuid = $observation.net_node_uuid`,
+		`DELETE FROM net_node_fqdn_address AS nnfa WHERE nnfa.net_node_uuid = $observation.net_node_uuid`,
+	} {
+		query, err := sqlair.Prepare(statement, observation{})
+		if err != nil {
+			return errors.Capture(err)
+		}
+		if err := tx.Query(ctx, query, node).Run(); err != nil {
+			return errors.Errorf("removing stale controller unit addresses: %w", err)
+		}
+	}
+	if len(oldNames) > 0 {
+		ids := make(addressUUIDs, len(oldNames))
+		for i, name := range oldNames {
+			ids[i] = name.UUID
+		}
+		query, err := sqlair.Prepare(`
+WITH referenced AS (
+    SELECT nnfa.address_uuid AS uuid FROM net_node_fqdn_address AS nnfa
+)
+DELETE FROM fqdn_address AS fa
+WHERE fa.uuid IN ($addressUUIDs[:]) AND fa.uuid NOT IN referenced`, ids)
+		if err != nil {
+			return errors.Capture(err)
+		}
+		if err := tx.Query(ctx, query, ids).Run(); err != nil {
+			return errors.Errorf("removing stale controller unit DNS names: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// deleteNodeDevices removes physical observations owned by the lost machine.
+// Subnets, spaces and other shared network definitions remain intact.
+func deleteNodeDevices(ctx context.Context, tx *sqlair.TX, netNodeUUID string) error {
+	type node struct {
+		UUID string `db:"net_node_uuid"`
+	}
+	in := node{UUID: netNodeUUID}
+	devices := `WITH devices AS (
+        SELECT lld.uuid AS uuid FROM link_layer_device AS lld
+        WHERE lld.net_node_uuid = $node.net_node_uuid
+    ) `
+	for _, statement := range []string{
+		devices + `DELETE FROM provider_link_layer_device AS p WHERE p.device_uuid IN devices`,
+		devices + `DELETE FROM link_layer_device_dns_domain AS d WHERE d.device_uuid IN devices`,
+		devices + `DELETE FROM link_layer_device_dns_address AS d WHERE d.device_uuid IN devices`,
+		devices + `DELETE FROM link_layer_device_route AS r WHERE r.device_uuid IN devices`,
+		devices + `DELETE FROM link_layer_device_parent AS p WHERE p.device_uuid IN devices OR p.parent_uuid IN devices`,
+		`DELETE FROM link_layer_device AS lld WHERE lld.net_node_uuid = $node.net_node_uuid`,
+	} {
+		query, err := sqlair.Prepare(statement, in)
+		if err != nil {
+			return errors.Capture(err)
+		}
+		if err := tx.Query(ctx, query, in).Run(); err != nil {
+			return errors.Errorf("removing stale controller devices: %w", err)
+		}
+	}
+	return nil
 }

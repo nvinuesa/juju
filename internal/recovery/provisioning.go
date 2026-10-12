@@ -19,9 +19,9 @@ func sourceConstraints(info *domainrecovery.ArchiveInfo, rows []model.Constraint
 	applications []model.ApplicationConstraint,
 ) (constraints.Value, error) {
 	var machineUUID, constraintUUID string
-	for _, row := range info.ControllerTopology.Tables["machine"] {
-		if row["name"] == info.MachineName {
-			machineUUID, _ = row["uuid"].(string)
+	for _, row := range info.ControllerTopology.Machines {
+		if row.Name == info.MachineName {
+			machineUUID = row.UUID
 		}
 	}
 	for _, row := range machines {
@@ -30,10 +30,10 @@ func sourceConstraints(info *domainrecovery.ArchiveInfo, rows []model.Constraint
 		}
 	}
 	if info.CloudType == "kubernetes" {
-		controllers := info.ControllerTopology.Tables["application_controller"]
+		controllers := info.ControllerTopology.ApplicationController
 		if len(controllers) == 1 {
 			for _, row := range applications {
-				if row.ApplicationUUID == controllers[0]["application_uuid"] && row.ConstraintUUID != nil {
+				if row.ApplicationUUID == controllers[0].ApplicationUUID && row.ConstraintUUID != nil {
 					constraintUUID = *row.ConstraintUUID
 				}
 			}

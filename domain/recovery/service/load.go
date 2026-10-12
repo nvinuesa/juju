@@ -10,6 +10,7 @@ import (
 	coremodel "github.com/juju/juju/core/model"
 	"github.com/juju/juju/core/semversion"
 	domainexport "github.com/juju/juju/domain/export"
+	domainrecovery "github.com/juju/juju/domain/recovery"
 	"github.com/juju/juju/internal/errors"
 )
 
@@ -60,6 +61,40 @@ func (s *Service) LoadModelDump(ctx context.Context, model coremodel.UUID, data 
 	if err != nil {
 		return errors.Capture(err)
 	}
+	return errors.Capture(s.loadModelDump(ctx, model, decoded))
+}
+
+// LoadControllerModelDump validates native YAML, retires the source's lost
+// controller peers in the decoded dump, then replaces the controller
+// model's data in one transaction.
+func (s *Service) LoadControllerModelDump(ctx context.Context, model coremodel.UUID, data []byte, controllerID string) error {
+	if err := ctx.Err(); err != nil {
+		return errors.Capture(err)
+	}
+	if err := model.Validate(); err != nil {
+		return errors.Capture(err)
+	}
+	dump, err := decodeDump(data)
+	if err != nil {
+		return errors.Capture(err)
+	}
+	if err := checkDumpVersion(dump, []semversion.Number{domainexport.LatestSupportedPayloadVersion()}); err != nil {
+		return errors.Errorf("model dump: %w", err)
+	}
+	decoded, err := decodeModelDump(dump)
+	if err != nil {
+		return errors.Capture(err)
+	}
+	decoded, err = domainrecovery.SingleControllerDump(decoded, controllerID)
+	if err != nil {
+		return errors.Capture(err)
+	}
+	return errors.Capture(s.loadModelDump(ctx, model, decoded))
+}
+
+// loadModelDump replaces the selected tables of one model database in a
+// single transaction.
+func (s *Service) loadModelDump(ctx context.Context, model coremodel.UUID, decoded *domainrecovery.ModelDump) error {
 	selectTables(decoded.Present, modelTablePolicies)
 	st, err := s.modelState(ctx, model)
 	if err != nil {

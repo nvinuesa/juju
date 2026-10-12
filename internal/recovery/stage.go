@@ -8,6 +8,7 @@ import (
 	"os"
 	"sort"
 
+	corebackups "github.com/juju/juju/core/backups"
 	"github.com/juju/juju/core/logger"
 	coremodel "github.com/juju/juju/core/model"
 	domainrecovery "github.com/juju/juju/domain/recovery"
@@ -29,6 +30,8 @@ type RecoveryService interface {
 	// node supplied at construction, which also serves every model blob.
 	LoadModelDump(context.Context, coremodel.UUID, []byte) error
 
+	LoadControllerModelDump(context.Context, coremodel.UUID, []byte, string) error
+
 	// GetObjectInventory retrieves the required files after all dumps are loaded.
 	GetObjectInventory(context.Context, []coremodel.UUID) ([]domainrecovery.ObjectInventory, error)
 
@@ -41,6 +44,9 @@ type RecoveryService interface {
 	// controller unit when the name is empty.
 	PatchControllerUnitAddresses(context.Context, coremodel.UUID, string, []string) error
 
+	PatchControllerCredential(context.Context, string, string, map[string]string) error
+	PatchCloudCredential(context.Context, string, string, map[string]string) error
+
 	// BuildSummary aggregates persisted observations after patches are applied.
 	BuildSummary(context.Context, *domainrecovery.ArchiveInfo, []coremodel.UUID, string, int) (*domainrecovery.Summary, error)
 }
@@ -51,6 +57,18 @@ type RecoveryService interface {
 type LoadParams struct {
 	// Service is fully constructed before recovery begins.
 	Service RecoveryService
+
+	// ControllerID is the provisioned replacement node's identity.
+	ControllerID string
+
+	// ControllerCredential rebinds the archived controller credential's
+	// authentication to the credential used to provision the replacement.
+	// Nil leaves the archived credential untouched.
+	ControllerCredential *CredentialPatch
+
+	// Credentials rebind further archived credentials, keyed by the
+	// archived logical credential UUID.
+	Credentials map[string]CredentialPatch
 
 	// ArchivePath is the uploaded archive on the target's disk.
 	ArchivePath string
@@ -80,6 +98,14 @@ type LoadParams struct {
 	Logger logger.Logger
 }
 
+// CredentialPatch carries the replacement authentication for an archived
+// credential: its identity is retained while the auth type and attributes
+// are rebound.
+type CredentialPatch struct {
+	AuthType   string
+	Attributes map[string]string
+}
+
 // Load executes the recovery stage: validate the uploaded archive, load
 // the controller database, install the object blobs, load every model
 // database and patch the replacement's physical facts in place. Any
@@ -107,7 +133,7 @@ func Load(ctx context.Context, params LoadParams) (summary *domainrecovery.Summa
 		return nil, errors.New("missing controller model UUID")
 	}
 
-	contents, info, err := ReadArchive(ctx, params.Logger, params.ArchivePath, params.ExpectedSHA256)
+	contents, info, err := readArchiveIn(ctx, params.Logger, params.ArchivePath, params.ExpectedSHA256, params.DataDir)
 	if err != nil {
 		return nil, errors.Capture(err)
 	}
@@ -121,6 +147,13 @@ func Load(ctx context.Context, params LoadParams) (summary *domainrecovery.Summa
 		return nil, errors.Errorf(
 			"archive controller model %q does not match the bootstrap controller model %q",
 			info.ControllerModelUUID, params.ControllerModelUUID)
+	}
+	importSize, err := recoveryImportSize(info)
+	if err != nil {
+		return nil, errors.Capture(err)
+	}
+	if err := corebackups.CheckSpaceFor(params.DataDir, importSize); err != nil {
+		return nil, errors.Errorf("insufficient recovery import space: %w", err)
 	}
 	params.Logger.Infof(ctx, "recovering controller %q from backup finished at %s",
 		info.ControllerUUID, info.BackupFinished)
@@ -145,7 +178,12 @@ func Load(ctx context.Context, params LoadParams) (summary *domainrecovery.Summa
 			return nil, errors.Errorf("reading dump for model %q: %w", modelUUID, err)
 		}
 		model := coremodel.UUID(modelUUID)
-		if err := params.Service.LoadModelDump(ctx, model, data); err != nil {
+		if modelUUID == params.ControllerModelUUID {
+			err = params.Service.LoadControllerModelDump(ctx, model, data, params.ControllerID)
+		} else {
+			err = params.Service.LoadModelDump(ctx, model, data)
+		}
+		if err != nil {
 			return nil, errors.Capture(err)
 		}
 		models = append(models, model)
@@ -187,6 +225,20 @@ func Load(ctx context.Context, params LoadParams) (summary *domainrecovery.Summa
 		if err := params.Service.PatchControllerUnitAddresses(ctx,
 			coremodel.UUID(params.ControllerModelUUID), patchTarget,
 			params.ControllerUnitAddresses); err != nil {
+			return nil, errors.Capture(err)
+		}
+	}
+
+	if params.ControllerCredential != nil {
+		patch := params.ControllerCredential
+		if err := params.Service.PatchControllerCredential(ctx,
+			params.ControllerModelUUID, patch.AuthType, patch.Attributes); err != nil {
+			return nil, errors.Capture(err)
+		}
+	}
+	for credentialUUID, patch := range params.Credentials {
+		if err := params.Service.PatchCloudCredential(ctx,
+			credentialUUID, patch.AuthType, patch.Attributes); err != nil {
 			return nil, errors.Capture(err)
 		}
 	}

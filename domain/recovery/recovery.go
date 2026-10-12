@@ -9,7 +9,16 @@ import (
 	"github.com/juju/juju/core/backups"
 	"github.com/juju/juju/core/constraints"
 	"github.com/juju/juju/core/semversion"
+	exportmodel "github.com/juju/juju/domain/export/types/v4_1_0"
 )
+
+// ControllerTopology holds only the placement rows needed by preflight.
+type ControllerTopology struct {
+	Machines              []exportmodel.Machine
+	Units                 []exportmodel.Unit
+	MachineParents        []exportmodel.MachineParent
+	ApplicationController []exportmodel.ApplicationController
+}
 
 // ApplicationInfo describes one archived workload application, used for
 // recovery substrate inventories on Kubernetes: the model's namespace must
@@ -75,7 +84,7 @@ type ModelInfo struct {
 // preflight checks.
 type ArchiveInfo struct {
 	// ControllerTopology holds only the placement rows needed by preflight.
-	ControllerTopology *Dump
+	ControllerTopology *ControllerTopology
 
 	// Provisioning requirements come from the archived source, not CLI defaults.
 	Constraints       constraints.Value
