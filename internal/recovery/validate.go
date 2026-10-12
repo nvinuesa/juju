@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"strconv"
 
 	"gopkg.in/yaml.v3"
 
@@ -14,6 +15,8 @@ import (
 	corebackups "github.com/juju/juju/core/backups"
 	corelogger "github.com/juju/juju/core/logger"
 	"github.com/juju/juju/core/semversion"
+	exportcontroller "github.com/juju/juju/domain/export/types/controller/v4_1_0"
+	exportmodel "github.com/juju/juju/domain/export/types/v4_1_0"
 	domainlife "github.com/juju/juju/domain/life"
 	domainrecovery "github.com/juju/juju/domain/recovery"
 	"github.com/juju/juju/internal/errors"
@@ -24,26 +27,24 @@ import (
 // full decode happens agent-side during the load stage.
 type controllerDumpPayload struct {
 	Controller []struct {
-		UUID         string  `yaml:"uuid"`
-		ModelUUID    string  `yaml:"model_uuid"`
-		CACert       *string `yaml:"ca_cert"`
-		CAPrivateKey *string `yaml:"ca_private_key"`
+		UUID           string  `yaml:"uuid"`
+		ModelUUID      string  `yaml:"model_uuid"`
+		CACert         *string `yaml:"ca_cert"`
+		CAPrivateKey   *string `yaml:"ca_private_key"`
+		SystemIdentity *string `yaml:"system_identity"`
 	} `yaml:"controller"`
-	Cloud []struct {
-		UUID        string `yaml:"uuid"`
-		Name        string `yaml:"name"`
-		CloudTypeID int64  `yaml:"cloud_type_id"`
-	} `yaml:"cloud"`
-	CloudType []struct {
+	Cloud                    []exportcontroller.Cloud                    `yaml:"cloud"`
+	CloudRegion              []exportcontroller.CloudRegion              `yaml:"cloud_region"`
+	CloudAuthType            []exportcontroller.CloudAuthType            `yaml:"cloud_auth_type"`
+	CloudCaCert              []exportcontroller.CloudCaCert              `yaml:"cloud_ca_cert"`
+	CloudCredential          []exportcontroller.CloudCredential          `yaml:"cloud_credential"`
+	CloudCredentialAttribute []exportcontroller.CloudCredentialAttribute `yaml:"cloud_credential_attribute"`
+	AuthType                 []exportcontroller.AuthType                 `yaml:"auth_type"`
+	CloudType                []struct {
 		ID   *int64 `yaml:"id"`
 		Type string `yaml:"type"`
 	} `yaml:"cloud_type"`
-	Model []struct {
-		UUID        string `yaml:"uuid"`
-		Name        string `yaml:"name"`
-		CloudUUID   string `yaml:"cloud_uuid"`
-		ModelTypeID int64  `yaml:"model_type_id"`
-	} `yaml:"model"`
+	Model     []exportcontroller.Model `yaml:"model"`
 	ModelType []struct {
 		ID   *int64 `yaml:"id"`
 		Type string `yaml:"type"`
@@ -55,8 +56,7 @@ type controllerDumpPayload struct {
 }
 
 // controllerDumpEnvelope is the top-level shape of controller.yaml. The
-// envelope version is intentionally not parsed here: the agent-version
-// gate implies matching dump formats, and the loader validates them.
+// loader validates the envelope format independently of agent version.
 type controllerDumpEnvelope struct {
 	Payload controllerDumpPayload `yaml:"payload"`
 }
@@ -85,7 +85,23 @@ func ValidateArchive(ctx context.Context, logger corelogger.Logger, archivePath,
 // contents; the offline preflight consumes the summary alone via
 // [ValidateArchive]. The caller must Close the contents once consumed.
 func ReadArchive(ctx context.Context, logger corelogger.Logger, archivePath, expectedSHA256 string) (*ArchiveContents, *domainrecovery.ArchiveInfo, error) {
-	contents, checksum, size, err := readArchive(ctx, logger, archivePath, expectedSHA256)
+	return readArchiveIn(ctx, logger, archivePath, expectedSHA256, "")
+}
+
+// ValidateArchiveIn stages target-side validation on the data filesystem.
+func ValidateArchiveIn(ctx context.Context, logger corelogger.Logger, archivePath, expectedSHA256, dataDir string) (*domainrecovery.ArchiveInfo, error) {
+	contents, info, err := readArchiveIn(ctx, logger, archivePath, expectedSHA256, dataDir)
+	if err != nil {
+		return nil, err
+	}
+	if err := contents.Close(); err != nil {
+		return nil, err
+	}
+	return info, nil
+}
+
+func readArchiveIn(ctx context.Context, logger corelogger.Logger, archivePath, expectedSHA256, stagingRoot string) (*ArchiveContents, *domainrecovery.ArchiveInfo, error) {
+	contents, checksum, size, err := readArchive(ctx, logger, archivePath, expectedSHA256, stagingRoot)
 	if err != nil {
 		return nil, nil, errors.Capture(err)
 	}
@@ -96,6 +112,7 @@ func ReadArchive(ctx context.Context, logger corelogger.Logger, archivePath, exp
 	}
 	info.Checksum = checksum
 	info.Size = size
+	info.ImportSize = contents.ImportSize
 	return contents, info, nil
 }
 
@@ -152,11 +169,18 @@ func buildArchiveInfo(ctx context.Context, logger corelogger.Logger, meta *coreb
 
 	info := &domainrecovery.ArchiveInfo{
 		AgentVersion:        meta.Origin.Version,
+		Kubernetes:          meta.Kubernetes,
+		FormatVersion:       meta.FormatVersion,
+		DatabaseSizeBytes:   meta.DatabaseSizeBytes,
+		SourceBase:          meta.Origin.Base,
+		MachineName:         meta.Origin.Machine,
+		ControllerConfig:    make(map[string]string),
 		ControllerUUID:      meta.Controller.UUID,
 		ControllerModelUUID: meta.Origin.Model,
 		HANodes:             meta.Controller.HANodes,
 	}
 	for _, cc := range payload.ControllerConfig {
+		info.ControllerConfig[cc.Key] = cc.Value
 		if cc.Key == controller.ControllerName {
 			info.ControllerName = cc.Value
 		}
@@ -168,6 +192,9 @@ func buildArchiveInfo(ctx context.Context, logger corelogger.Logger, meta *coreb
 	controller := payload.Controller[0]
 	if controller.CACert == nil || controller.CAPrivateKey == nil {
 		return nil, errors.Errorf("%s records no controller CA material", controllerDumpPath)
+	}
+	if controller.SystemIdentity != nil {
+		info.SystemIdentity = *controller.SystemIdentity
 	}
 	info.CACert = *controller.CACert
 	info.CAPrivateKey = *controller.CAPrivateKey
@@ -212,10 +239,21 @@ func buildArchiveInfo(ctx context.Context, logger corelogger.Logger, meta *coreb
 		if mi.CloudType == "" {
 			return nil, errors.Errorf("model %q has unknown cloud type", m.Name)
 		}
+		target := &domainrecovery.ArchiveInfo{CloudType: mi.CloudType}
+		if err := resolveRecoveryTarget(target, payload, m); err != nil {
+			return nil, err
+		}
+		mi.Cloud, mi.Region, mi.Credential = target.Cloud, target.Region, target.Credential
+		if m.CloudCredentialUUID != nil {
+			mi.CredentialUUID = *m.CloudCredentialUUID
+		}
 		info.Models = append(info.Models, mi)
 		if m.UUID == info.ControllerModelUUID {
 			info.CloudName = mi.CloudName
 			info.CloudType = mi.CloudType
+			if err := resolveRecoveryTarget(info, payload, m); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if info.CloudType == "" {
@@ -236,13 +274,90 @@ func buildArchiveInfo(ctx context.Context, logger corelogger.Logger, meta *coreb
 		}
 	}
 
-	// Fill the Kubernetes workload inventory from the model dumps: it
-	// powers the read-only substrate check, which reports missing
-	// workload objects instead of silently recreating them at the first
+	var modelDump struct {
+		Payload struct {
+			Machines              []domainrecovery.Row                `yaml:"machine"`
+			Units                 []domainrecovery.Row                `yaml:"unit"`
+			MachineParents        []domainrecovery.Row                `yaml:"machine_parent"`
+			ModelConfig           []struct{ Key, Value string }       `yaml:"model_config"`
+			StoragePool           []exportmodel.StoragePool           `yaml:"storage_pool"`
+			StoragePoolAttribute  []exportmodel.StoragePoolAttribute  `yaml:"storage_pool_attribute"`
+			Constraint            []exportmodel.Constraint            `yaml:"constraint"`
+			ConstraintSpace       []exportmodel.ConstraintSpace       `yaml:"constraint_space"`
+			ConstraintTag         []exportmodel.ConstraintTag         `yaml:"constraint_tag"`
+			ConstraintZone        []exportmodel.ConstraintZone        `yaml:"constraint_zone"`
+			MachineConstraint     []exportmodel.MachineConstraint     `yaml:"machine_constraint"`
+			MachineCloudInstance  []exportmodel.MachineCloudInstance  `yaml:"machine_cloud_instance"`
+			ApplicationConstraint []exportmodel.ApplicationConstraint `yaml:"application_constraint"`
+			ApplicationController []exportmodel.ApplicationController `yaml:"application_controller"`
+			ApplicationPlatform   []exportmodel.ApplicationPlatform   `yaml:"application_platform"`
+			Architecture          []exportmodel.Architecture          `yaml:"architecture"`
+			OS                    []exportmodel.Os                    `yaml:"os"`
+		} `yaml:"payload"`
+	}
+	file, err := os.Open(modelDumps[info.ControllerModelUUID])
+	if err != nil {
+		return nil, errors.Errorf("reading controller model configuration: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+	if err := yaml.NewDecoder(contextReader{ctx: ctx, reader: file}).Decode(&modelDump); err != nil {
+		return nil, errors.Errorf("parsing controller model configuration: %w", err)
+	}
+	controllerRows := make([]domainrecovery.Row, len(modelDump.Payload.ApplicationController))
+	for i, row := range modelDump.Payload.ApplicationController {
+		controllerRows[i] = domainrecovery.Row{"application_uuid": row.ApplicationUUID}
+	}
+	info.ControllerTopology = &domainrecovery.Dump{Tables: map[string][]domainrecovery.Row{
+		"application_controller": controllerRows, "machine": modelDump.Payload.Machines,
+		"unit": modelDump.Payload.Units, "machine_parent": modelDump.Payload.MachineParents,
+	}}
+	info.Constraints, err = sourceConstraints(info, modelDump.Payload.Constraint,
+		modelDump.Payload.ConstraintSpace, modelDump.Payload.ConstraintTag, modelDump.Payload.ConstraintZone,
+		modelDump.Payload.MachineConstraint, modelDump.Payload.MachineCloudInstance, modelDump.Payload.ApplicationConstraint)
+	if err != nil {
+		return nil, errors.Capture(err)
+	}
+	info.StoragePools = make(map[string]map[string]string)
+	for _, pool := range modelDump.Payload.StoragePool {
+		attrs := map[string]string{"type": pool.Type}
+		for _, attr := range modelDump.Payload.StoragePoolAttribute {
+			if attr.StoragePoolUUID == pool.UUID {
+				attrs[attr.Key] = attr.Value
+			}
+		}
+		info.StoragePools[pool.Name] = attrs
+	}
+	info.ModelConfig = make(map[string]string)
+	for _, attr := range modelDump.Payload.ModelConfig {
+		info.ModelConfig[attr.Key] = attr.Value
+	}
+
+	// Fill the Kubernetes workload inventory from the model dumps: it powers
+	// the read-only substrate check, which reports missing workload
+	// objects instead of silently recreating them at the first
 	// reconcile. The controller model is skipped: its namespace is
 	// disposable bootstrap output, not surviving substrate.
 	for i := range info.Models {
 		mi := &info.Models[i]
+
+		modelFile, err := os.Open(modelDumps[mi.UUID])
+		if err != nil {
+			return nil, errors.Capture(err)
+		}
+		var settings struct {
+			Payload struct {
+				Config []struct{ Key, Value string } `yaml:"model_config"`
+			} `yaml:"payload"`
+		}
+		decodeErr := yaml.NewDecoder(contextReader{ctx: ctx, reader: modelFile}).Decode(&settings)
+		closeErr := modelFile.Close()
+		if err := errors.Join(decodeErr, closeErr); err != nil {
+			return nil, errors.Errorf("model %q: decoding dump: %w", mi.Name, err)
+		}
+		mi.Config = make(map[string]string)
+		for _, attr := range settings.Payload.Config {
+			mi.Config[attr.Key] = attr.Value
+		}
 		if mi.ModelType != "caas" || mi.UUID == info.ControllerModelUUID {
 			continue
 		}
@@ -253,6 +368,92 @@ func buildArchiveInfo(ctx context.Context, logger corelogger.Logger, meta *coreb
 		mi.Applications = apps
 	}
 	return info, nil
+}
+
+func resolveRecoveryTarget(info *domainrecovery.ArchiveInfo, payload *controllerDumpPayload, model exportcontroller.Model) error {
+	for _, cloud := range payload.Cloud {
+		if cloud.UUID != model.CloudUUID {
+			continue
+		}
+		info.Cloud = domainrecovery.CloudInfo{
+			Name: cloud.Name, Type: info.CloudType, Endpoint: cloud.Endpoint,
+			IdentityEndpoint: stringValue(cloud.IdentityEndpoint), StorageEndpoint: stringValue(cloud.StorageEndpoint),
+			SkipTLSVerify: cloud.SkipTlsVerify,
+		}
+	}
+	authTypes := make(map[int64]string)
+	for _, auth := range payload.AuthType {
+		if auth.ID != nil && auth.Type != nil {
+			authTypes[*auth.ID] = *auth.Type
+		}
+	}
+	for _, auth := range payload.CloudAuthType {
+		if auth.CloudUUID != model.CloudUUID {
+			continue
+		}
+		name := authTypes[auth.AuthTypeID]
+		if name == "" {
+			return errors.New("archived cloud references an unknown authentication type")
+		}
+		info.Cloud.AuthTypes = append(info.Cloud.AuthTypes, name)
+	}
+	for _, cert := range payload.CloudCaCert {
+		if cert.CloudUUID == model.CloudUUID {
+			info.Cloud.CACertificates = append(info.Cloud.CACertificates, cert.CaCert)
+		}
+	}
+	for _, region := range payload.CloudRegion {
+		if region.CloudUUID != model.CloudUUID {
+			continue
+		}
+		info.Cloud.Regions = append(info.Cloud.Regions, domainrecovery.RegionInfo{
+			Name: region.Name, Endpoint: stringValue(region.Endpoint),
+			IdentityEndpoint: stringValue(region.IdentityEndpoint), StorageEndpoint: stringValue(region.StorageEndpoint),
+		})
+		if model.CloudRegionUUID != nil && region.UUID == *model.CloudRegionUUID {
+			info.Region = region.Name
+		}
+	}
+	if model.CloudRegionUUID != nil && info.Region == "" {
+		return errors.New("controller model references an unknown cloud region")
+	}
+	if model.CloudRegionUUID == nil && len(info.Cloud.Regions) != 0 {
+		return errors.New("controller model does not identify its source cloud region")
+	}
+	if model.CloudCredentialUUID == nil {
+		return nil
+	}
+	for _, credential := range payload.CloudCredential {
+		if credential.UUID != *model.CloudCredentialUUID {
+			continue
+		}
+		if credential.CloudUUID != model.CloudUUID {
+			return errors.New("controller credential belongs to a different cloud")
+		}
+		id, err := strconv.ParseInt(credential.AuthTypeID, 10, 64)
+		if err != nil || authTypes[id] == "" {
+			return errors.New("controller credential references an unknown authentication type")
+		}
+		info.Credential = &domainrecovery.CredentialInfo{
+			UUID: credential.UUID, Name: credential.Name, AuthType: authTypes[id], Attributes: make(map[string]string),
+			Revoked: credential.Revoked != nil && *credential.Revoked,
+			Invalid: credential.Invalid != nil && *credential.Invalid,
+		}
+		for _, attr := range payload.CloudCredentialAttribute {
+			if attr.CloudCredentialUUID == credential.UUID && attr.Value != nil {
+				info.Credential.Attributes[attr.Key] = *attr.Value
+			}
+		}
+		return nil
+	}
+	return errors.New("controller model references an unknown cloud credential")
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 // modelDumpInventory mirrors the model-dump tables the substrate

@@ -11,6 +11,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -80,6 +81,9 @@ type ArchiveContents struct {
 	ModelDumps map[string]string
 
 	stagingDir string
+	// ImportSize includes unpacked files, their installed copies, and database
+	// staging/import headroom. It excludes the already uploaded archive.
+	ImportSize int64
 }
 
 // readArchive streams archivePath once, computing the archive's SHA-256
@@ -94,7 +98,7 @@ type ArchiveContents struct {
 // cannot escape, and rejecting outright would dead-end an archive the
 // operator cannot otherwise fix. When the archive carries a content
 // manifest, it is cross-checked against the entries actually read.
-func readArchive(ctx context.Context, logger corelogger.Logger, archivePath, expectedSHA256 string) (*ArchiveContents, string, int64, error) {
+func readArchive(ctx context.Context, logger corelogger.Logger, archivePath, expectedSHA256, stagingRoot string) (*ArchiveContents, string, int64, error) {
 	f, err := os.Open(archivePath)
 	if err != nil {
 		return nil, "", 0, errors.Errorf("opening archive: %w", err)
@@ -108,7 +112,7 @@ func readArchive(ctx context.Context, logger corelogger.Logger, archivePath, exp
 	}
 	defer func() { _ = gz.Close() }()
 
-	stagingDir, err := os.MkdirTemp("", "juju-recovery-dump-")
+	stagingDir, err := os.MkdirTemp(stagingRoot, "juju-recovery-dump-")
 	if err != nil {
 		return nil, "", 0, errors.Errorf("creating recovery workspace: %w", err)
 	}
@@ -151,6 +155,17 @@ func readArchive(ctx context.Context, logger corelogger.Logger, archivePath, exp
 	}
 	if len(contents.ControllerDump) == 0 {
 		return nil, "", 0, errors.Errorf("archive is missing %s", controllerDumpPath)
+	}
+
+	for name, digest := range reader.digests {
+		factor := int64(3)
+		if name == canonicalPaths.FilesArchive {
+			factor = 2
+		}
+		if digest.size > (math.MaxInt64-contents.ImportSize)/factor {
+			return nil, "", 0, errors.New("archive recovery size exceeds supported range")
+		}
+		contents.ImportSize += factor * digest.size
 	}
 
 	stat, err := os.Stat(archivePath)
