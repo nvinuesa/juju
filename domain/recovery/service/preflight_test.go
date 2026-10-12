@@ -20,6 +20,13 @@ func (s *serviceSuite) TestCheckAgentVersion(c *tc.C) {
 	err = CheckAgentVersion(info, semversion.MustParse("4.1-beta1"))
 	c.Assert(err, tc.ErrorMatches,
 		"archive was created by agent version 4.1.0 but this binary is 4.1-beta1.*")
+	for _, recorded := range []string{"4.1.0", "4.1.0.7", "4.1-beta3.1"} {
+		info.AgentVersion = semversion.MustParse(recorded)
+		c.Assert(info.CheckAgentVersion(info.AgentVersion), tc.ErrorIsNil)
+		for _, target := range []string{"4.0.0", "4.1.1", "4.1.0.8", "4.1-beta3"} {
+			c.Check(info.CheckAgentVersion(semversion.MustParse(target)), tc.ErrorMatches, "archive was created by agent version .* but this binary is .*")
+		}
+	}
 }
 
 // TestCheckAgentVersionBuildMismatch pins the build number as part of
