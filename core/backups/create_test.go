@@ -134,7 +134,7 @@ func (s *createSuite) TestCreate(c *tc.C) {
 	storedMeta, err := backups.NewMetadataJSONReader(
 		strings.NewReader(contents["juju-backup/metadata.json"]))
 	c.Assert(err, tc.ErrorIsNil)
-	c.Check(storedMeta.FormatVersion, tc.Equals, int64(2))
+	c.Check(storedMeta.FormatVersion, tc.Equals, int64(3))
 
 	// root.tar archives the files with the leading slash stripped.
 	rootEntries, _ := s.tarEntries(c,
