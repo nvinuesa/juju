@@ -19,6 +19,7 @@ import (
 	corestatus "github.com/juju/juju/core/status"
 	"github.com/juju/juju/internal/bootstrap"
 	"github.com/juju/juju/internal/cloudconfig/instancecfg"
+	"github.com/juju/juju/internal/controllerinit"
 	"github.com/juju/juju/internal/errors"
 	"github.com/juju/juju/internal/services"
 	"github.com/juju/juju/internal/statushistory"
@@ -46,7 +47,7 @@ type BootstrapAddressFinderGetter func(providerFactory providertracker.ProviderF
 
 // AgentFinalizerFunc is the function that is used to finalise the agent
 // during bootstrap.
-type AgentFinalizerFunc func(context.Context, AgentPasswordService, MachineService, instancecfg.StateInitializationParams, string) error
+type AgentFinalizerFunc func(context.Context, controllerinit.AgentPasswordService, MachineService, instancecfg.StateInitializationParams, string) error
 
 // RemoveBootstrapSSHKeysFunc removes the bootstrap-only SSH keys from the
 // machine.
@@ -249,8 +250,10 @@ func Manifold(config ManifoldConfig) dependency.Manifold {
 
 			applicationService := controllerModelDomainServices.Application()
 
-			// Select the operation for fresh bootstrap or restoration here.
-			// Keep this choice out of the worker's completion and gate handling.
+			// Fresh bootstrap is the only operation constructed here.
+			// Recovery selects a sibling manifold at graph construction
+			// (ManifoldsConfig.IsRecovery in
+			// cmd/jujuagentd/agent/machine.mergeManifolds).
 			operation, err := NewFreshBootstrap(FreshBootstrapConfig{
 				ControllerAgentBinaryStore: controllerDomainServices.ControllerAgentBinaryStore(),
 				ControllerConfigService:    controllerDomainServices.ControllerConfig(),
