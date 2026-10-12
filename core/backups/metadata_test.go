@@ -174,7 +174,7 @@ func (s *metadataSuite) TestNewMetadataJSONReaderV2(c *tc.C) {
 func (s *metadataSuite) TestNewMetadataJSONReaderUnsupported(c *tc.C) {
 	file := bytes.NewBufferString(`{` +
 		`"ID":"20140909-115934.asdf-zxcv-qwe",` +
-		`"FormatVersion":3,` +
+		`"FormatVersion":4,` +
 		`"Checksum":"123af2cef",` +
 		`"ChecksumFormat":"SHA-1, base64 encoded",` +
 		`"Size":10,` +
@@ -226,4 +226,20 @@ func (s *metadataSuite) TestBuildMetadata(c *tc.C) {
 	c.Check(meta.Controller.MachineInstanceID, tc.Equals, backups.UnknownString)
 	c.Check(meta.Controller.MachineID, tc.Equals, backups.UnknownString)
 	c.Check(meta.Controller.HANodes, tc.Equals, backups.UnknownInt64)
+}
+
+func (s *metadataSuite) TestKubernetesProvisioningRoundTrip(c *tc.C) {
+	meta := s.createTestMetadata(c)
+	meta.Kubernetes = &backups.KubernetesProvisioning{
+		AgentImage: "example.com/agent@sha256:source", CharmImage: "example.com/charm@sha256:source",
+		Architecture: "arm64", StorageClass: "source", StorageSizeMiB: 65536,
+		ServiceType: "LoadBalancer", ExternalIPs: []string{"192.0.2.1"},
+		ServiceAnnotations: map[string]string{"source": "value"},
+	}
+	reader, err := meta.AsJSONBuffer()
+	c.Assert(err, tc.ErrorIsNil)
+	decoded, err := backups.NewMetadataJSONReader(reader)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(decoded.FormatVersion, tc.Equals, int64(3))
+	c.Check(decoded.Kubernetes, tc.DeepEquals, meta.Kubernetes)
 }
