@@ -162,6 +162,8 @@ func isRetryableErrorMessage(errorMessage string) bool {
 		strings.HasSuffix(errorMessage, "network is unreachable"),
 		strings.HasSuffix(errorMessage, "deadline exceeded"),
 		strings.HasSuffix(errorMessage, "lost connection to pod"),
+		strings.Contains(errorMessage, "tunnel pod ") &&
+			strings.HasSuffix(errorMessage, "is being deleted"),
 		strings.HasSuffix(errorMessage, "no api connection available"):
 		return true
 	default:
