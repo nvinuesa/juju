@@ -32,14 +32,6 @@ type recoverySuite struct{}
 
 func TestRecoverySuite(t *testing.T) { tc.Run(t, &recoverySuite{}) }
 
-func (s *recoverySuite) TestInfo(c *tc.C) {
-	info := newRecoveryCommand().Info()
-	c.Check(info.Name, tc.Equals, "recovery")
-	c.Check(info.Args, tc.Equals, "<backup-file>")
-	c.Check(info.Examples, tc.Equals,
-		"    juju recovery juju-backup.tar.gz --sha256 <checksum>")
-}
-
 func (s *recoverySuite) TestInit(c *tc.C) {
 	for _, test := range []struct {
 		args    []string

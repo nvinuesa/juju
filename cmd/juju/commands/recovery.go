@@ -34,6 +34,7 @@ type recoveryCommand struct {
 	modelcmd.ModelCommandBase
 	archivePath  string
 	sha256       string
+	keepBroken   bool
 	recoveryInfo *recovery.ArchiveInfo
 }
 
@@ -52,6 +53,13 @@ cluster and surviving workload namespaces.
 The archive checksum is required. Local credentials are tried first; if none
 are available, the archived controller model credential is used. An ambiguous
 credential selection or authentication failure stops recovery.
+
+By default, a failed recovery removes the replacement's cloud resources.
+Use --keep-broken to retain them for diagnosis and manual repair. The failed
+controller is removed from the local client; access the retained resources
+directly using SSH or your cloud tools. Stop recovery and normal controller
+processes before starting safe mode. This flag does not pause recovery or make
+an incomplete import resumable. Remove retained resources manually when finished.
 `,
 		Examples: "    juju recovery juju-backup.tar.gz --sha256 <checksum>",
 		SeeAlso:  []string{"bootstrap", "create-backup", "unregister"},
@@ -61,6 +69,8 @@ credential selection or authentication failure stops recovery.
 func (c *recoveryCommand) SetFlags(f *gnuflag.FlagSet) {
 	c.ModelCommandBase.SetFlags(f)
 	f.StringVar(&c.sha256, "sha256", "", "SHA-256 checksum of the backup archive (64 hexadecimal characters)")
+	f.BoolVar(&c.keepBroken, "keep-broken", false,
+		"Do not remove replacement cloud resources if recovery fails")
 }
 
 func (c *recoveryCommand) Init(args []string) error {

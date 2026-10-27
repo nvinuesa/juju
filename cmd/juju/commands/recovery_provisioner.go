@@ -101,22 +101,7 @@ func (c *recoveryCommand) provisionRecoveryController(ctx *cmd.Context) (resultE
 	var cleanup func(context.Context) error
 	registered := false
 	defer func() {
-		if resultErr == nil {
-			return
-		}
-		// Cleanup must work after timeout and is restricted to this instance.
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
-		defer cancel()
-		if cleanup != nil {
-			if err := cleanup(cleanupCtx); err != nil {
-				resultErr = errors.Annotatef(resultErr, "cleanup of replacement %s failed: %v", started, err)
-			}
-		}
-		if registered {
-			if err := c.ClientStore().RemoveController(info.ControllerName); err != nil {
-				resultErr = errors.Annotatef(resultErr, "removing replacement registration: %v", err)
-			}
-		}
+		resultErr = c.cleanupFailedRecovery(ctx, cleanup, registered, resultErr)
 	}()
 	provisioner, ok := env.(environs.RecoveryMachineProvisioner)
 	if !ok {
@@ -245,6 +230,45 @@ func (c *recoveryCommand) provisionRecoveryController(ctx *cmd.Context) (resultE
 	}
 	c.printRecoverySummary(ctx, info, nil)
 	return nil
+}
+
+// cleanupFailedRecovery leaves successful recoveries untouched. On failure,
+// only --keep-broken preserves cloud resources; failed client registrations
+// are always removed.
+func (c *recoveryCommand) cleanupFailedRecovery(
+	ctx *cmd.Context,
+	cleanup func(context.Context) error,
+	registered bool,
+	recoveryErr error,
+) error {
+	if recoveryErr == nil {
+		return nil
+	}
+	if cleanup != nil {
+		if c.keepBroken {
+			ctx.Infof(`
+Recovery failed but --keep-broken was specified.
+Any replacement resources for controller %q in cloud %q have been retained.
+Access them directly using SSH or your cloud tools for diagnosis.
+Stop recovery and normal controller processes before starting safe mode.
+An incomplete import cannot be resumed automatically.
+Remove retained resources manually when finished.
+`[1:], c.recoveryInfo.ControllerName, c.recoveryInfo.CloudName)
+		} else {
+			// Cleanup must still work after the recovery context times out.
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+			defer cancel()
+			if err := cleanup(cleanupCtx); err != nil {
+				recoveryErr = errors.Annotatef(recoveryErr, "cleanup of replacement resources failed: %v", err)
+			}
+		}
+	}
+	if registered {
+		if err := c.ClientStore().RemoveController(c.recoveryInfo.ControllerName); err != nil {
+			recoveryErr = errors.Annotatef(recoveryErr, "removing replacement registration: %v", err)
+		}
+	}
+	return recoveryErr
 }
 
 func recoveryConfigs(info *recovery.ArchiveInfo, provider environs.EnvironProvider) (controller.Config, *config.Config, error) {
