@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/distribution/reference"
 	"github.com/juju/errors"
 	"github.com/juju/names/v6"
 
@@ -19,16 +18,14 @@ import (
 	"github.com/juju/juju/cmd/cmd"
 	"github.com/juju/juju/cmd/juju/common"
 	"github.com/juju/juju/cmd/modelcmd"
-	"github.com/juju/juju/controller"
 	"github.com/juju/juju/core/base"
 	"github.com/juju/juju/core/model"
+	"github.com/juju/juju/domain/recovery"
 	"github.com/juju/juju/environs"
 	"github.com/juju/juju/environs/cloudspec"
 	environscmd "github.com/juju/juju/environs/cmd"
 	"github.com/juju/juju/internal/cloudconfig/instancecfg"
 	"github.com/juju/juju/internal/cloudconfig/podcfg"
-	"github.com/juju/juju/internal/docker"
-	"github.com/juju/juju/internal/docker/registry"
 	"github.com/juju/juju/internal/password"
 	internalrecovery "github.com/juju/juju/internal/recovery"
 )
@@ -67,14 +64,6 @@ func (c *recoveryCommand) provisionK8sRecoveryController(ctx *cmd.Context) (resu
 	charmBase, err := base.ParseBaseFromString(info.ControllerCharmBase)
 	if err != nil {
 		return err
-	}
-	image, err := recoveryControllerImage(stdCtx, controllerConfig, info.Kubernetes.AgentImage, architecture)
-	if err != nil {
-		return errors.Annotate(err, "resolving exact recovery agent image")
-	}
-	charmImage, err := recoveryControllerImage(stdCtx, controllerConfig, info.Kubernetes.CharmImage, architecture)
-	if err != nil {
-		return errors.Annotate(err, "verifying archived controller charm image")
 	}
 	broker, err := caas.Open(stdCtx, provider, environs.OpenParams{ControllerUUID: info.ControllerUUID, Cloud: spec, Config: modelConfig}, environs.NoopCredentialInvalidator())
 	if err != nil {
@@ -119,14 +108,7 @@ func (c *recoveryCommand) provisionK8sRecoveryController(ctx *cmd.Context) (resu
 	if err != nil {
 		return err
 	}
-	pcfg.JujuVersion, pcfg.AgentImage, pcfg.CharmBase = info.AgentVersion, image, charmBase
-	pcfg.CharmImage = charmImage
-	pcfg.RecoveryStorageClass = &info.Kubernetes.StorageClass
-	pcfg.RecoveryServiceAnnotations = info.Kubernetes.ServiceAnnotations
-	pcfg.RecoveryLoadBalancerIP = info.Kubernetes.LoadBalancerIP
-	pcfg.Bootstrap.ControllerServiceType = info.Kubernetes.ServiceType
-	pcfg.Bootstrap.ControllerExternalName = info.Kubernetes.ExternalName
-	pcfg.Bootstrap.ControllerExternalIPs = info.Kubernetes.ExternalIPs
+	applyArchivedK8sProvisioning(pcfg, info, charmBase)
 	pcfg.APIInfo = &api.Info{Password: adminPassword, CACert: info.CACert, ModelTag: names.NewModelTag(info.ControllerModelUUID)}
 	pcfg.Bootstrap.ControllerAgentInfo = certInfo
 	pcfg.Bootstrap.ControllerCloud = sourceCloud
@@ -176,19 +158,15 @@ func (c *recoveryCommand) provisionK8sRecoveryController(ctx *cmd.Context) (resu
 	return nil
 }
 
-func recoveryControllerImage(ctx context.Context, cfg controller.Config, image, architecture string) (string, error) {
-	ref, err := reference.ParseNormalizedNamed(image)
-	if err != nil {
-		return "", err
-	}
-	if _, ok := ref.(reference.Canonical); !ok {
-		return "", errors.New("archive does not record an immutable source image")
-	}
-	details, err := docker.NewImageRepoDetails(cfg.CAASImageRepo())
-	if err != nil {
-		return "", err
-	}
-	return registry.ResolveReference(ctx, image, details, architecture)
+func applyArchivedK8sProvisioning(pcfg *podcfg.ControllerPodConfig, info *recovery.ArchiveInfo, charmBase base.Base) {
+	pcfg.JujuVersion, pcfg.AgentImage, pcfg.CharmBase = info.AgentVersion, info.Kubernetes.AgentImage, charmBase
+	pcfg.CharmImage = info.Kubernetes.CharmImage
+	pcfg.RecoveryStorageClass = &info.Kubernetes.StorageClass
+	pcfg.RecoveryServiceAnnotations = info.Kubernetes.ServiceAnnotations
+	pcfg.RecoveryLoadBalancerIP = info.Kubernetes.LoadBalancerIP
+	pcfg.Bootstrap.ControllerServiceType = info.Kubernetes.ServiceType
+	pcfg.Bootstrap.ControllerExternalName = info.Kubernetes.ExternalName
+	pcfg.Bootstrap.ControllerExternalIPs = info.Kubernetes.ExternalIPs
 }
 
 func recoveryPodSetupCommand(dataDir, archivePath string, timeout time.Duration) string {

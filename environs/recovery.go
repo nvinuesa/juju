@@ -115,7 +115,7 @@ type RecoveryControllerPreparer interface {
 // facts without modifying provider resources. A backup fails when a required
 // image or storage identity cannot be established.
 type ControllerBackupProvisioning interface {
-	ControllerBackupProvisioning(context.Context) (*backups.KubernetesProvisioning, error)
+	ControllerBackupProvisioning(ctx context.Context, controllerID string) (*backups.KubernetesProvisioning, error)
 }
 
 // RecoveryMachineParams preserves the logical source identity while giving

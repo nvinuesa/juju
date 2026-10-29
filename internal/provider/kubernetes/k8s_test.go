@@ -776,6 +776,16 @@ func (s *K8sBrokerSuite) TestEnsureImageRepoSecret(c *tc.C) {
 	c.Assert(err, tc.ErrorIsNil)
 }
 
+func (s *K8sBrokerSuite) TestEnsureImageRepoSecretSkipsAnonymousHTTP(c *tc.C) {
+	ctrl := s.setupController(c)
+	defer ctrl.Finish()
+
+	err := s.broker.EnsureImageRepoSecret(c.Context(), docker.ImageRepoDetails{
+		Repository: "localhost:5000/juju", ServerAddress: "http://localhost:5000",
+	})
+	c.Assert(err, tc.ErrorIsNil)
+}
+
 func (s *K8sBrokerSuite) TestDestroy(c *tc.C) {
 	s.assertDestroy(c, false, func() error {
 		return s.broker.Destroy(c.Context())

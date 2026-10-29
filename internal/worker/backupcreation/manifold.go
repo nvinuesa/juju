@@ -213,7 +213,7 @@ func (g archiveGenerator) Create(ctx context.Context, notes string) (*corebackup
 		if !ok {
 			return nil, internalerrors.Errorf("provider cannot record controller provisioning").Add(coreerrors.NotSupported)
 		}
-		return reader.ControllerBackupProvisioning(ctx)
+		return reader.ControllerBackupProvisioning(ctx, g.config.ControllerNodeID)
 	}
 
 	creator, err := NewCreator(CreatorConfig{

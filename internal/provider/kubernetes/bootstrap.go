@@ -357,10 +357,6 @@ func makeControllerStack(
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
-		err = reg.Ping()
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
 		if cs.dockerAuthSecretData, err = reg.ImageRepoDetails().SecretData(); err != nil {
 			return nil, errors.Trace(err)
 		}
@@ -1232,13 +1228,16 @@ func (c *controllerStack) waitForPod(ctx context.Context, podWatcher watcher.Not
 }
 
 func (c *controllerStack) buildStorageSpecForController(ctx context.Context, statefulset *apps.StatefulSet) error {
-	sc, err := c.broker.getStorageClass(ctx, c.storageClass)
-	if err != nil {
-		return errors.Trace(err)
+	if c.pcfg.RecoveryStorageClass != nil {
+		c.storageClass = *c.pcfg.RecoveryStorageClass
+	} else {
+		sc, err := c.broker.getStorageClass(ctx, c.storageClass)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		// Prefer a namespace-qualified class for ordinary bootstrap.
+		c.storageClass = sc.GetName()
 	}
-	// try to find <namespace>-<c.storageClass>,
-	// if it's not found, then fallback to c.storageClass.
-	c.storageClass = sc.GetName()
 
 	// build persistent volume claim.
 	statefulset.Spec.VolumeClaimTemplates = append(statefulset.Spec.VolumeClaimTemplates, core.PersistentVolumeClaim{

@@ -23,6 +23,7 @@ import (
 	"github.com/juju/juju/cmd/modelcmd"
 	"github.com/juju/juju/domain/recovery"
 	"github.com/juju/juju/environs"
+	"github.com/juju/juju/internal/docker"
 	internalrecovery "github.com/juju/juju/internal/recovery"
 )
 
@@ -50,10 +51,11 @@ Machine agents come from the archive; the CLI version does not select them.
 Source constraints and observed hardware determine the replacement's capacity,
 with additional space reserved for archive staging and database import.
 
-Kubernetes backups record the running agent and controller charm image digests,
-platform, volume size, storage class and Service exposure. Recovery verifies
-those manifests directly; it does not resolve a current version tag. The image
-registry must still provide the archived manifests and layers.
+Kubernetes backups record the source agent and controller charm image references,
+platform, volume size, storage class and Service exposure. Recovery reuses those
+references, which may be tags or digests. Images must be available to eligible
+cluster nodes through configured pulls or preloading. The running agent must have
+the exact archived version, including its build number.
 
 Fence the source controller before recovery. If its name is registered on this
 client, run juju unregister first. Kubernetes recovery requires the original
@@ -150,6 +152,12 @@ func (c *recoveryCommand) preflight(ctx *cmd.Context) (*recovery.ArchiveInfo, er
 		}
 		if info.Kubernetes.Architecture != info.ControllerArchitecture || info.Kubernetes.StorageSizeMiB == 0 {
 			return nil, errors.New("source Kubernetes provisioning disagrees with the archived controller")
+		}
+		if err := docker.ValidateDockerRegistryPath(info.Kubernetes.AgentImage); err != nil {
+			return nil, errors.Annotate(err, "invalid archived controller agent image")
+		}
+		if err := docker.ValidateDockerRegistryPath(info.Kubernetes.CharmImage); err != nil {
+			return nil, errors.Annotate(err, "invalid archived controller charm image")
 		}
 	}
 	if !names.IsValidCloud(info.CloudName) {

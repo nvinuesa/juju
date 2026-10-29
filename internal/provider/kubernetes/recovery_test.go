@@ -95,9 +95,6 @@ func (s *recoverySuite) TestSubstrateHappyPath(c *tc.C) {
 func (s *recoverySuite) TestPrepareRecoveryAcceptsSurvivingWorkloadNamespaces(c *tc.C) {
 	client := fake.NewClientset(
 		ownedNamespace(c, "workload", "model-uuid-1"),
-		&storagev1.StorageClass{ObjectMeta: v1.ObjectMeta{
-			Name: "workload-storage", Annotations: map[string]string{"juju.is/workload-storage": "true"},
-		}},
 	)
 	broker := &kubernetesClient{clientUnlocked: client, labelVersion: constants.LastLabelVersion}
 	ctx := envtesting.BootstrapContext(c.Context(), c)
@@ -108,6 +105,36 @@ func (s *recoverySuite) TestPrepareRecoveryAcceptsSurvivingWorkloadNamespaces(c 
 	c.Check(report.HostCloudRegion, tc.Equals, "other")
 	for _, action := range client.Actions() {
 		c.Check(action.GetVerb() == "get" || action.GetVerb() == "list", tc.IsTrue)
+	}
+}
+
+func (s *recoverySuite) TestPrepareRecoveryNodeListError(c *tc.C) {
+	client := fake.NewClientset(ownedNamespace(c, "workload", "model-uuid-1"))
+	client.PrependReactor("list", "nodes", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, fmt.Errorf("node list unavailable")
+	})
+	broker := &kubernetesClient{clientUnlocked: client, labelVersion: constants.LastLabelVersion}
+	_, err := broker.PrepareForRecovery(envtesting.BootstrapContext(c.Context(), c), substrateParams())
+	c.Assert(err, tc.ErrorMatches, ".*node list unavailable.*")
+}
+
+func (s *recoverySuite) TestRecoveryStorageClassIsExact(c *tc.C) {
+	for _, archived := range []string{"source", ""} {
+		client := fake.NewClientset(
+			&storagev1.StorageClass{ObjectMeta: v1.ObjectMeta{Name: "source"}},
+			&storagev1.StorageClass{ObjectMeta: v1.ObjectMeta{Name: "controller-source"}},
+		)
+		stack := &controllerStack{
+			broker: &kubernetesClient{clientUnlocked: client, namespace: "controller"},
+			pcfg:   &podcfg.ControllerPodConfig{RecoveryStorageClass: &archived},
+		}
+		set := &apps.StatefulSet{}
+		c.Assert(stack.buildStorageSpecForController(c.Context(), set), tc.ErrorIsNil)
+		c.Assert(set.Spec.VolumeClaimTemplates, tc.HasLen, 1)
+		class := set.Spec.VolumeClaimTemplates[0].Spec.StorageClassName
+		c.Assert(class, tc.NotNil)
+		c.Check(*class, tc.Equals, archived)
+		c.Check(client.Actions(), tc.HasLen, 0)
 	}
 }
 

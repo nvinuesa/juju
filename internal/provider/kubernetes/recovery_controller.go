@@ -24,6 +24,7 @@ import (
 	environsbootstrap "github.com/juju/juju/environs/bootstrap"
 	"github.com/juju/juju/internal/cloudconfig/instancecfg"
 	"github.com/juju/juju/internal/cloudconfig/podcfg"
+	"github.com/juju/juju/internal/docker"
 	"github.com/juju/juju/internal/errors"
 	"github.com/juju/juju/internal/provider/kubernetes/constants"
 	k8sexec "github.com/juju/juju/internal/provider/kubernetes/exec"
@@ -33,8 +34,14 @@ import (
 // ProvisionRecoveryController implements caas.RecoveryControllerProvisioner.
 func (k *kubernetesClient) ProvisionRecoveryController(ctx environs.BootstrapContext, params caas.RecoveryControllerParams) (func(context.Context) error, error) {
 	cfg := params.PodConfig
-	if cfg == nil || cfg.Initialisation == nil || cfg.Bootstrap == nil || cfg.Bootstrap.Timeout <= 0 || (!strings.Contains(cfg.AgentImage, "@sha256:") || !strings.Contains(cfg.CharmImage, "@sha256:")) {
-		return nil, errors.New("recovery requires initialisation and an immutable agent image")
+	if cfg == nil || cfg.Initialisation == nil || cfg.Bootstrap == nil || cfg.Bootstrap.Timeout <= 0 {
+		return nil, errors.New("recovery requires initialisation and controller images")
+	}
+	if err := docker.ValidateDockerRegistryPath(cfg.AgentImage); err != nil {
+		return nil, errors.Errorf("invalid recovery controller agent image: %w", err)
+	}
+	if err := docker.ValidateDockerRegistryPath(cfg.CharmImage); err != nil {
+		return nil, errors.Errorf("invalid recovery controller charm image: %w", err)
 	}
 	if k.namespace != DecideControllerNamespace(cfg.ControllerName) {
 		return nil, errors.New("provider has not been prepared for recovery")
@@ -82,7 +89,7 @@ func (k *kubernetesClient) ProvisionRecoveryController(ctx environs.BootstrapCon
 // waitForRecoveryContainer waits for exec, not API readiness: the API cannot
 // become ready until the archive has been uploaded and imported.
 func (k *kubernetesClient) waitForRecoveryContainer(ctx context.Context, name string, timeout time.Duration) error {
-	return retry.Call(retry.CallArgs{
+	err := retry.Call(retry.CallArgs{
 		MaxDuration: timeout, Delay: time.Second, Stop: ctx.Done(), Clock: k.clock,
 		Func: func() error {
 			if err := ctx.Err(); err != nil {
@@ -93,16 +100,22 @@ func (k *kubernetesClient) waitForRecoveryContainer(ctx context.Context, name st
 				return err
 			}
 			for _, status := range pod.Status.ContainerStatuses {
-				if status.Name != apiServerContainerName {
-					continue
-				}
-				if status.State.Running != nil {
+				if status.Name == apiServerContainerName && status.State.Running != nil {
 					return nil
 				}
-				if status.State.Waiting != nil {
-					switch status.State.Waiting.Reason {
+			}
+			for _, statuses := range [][]core.ContainerStatus{pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses} {
+				for _, status := range statuses {
+					waiting := status.State.Waiting
+					if waiting == nil || waiting.Reason == "" || waiting.Reason == "PodInitializing" || waiting.Reason == "ContainerCreating" {
+						continue
+					}
+					err := errors.Errorf("recovery container %q cannot start: %s: %s", status.Name, waiting.Reason, waiting.Message)
+					switch waiting.Reason {
 					case "InvalidImageName", "CreateContainerConfigError":
-						return errors.Errorf("recovery container cannot start: %s", status.State.Waiting.Message).Add(jujuerrors.NotValid)
+						return err.Add(jujuerrors.NotValid)
+					default:
+						return err
 					}
 				}
 			}
@@ -114,6 +127,10 @@ func (k *kubernetesClient) waitForRecoveryContainer(ctx context.Context, name st
 				k8serrors.IsUnauthorized(err) || k8serrors.IsInvalid(err)
 		},
 	})
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return err
 }
 
 func (k *kubernetesClient) recoveryControllerCleanup(name string, namespaceUID types.UID, bindingUID *types.UID) func(context.Context) error {

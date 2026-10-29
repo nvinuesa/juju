@@ -5,7 +5,9 @@ package kubernetes_test
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -40,6 +42,7 @@ import (
 	envtesting "github.com/juju/juju/environs/testing"
 	"github.com/juju/juju/internal/cloudconfig/podcfg"
 	"github.com/juju/juju/internal/docker"
+	"github.com/juju/juju/internal/docker/registry"
 	"github.com/juju/juju/internal/featureflag"
 	"github.com/juju/juju/internal/provider/kubernetes"
 	k8sexec "github.com/juju/juju/internal/provider/kubernetes/exec"
@@ -300,6 +303,34 @@ func (s *bootstrapSuite) TestGetControllerSvcSpec(c *tc.C) {
 			c.Check(err, tc.ErrorMatches, t.errStr)
 		}
 		c.Check(spec, tc.DeepEquals, t.spec)
+	}
+}
+
+type deniedRegistryTransport struct{}
+
+func (deniedRegistryTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, fmt.Errorf("registry access denied")
+}
+
+func (s *bootstrapSuite) TestControllerStackDoesNotContactRegistry(c *tc.C) {
+	s.PatchValue(&registry.DefaultTransport, http.RoundTripper(deniedRegistryTransport{}))
+	newClient, newRestClient := s.setupK8sRestClient(c, s.pcfg.ControllerName)
+	var watchers []k8swatcher.KubernetesNotifyWatcher
+	s.setupBroker(c, newClient, newRestClient, &watchers)
+
+	for _, repository := range []string{"example.com/juju", "ghcr.io/juju"} {
+		s.controllerCfg[controller.CAASImageRepo] = repository
+		s.pcfg.AgentImage = repository + "/jujud-operator:4.1-beta3"
+		s.pcfg.CharmImage = repository + "/charm-base:latest"
+		spec := s.controllerStackerGetter().BuildContainerSpecForController(c)
+		found := false
+		for _, container := range spec.Containers {
+			if container.Name == "api-server" {
+				found = true
+				c.Check(container.Image, tc.Equals, s.pcfg.AgentImage)
+			}
+		}
+		c.Check(found, tc.IsTrue)
 	}
 }
 

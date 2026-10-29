@@ -4,7 +4,7 @@
 package backups
 
 // KubernetesProvisioning records the running controller's substrate. Images
-// identify the source's actual manifests, independently of mutable version tags.
+// are source pod references and may be tagged or digest-addressed.
 type KubernetesProvisioning struct {
 	AgentImage         string
 	CharmImage         string

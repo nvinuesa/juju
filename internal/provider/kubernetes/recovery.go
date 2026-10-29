@@ -35,20 +35,17 @@ func (k *kubernetesClient) PrepareForRecovery(ctx environs.BootstrapContext, par
 		return nil, errors.Capture(err)
 	}
 	k.namespace = DecideControllerNamespace(params.ControllerName)
-	metadata, err := k.GetClusterMetadata(ctx, "")
+	hostCloud, regions, err := listHostCloudRegions(ctx, k.client().CoreV1().Nodes())
 	if err != nil {
 		return nil, errors.Capture(err)
 	}
-	if metadata.WorkloadStorageClass == nil || metadata.WorkloadStorageClass.Name == "" {
-		return nil, errors.New("controller storage class not identified")
-	}
 	report.HostCloudRegion = caask8s.K8sCloudOther
-	if metadata.Cloud != "" {
+	if hostCloud != "" {
 		var region string
-		if metadata.Regions != nil && metadata.Regions.Size() > 0 {
-			region = metadata.Regions.SortedValues()[0]
+		if regions != nil && regions.Size() > 0 {
+			region = regions.SortedValues()[0]
 		}
-		report.HostCloudRegion = cloud.BuildHostCloudRegion(metadata.Cloud, region)
+		report.HostCloudRegion = cloud.BuildHostCloudRegion(hostCloud, region)
 	}
 	return report, nil
 }

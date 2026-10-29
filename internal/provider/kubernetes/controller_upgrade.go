@@ -5,23 +5,16 @@ package kubernetes
 
 import (
 	"context"
-	"encoding/json"
-	"strings"
 
-	"github.com/distribution/reference"
 	"github.com/juju/errors"
 	appsv1 "k8s.io/api/apps/v1"
-	core "k8s.io/api/core/v1"
 	"k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
-	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/juju/juju/core/semversion"
 	"github.com/juju/juju/environs/bootstrap"
 	"github.com/juju/juju/internal/cloudconfig/podcfg"
-	"github.com/juju/juju/internal/docker"
-	"github.com/juju/juju/internal/docker/registry"
 	"github.com/juju/juju/internal/provider/kubernetes/constants"
 	"github.com/juju/juju/internal/provider/kubernetes/resources"
 	providerutils "github.com/juju/juju/internal/provider/kubernetes/utils"
@@ -88,21 +81,6 @@ func (k *kubernetesClient) upgradeController(ctx context.Context, vers semversio
 	if err != nil {
 		return err
 	}
-	architecture := set.Spec.Template.Spec.NodeSelector["kubernetes.io/arch"]
-	if architecture == "" {
-		architecture = set.Spec.Template.Spec.NodeSelector["beta.kubernetes.io/arch"]
-	}
-	if architecture == "" {
-		architecture = "amd64"
-	}
-	details, err := k.controllerImageCredentials(ctx, image)
-	if err != nil {
-		return err
-	}
-	image, err = registry.ResolveReference(ctx, image, details, architecture)
-	if err != nil {
-		return errors.Annotate(err, "pinning upgraded controller agent image")
-	}
 	return controllerUpgrade(ctx, bootstrap.ControllerModelName, vers, image, broker)
 }
 
@@ -163,36 +141,4 @@ func inClusterCredentialUpgrade(
 	}
 
 	return nil
-}
-
-// controllerImageCredentials reads the credentials already used for image
-// pulls; private registry credentials stay scoped to their original domain.
-func (k *kubernetesClient) controllerImageCredentials(ctx context.Context, image string) (docker.ImageRepoDetails, error) {
-	ref, err := reference.ParseNormalizedNamed(image)
-	if err != nil {
-		return docker.ImageRepoDetails{}, err
-	}
-	secret, err := k.client().CoreV1().Secrets(k.Namespace()).Get(ctx, constants.CAASImageRepoSecretName, metav1.GetOptions{})
-	if k8serrors.IsNotFound(err) {
-		return docker.ImageRepoDetails{}, nil
-	}
-	if err != nil {
-		return docker.ImageRepoDetails{}, err
-	}
-	var config struct {
-		Auths map[string]docker.ImageRepoDetails `json:"auths"`
-	}
-	if err := json.Unmarshal(secret.Data[core.DockerConfigJsonKey], &config); err != nil {
-		return docker.ImageRepoDetails{}, err
-	}
-	for server, details := range config.Auths {
-		domain := strings.TrimPrefix(strings.TrimPrefix(server, "https://"), "http://")
-		domain = strings.TrimSuffix(domain, "/v1/")
-		if domain != reference.Domain(ref) {
-			continue
-		}
-		details.Repository = ref.Name()
-		return details, nil
-	}
-	return docker.ImageRepoDetails{}, errors.New("controller image pull secret has no credentials for its registry")
 }

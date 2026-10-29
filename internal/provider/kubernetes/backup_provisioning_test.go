@@ -4,10 +4,7 @@
 package kubernetes
 
 import (
-	"crypto/sha256"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -17,71 +14,39 @@ import (
 	core "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
 
-	"github.com/juju/juju/internal/docker"
 	"github.com/juju/juju/internal/docker/registry"
-	"github.com/juju/juju/internal/provider/kubernetes/constants"
 )
 
 type backupProvisioningSuite struct{}
 
 func TestBackupProvisioningSuite(t *testing.T) { tc.Run(t, &backupProvisioningSuite{}) }
 
-func (s *backupProvisioningSuite) TestAnonymousHTTPImageEndpoint(c *tc.C) {
-	client := fake.NewClientset()
-	broker := &kubernetesClient{clientUnlocked: client, namespace: "controller-source"}
-	details := docker.ImageRepoDetails{
-		Repository: "localhost:5000/juju", ServerAddress: "http://localhost:5000",
-	}
-	c.Assert(broker.EnsureImageRepoSecret(c.Context(), details), tc.ErrorIsNil)
-	image := "localhost:5000/juju/charm-base@sha256:" + strings.Repeat("a", 64)
-	got, err := broker.controllerImageCredentials(c.Context(), image)
-	c.Assert(err, tc.ErrorIsNil)
-	c.Check(got.ServerAddress, tc.Equals, details.ServerAddress)
-	c.Check(got.Repository, tc.Equals, "localhost:5000/juju/charm-base")
-	c.Check(got.IsPrivate(), tc.IsFalse)
+type backupImageTransport func(*http.Request) (*http.Response, error)
 
-	// Check the persisted representation rather than only the return value.
-	secret, err := client.CoreV1().Secrets(broker.Namespace()).Get(
-		c.Context(), constants.CAASImageRepoSecretName, metav1.GetOptions{})
-	c.Assert(err, tc.ErrorIsNil)
-	var config struct {
-		Auths map[string]docker.ImageRepoDetails `json:"auths"`
-	}
-	c.Assert(json.Unmarshal(secret.Data[core.DockerConfigJsonKey], &config), tc.ErrorIsNil)
-	c.Check(config.Auths["localhost:5000"].ServerAddress, tc.Equals, details.ServerAddress)
+func (f backupImageTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
 }
 
-func (s *backupProvisioningSuite) TestRunningImagesAndActualVolume(c *tc.C) {
+func backupSourceClient(agent, charm, agentID, charmID string) *fake.Clientset {
 	class := "original-class"
-	config := `{"os":"linux","architecture":"arm64"}`
-	configDigest := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(config)))
-	manifest := `{"schemaVersion":2,"config":{"digest":"` + configDigest + `"}}`
-	digest := fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(manifest)))
-	originalTransport := registry.DefaultTransport
-	c.Cleanup(func() { registry.DefaultTransport = originalTransport })
-	registry.DefaultTransport = backupImageTransport(func(request *http.Request) (*http.Response, error) {
-		body, media := manifest, "application/vnd.oci.image.manifest.v1+json"
-		if strings.Contains(request.URL.Path, "/blobs/") {
-			body, media = config, "application/octet-stream"
-		}
-		return &http.Response{Request: request, StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{media}}, Body: io.NopCloser(strings.NewReader(body))}, nil
-	})
-	client := fake.NewClientset(
+	return fake.NewClientset(
 		&apps.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "controller", Namespace: "controller-source"},
 			Spec: apps.StatefulSetSpec{Template: core.PodTemplateSpec{Spec: core.PodSpec{Containers: []core.Container{
-				{Name: apiServerContainerName, Image: "example.com/juju/jujud-operator:4.1.0"},
-				{Name: "charm", Image: "example.com/juju/charm-base@" + digest},
+				{Name: apiServerContainerName, Image: "example.com/replacement:latest"},
+				{Name: "charm", Image: "example.com/replacement-charm:latest"},
 			}}}}},
-		&core.Pod{ObjectMeta: metav1.ObjectMeta{Name: "controller-0", Namespace: "controller-source"},
-			Spec: core.PodSpec{NodeName: "worker", Volumes: []core.Volume{{Name: storageName,
+		&core.Pod{ObjectMeta: metav1.ObjectMeta{Name: "controller-1", Namespace: "controller-source"},
+			Spec: core.PodSpec{NodeName: "worker", Containers: []core.Container{
+				{Name: apiServerContainerName, Image: agent}, {Name: "charm", Image: charm},
+			}, Volumes: []core.Volume{{Name: storageName,
 				VolumeSource: core.VolumeSource{PersistentVolumeClaim: &core.PersistentVolumeClaimVolumeSource{ClaimName: "controller-storage"}},
 			}}}, Status: core.PodStatus{ContainerStatuses: []core.ContainerStatus{
-				{Name: apiServerContainerName, ImageID: "docker-pullable://example.com/juju/jujud-operator@" + digest,
-					State: core.ContainerState{Running: &core.ContainerStateRunning{}}},
-				{Name: "charm", ImageID: "containerd://" + digest,
-					State: core.ContainerState{Running: &core.ContainerStateRunning{}}},
+				{Name: apiServerContainerName, ImageID: agentID, State: core.ContainerState{Running: &core.ContainerStateRunning{}}},
+				{Name: "charm", ImageID: charmID, State: core.ContainerState{Running: &core.ContainerStateRunning{}}},
 			}}},
 		&core.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker"}, Status: core.NodeStatus{NodeInfo: core.NodeSystemInfo{Architecture: "arm64"}}},
 		&core.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "controller-storage", Namespace: "controller-source"},
@@ -90,22 +55,81 @@ func (s *backupProvisioningSuite) TestRunningImagesAndActualVolume(c *tc.C) {
 		&core.Service{ObjectMeta: metav1.ObjectMeta{Name: "controller-service", Namespace: "controller-source", Annotations: map[string]string{"source": "retained"}},
 			Spec: core.ServiceSpec{Type: core.ServiceTypeLoadBalancer, LoadBalancerIP: "192.0.2.1", ExternalIPs: []string{"192.0.2.2"}}},
 	)
-	broker := &kubernetesClient{clientUnlocked: client, namespace: "controller-source"}
-	result, err := broker.ControllerBackupProvisioning(c.Context())
-	c.Assert(err, tc.ErrorIsNil)
-	c.Check(result.AgentImage, tc.Equals, "example.com/juju/jujud-operator@"+digest)
-	c.Check(result.CharmImage, tc.Equals, "example.com/juju/charm-base@"+digest)
-	c.Check(result.Architecture, tc.Equals, "arm64")
-	c.Check(result.StorageSizeMiB, tc.Equals, uint64(64*1024))
-	c.Check(result.StorageClass, tc.Equals, class)
-	c.Check(result.ServiceType, tc.Equals, "loadbalancer")
-	c.Check(result.LoadBalancerIP, tc.Equals, "192.0.2.1")
-	c.Check(result.ServiceAnnotations["source"], tc.Equals, "retained")
 }
 
-func (s *backupProvisioningSuite) TestAmbiguousSourceImageIsRejected(c *tc.C) {
-	_, err := sourceImage("example.com/juju/jujud-operator:4.1.0", "containerd://unknown")
-	c.Check(err, tc.ErrorMatches, "cannot establish the source manifest.*")
+func (s *backupProvisioningSuite) TestRunningImagesAndActualVolume(c *tc.C) {
+	originalTransport := registry.DefaultTransport
+	c.Cleanup(func() { registry.DefaultTransport = originalTransport })
+	registry.DefaultTransport = backupImageTransport(func(*http.Request) (*http.Response, error) {
+		return nil, fmt.Errorf("unexpected registry request")
+	})
+	digest := "sha256:" + strings.Repeat("a", 64)
+	for _, images := range []struct{ agent, charm, agentID, charmID string }{
+		{"example.com/juju/agent:unpublished", "example.com/juju/charm:local", "", ""},
+		{"example.com/juju/agent@" + digest, "example.com/juju/charm@" + digest, digest, "containerd://" + digest},
+		{"example.com/juju/agent:unpublished", "example.com/juju/charm:local", "docker-pullable://example.com/other@" + digest, "runtime-specific"},
+	} {
+		client := backupSourceClient(images.agent, images.charm, images.agentID, images.charmID)
+		broker := &kubernetesClient{clientUnlocked: client, namespace: "controller-source"}
+		result, err := broker.ControllerBackupProvisioning(c.Context(), "1")
+		c.Assert(err, tc.ErrorIsNil)
+		c.Check(result.AgentImage, tc.Equals, images.agent)
+		c.Check(result.CharmImage, tc.Equals, images.charm)
+		c.Check(result.Architecture, tc.Equals, "arm64")
+		c.Check(result.StorageSizeMiB, tc.Equals, uint64(64*1024))
+		c.Check(result.StorageClass, tc.Equals, "original-class")
+		c.Check(result.ServiceType, tc.Equals, "loadbalancer")
+		c.Check(result.LoadBalancerIP, tc.Equals, "192.0.2.1")
+		c.Check(result.ExternalIPs, tc.DeepEquals, []string{"192.0.2.2"})
+		c.Check(result.ServiceAnnotations["source"], tc.Equals, "retained")
+	}
+}
+
+func (s *backupProvisioningSuite) TestInvalidSourceImages(c *tc.C) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*core.Pod)
+	}{
+		{"missing agent", func(p *core.Pod) { p.Spec.Containers = p.Spec.Containers[1:] }},
+		{"missing charm", func(p *core.Pod) { p.Spec.Containers = p.Spec.Containers[:1] }},
+		{"agent not running", func(p *core.Pod) { p.Status.ContainerStatuses[0].State.Running = nil }},
+		{"charm not running", func(p *core.Pod) { p.Status.ContainerStatuses[1].State.Running = nil }},
+		{"missing agent status", func(p *core.Pod) { p.Status.ContainerStatuses = p.Status.ContainerStatuses[1:] }},
+		{"missing charm status", func(p *core.Pod) { p.Status.ContainerStatuses = p.Status.ContainerStatuses[:1] }},
+		{"empty agent", func(p *core.Pod) { p.Spec.Containers[0].Image = "" }},
+		{"empty charm", func(p *core.Pod) { p.Spec.Containers[1].Image = "" }},
+		{"invalid agent", func(p *core.Pod) { p.Spec.Containers[0].Image = "invalid image" }},
+		{"invalid charm", func(p *core.Pod) { p.Spec.Containers[1].Image = "invalid image" }},
+	} {
+		c.Logf("case: %s", test.name)
+		client := backupSourceClient("example.com/agent:tag", "example.com/charm:tag", "", "")
+		pod, err := client.CoreV1().Pods("controller-source").Get(c.Context(), "controller-1", metav1.GetOptions{})
+		c.Assert(err, tc.ErrorIsNil)
+		test.mutate(pod)
+		_, err = client.CoreV1().Pods("controller-source").Update(c.Context(), pod, metav1.UpdateOptions{})
+		c.Assert(err, tc.ErrorIsNil)
+		broker := &kubernetesClient{clientUnlocked: client, namespace: "controller-source"}
+		_, err = broker.ControllerBackupProvisioning(c.Context(), "1")
+		c.Assert(err, tc.NotNil)
+	}
+}
+
+func (s *backupProvisioningSuite) TestSourceErrors(c *tc.C) {
+	client := backupSourceClient("example.com/agent:tag", "example.com/charm:tag", "", "")
+	broker := &kubernetesClient{clientUnlocked: client, namespace: "controller-source"}
+	_, err := broker.ControllerBackupProvisioning(c.Context(), "")
+	c.Check(err, tc.ErrorMatches, "source controller ID is required")
+	_, err = broker.ControllerBackupProvisioning(c.Context(), "0")
+	c.Check(err, tc.ErrorMatches, ".*controller-0.*not found")
+	for _, resource := range []string{"pods", "nodes", "persistentvolumeclaims", "services"} {
+		client := backupSourceClient("example.com/agent:tag", "example.com/charm:tag", "", "")
+		client.PrependReactor("get", resource, func(ktesting.Action) (bool, runtime.Object, error) {
+			return true, nil, fmt.Errorf("failure reading %s", resource)
+		})
+		broker := &kubernetesClient{clientUnlocked: client, namespace: "controller-source"}
+		_, err := broker.ControllerBackupProvisioning(c.Context(), "1")
+		c.Check(err, tc.ErrorMatches, "failure reading "+resource)
+	}
 }
 
 func (s *backupProvisioningSuite) TestRecoveryRequiresSourceStorageClass(c *tc.C) {
@@ -119,17 +143,4 @@ func (s *backupProvisioningSuite) TestRecoveryRequiresSourceStorageClass(c *tc.C
 	got, err := broker.validateRecoveryControllerStorage(c.Context(), &class)
 	c.Assert(err, tc.ErrorIsNil)
 	c.Check(got, tc.Equals, "")
-}
-
-type backupImageTransport func(*http.Request) (*http.Response, error)
-
-func (f backupImageTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	return f(request)
-}
-
-func (s *backupProvisioningSuite) TestUnqualifiedRuntimeDigest(c *tc.C) {
-	digest := "sha256:" + strings.Repeat("a", 64)
-	ref, err := sourceImage("example.com/juju/jujud-operator:4.1.0", digest)
-	c.Assert(err, tc.ErrorIsNil)
-	c.Check(ref, tc.Equals, "example.com/juju/jujud-operator@"+digest)
 }
