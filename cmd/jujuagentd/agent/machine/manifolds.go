@@ -1017,13 +1017,12 @@ func commonManifolds(config ManifoldsConfig) dependency.Manifolds {
 			GetMachineService:        sshtunneler.GetMachineService,
 		})),
 
-		// The objectstore drainer runs on the singular primary controller to
-		// avoid concurrent completion races in HA. It coordinates draining of
-		// blobs between underlying object stores (S3 compatible) and with the
-		// objectstore fortress guards objectstore operations while draining is
-		// in progress.
+		// Every controller observes draining to manage its local objectstore
+		// guard. Only the primary performs the drain, avoiding concurrent
+		// completion races in HA.
 		objectStoreFortressName: fortress.Manifold(),
-		objectStoreDrainerName: ifPrimaryController(objectstoredrainer.Manifold(objectstoredrainer.ManifoldConfig{
+		objectStoreDrainerName: ifController(objectstoredrainer.Manifold(objectstoredrainer.ManifoldConfig{
+			PrimaryControllerFlagName:       isPrimaryControllerFlagName,
 			S3ClientName:                    objectStoreS3CallerName,
 			ObjectStoreName:                 objectStoreName,
 			ObjectStoreServicesName:         objectStoreServicesName,

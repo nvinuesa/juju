@@ -11,6 +11,7 @@ import (
 	"github.com/juju/worker/v5"
 	"github.com/juju/worker/v5/dependency"
 
+	"github.com/juju/juju/agent/engine"
 	"github.com/juju/juju/controller"
 	"github.com/juju/juju/core/logger"
 	"github.com/juju/juju/core/model"
@@ -68,10 +69,11 @@ type RootDirReader interface {
 // ManifoldConfig holds the dependencies and configuration for a
 // Worker manifold.
 type ManifoldConfig struct {
-	ObjectStoreServicesName string
-	ObjectStoreName         string
-	FortressName            string
-	S3ClientName            string
+	PrimaryControllerFlagName string
+	ObjectStoreServicesName   string
+	ObjectStoreName           string
+	FortressName              string
+	S3ClientName              string
 
 	GetControllerService            GetControllerServiceFunc
 	GeObjectStoreServices           GetObjectStoreServicesFunc
@@ -90,6 +92,9 @@ type ManifoldConfig struct {
 
 // Validate is called by start to check for bad configuration.
 func (config ManifoldConfig) Validate() error {
+	if config.PrimaryControllerFlagName == "" {
+		return errors.NotValidf("empty PrimaryControllerFlagName")
+	}
 	if config.FortressName == "" {
 		return errors.NotValidf("empty FortressName")
 	}
@@ -141,6 +146,10 @@ func (config ManifoldConfig) Validate() error {
 // start is a StartFunc for a Worker manifold.
 func (config ManifoldConfig) start(ctx context.Context, getter dependency.Getter) (worker.Worker, error) {
 	if err := config.Validate(); err != nil {
+		return nil, errors.Trace(err)
+	}
+	var primary engine.Flag
+	if err := getter.Get(config.PrimaryControllerFlagName, &primary); err != nil {
 		return nil, errors.Trace(err)
 	}
 
@@ -202,6 +211,7 @@ func (config ManifoldConfig) start(ctx context.Context, getter dependency.Getter
 	}
 
 	worker, err := config.NewWorker(Config{
+		GuardOnly:                    !primary.Check(),
 		Guard:                        fortress,
 		DrainingService:              drainingService,
 		ControllerService:            controllerService,
@@ -227,6 +237,7 @@ func (config ManifoldConfig) start(ctx context.Context, getter dependency.Getter
 func Manifold(config ManifoldConfig) dependency.Manifold {
 	return dependency.Manifold{
 		Inputs: []string{
+			config.PrimaryControllerFlagName,
 			config.FortressName,
 			config.ObjectStoreName,
 			config.ObjectStoreServicesName,

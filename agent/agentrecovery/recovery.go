@@ -104,7 +104,7 @@ func Initialise(ctx context.Context, config agent.ConfigSetter, params recovery.
 			Service: svc, ControllerID: params.MachineName,
 			Credentials: params.Credentials,
 			ArchivePath: params.ArchivePath, ExpectedSHA256: params.SHA256,
-			DataDir: config.DataDir(),
+			DataDir:             config.DataDir(),
 			ControllerModelUUID: info.ControllerModelUUID, MachinePatch: patch,
 			ControllerUnitAddresses: unitAddresses, ControllerCredential: credentialPatch,
 			Logger: log,

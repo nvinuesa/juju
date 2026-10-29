@@ -487,13 +487,13 @@ func (*ManifoldsSuite) TestSingularGuardsUsed(c *tc.C) {
 
 	nonPrimaryControllerFlagWorkers := set.NewStrings(
 		"is-not-primary-controller-flag",
+		"object-store-drainer",
 	)
 
 	primaryControllerWorkers := set.NewStrings(
 		"api-address-setter",
 		"change-stream-pruner",
 		"external-controller-updater",
-		"object-store-drainer",
 		"secret-backend-rotate",
 	)
 
@@ -845,6 +845,7 @@ func (*ManifoldsSuite) TestObjectStoreDrainerDirectInputs(c *tc.C) {
 		manifold, ok := manifolds["object-store-drainer"]
 		c.Assert(ok, tc.IsTrue)
 		c.Check(manifold.Inputs, tc.SameContents, []string{
+			"is-controller-flag",
 			"is-primary-controller-flag",
 			"object-store-fortress",
 			"object-store",

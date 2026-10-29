@@ -91,6 +91,9 @@ type ControllerService interface {
 
 // Config holds the dependencies and configuration for a Worker.
 type Config struct {
+	// GuardOnly observes draining and updates this node's guard without
+	// performing the drain. The primary controller coordinates the drain.
+	GuardOnly                    bool
 	Guard                        fortress.Guard
 	DrainingService              DrainingService
 	ControllerService            ControllerService
@@ -181,7 +184,8 @@ func NewWorker(config Config) (worker.Worker, error) {
 	}
 
 	w := &Worker{
-		runner: runner,
+		runner:    runner,
+		guardOnly: config.GuardOnly,
 
 		guard:           config.Guard,
 		drainingService: config.DrainingService,
@@ -223,8 +227,9 @@ func NewWorker(config Config) (worker.Worker, error) {
 // The worker will manage the lifecycle of the watcher and will stop
 // watching when the worker is killed or when the context is cancelled.
 type Worker struct {
-	catacomb catacomb.Catacomb
-	runner   *worker.Runner
+	guardOnly bool
+	catacomb  catacomb.Catacomb
+	runner    *worker.Runner
 
 	guard           fortress.Guard
 	drainingService DrainingService
@@ -301,7 +306,11 @@ func (w *Worker) loop() error {
 					}
 					continue
 				}
-
+				if w.guardOnly && phase == objectstore.PhaseCompleted {
+					if err := w.objectStoreFlusher.FlushWorkers(ctx); err != nil {
+						return errors.Errorf("refreshing object stores after draining: %w", err)
+					}
+				}
 				w.logger.Infof(ctx, "object store is not draining, unlocking guard")
 
 				if err := w.guard.Unlock(ctx); err != nil {
@@ -320,6 +329,13 @@ func (w *Worker) loop() error {
 
 			if err := w.guard.Lockdown(ctx); err != nil {
 				return errors.Errorf("failed to update guard: %v", err)
+			}
+			if phase == objectstore.PhaseError {
+				w.logger.Errorf(ctx, "object store is in an error state, manual intervention required")
+				continue
+			}
+			if w.guardOnly {
+				continue
 			}
 
 			// TODO (stickupkid): Support draining from one s3 object store to

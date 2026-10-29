@@ -37,7 +37,12 @@ func (s *Service) LoadControllerDump(ctx context.Context, data []byte) error {
 		return errors.Capture(err)
 	}
 	selectTables(decoded.Present, controllerTablePolicies)
-	return errors.Capture(s.controller.LoadControllerDump(ctx, decoded, s.nodeID))
+	if err := s.controller.LoadControllerDump(ctx, decoded, s.nodeID); err != nil {
+		return errors.Capture(err)
+	}
+	// Patch after the load commits: only a successfully recovered target
+	// has its object store configuration rebound to the file backend.
+	return errors.Capture(s.controller.PatchControllerObjectStoreConfig(ctx))
 }
 
 // LoadModelDump validates native YAML before opening and replacing model
@@ -89,6 +94,7 @@ func (s *Service) LoadControllerModelDump(ctx context.Context, model coremodel.U
 	if err != nil {
 		return errors.Capture(err)
 	}
+	decoded = domainrecovery.DiscardS3Authorisation(decoded)
 	return errors.Capture(s.loadModelDump(ctx, model, decoded))
 }
 

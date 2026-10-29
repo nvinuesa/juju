@@ -388,6 +388,18 @@ func (s *loadSuite) controllerDump() *testDump {
 			"controller_config": {{
 				"key":   "controller-name",
 				"value": "source-ctrl",
+			}, {
+				"key":   "object-store-type",
+				"value": "s3",
+			}, {
+				"key":   "object-store-s3-endpoint",
+				"value": "https://s3.example.com",
+			}, {
+				"key":   "object-store-s3-static-key",
+				"value": "archived-key",
+			}, {
+				"key":   "object-store-s3-static-secret",
+				"value": "archived-secret",
 			}},
 			// Binary column values appear in dumps in two shapes:
 			// []byte-typed export fields marshal as sequences of
@@ -450,6 +462,22 @@ func (s *loadSuite) TestLoadControllerDump(c *tc.C) {
 	c.Check(uuid, tc.Equals, sourceControllerUUID)
 	c.Check(caCert, tc.Equals, "source-ca")
 
+	// The archived S3 object store configuration is rebound to the
+	// replacement's file backend: the type is forced and the archived
+	// S3 settings are gone, while unrelated config survives.
+	var storeType string
+	c.Assert(s.DB().QueryRow(
+		`SELECT value FROM controller_config WHERE key = 'object-store-type'`).Scan(&storeType), tc.ErrorIsNil)
+	c.Check(storeType, tc.Equals, "file")
+	var s3Keys int
+	c.Assert(s.DB().QueryRow(
+		`SELECT COUNT(*) FROM controller_config WHERE key LIKE 'object-store-s3-%'`).Scan(&s3Keys), tc.ErrorIsNil)
+	c.Check(s3Keys, tc.Equals, 0)
+	var controllerName string
+	c.Assert(s.DB().QueryRow(
+		`SELECT value FROM controller_config WHERE key = 'controller-name'`).Scan(&controllerName), tc.ErrorIsNil)
+	c.Check(controllerName, tc.Equals, "source-ctrl")
+
 	// The binary column survived as BLOB storage with its raw bytes.
 	var publicKey []byte
 	err = s.DB().QueryRow(
@@ -466,6 +494,15 @@ func (s *loadSuite) TestLoadControllerDump(c *tc.C) {
 	).Scan(&keyClass)
 	c.Assert(err, tc.ErrorIsNil)
 	c.Check(keyClass, tc.Equals, "blob")
+
+	// Legacy TEXT columns carry bytes: embedded NULs must survive the
+	// load exactly as the domain writers stored them.
+	var localKey []byte
+	err = s.DB().QueryRow(
+		"SELECT local_users_private_key FROM bakery_config",
+	).Scan(&localKey)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(localKey, tc.DeepEquals, []byte{0, 0xff, 2})
 
 	// Cloud and model rows are recovered.
 	var cloudName string
@@ -490,7 +527,7 @@ func (s *loadSuite) TestLoadControllerDump(c *tc.C) {
 	// Placements are rebuilt onto the replacement's node for every
 	// surviving metadata row. The fresh bootstrap blob row is replaced
 	// by the archived one and its placement is rebuilt; an orphaned
-	// on-disk file is handled by LoadObjects later.
+	// on-disk file is caught by the object store completeness check.
 	rows, err := s.DB().Query("SELECT uuid, node_id FROM object_store_placement ORDER BY uuid")
 	c.Assert(err, tc.ErrorIsNil)
 	defer rows.Close()

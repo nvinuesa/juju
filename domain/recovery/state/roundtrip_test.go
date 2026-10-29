@@ -169,7 +169,12 @@ func (s *loadSuite) TestAbsentAndEmptyTables(c *tc.C) {
 	c.Check(value, tc.Equals, "original")
 	dump.Tables["controller_config"] = nil
 	c.Assert(svc.LoadControllerDump(c.Context(), dumpYAML(c, dump)), tc.ErrorIsNil)
+	// The replace policy emptied the table; recovery then forces the
+	// file object store type, the one row controller_config always
+	// holds after a load.
 	var count int
 	c.Assert(s.DB().QueryRow("SELECT COUNT(*) FROM controller_config").Scan(&count), tc.ErrorIsNil)
-	c.Check(count, tc.Equals, 0)
+	c.Check(count, tc.Equals, 1)
+	c.Assert(s.DB().QueryRow("SELECT value FROM controller_config WHERE key = 'object-store-type'").Scan(&value), tc.ErrorIsNil)
+	c.Check(value, tc.Equals, "file")
 }

@@ -40,6 +40,10 @@ func (st *recordingState) LoadModelDump(_ context.Context, dump *domainrecovery.
 	return st.loadErr
 }
 
+func (st *recordingState) PatchControllerObjectStoreConfig(_ context.Context) error {
+	return nil
+}
+
 const controllerYAML = `version: 4.1.0
 payload:
   controller:

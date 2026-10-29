@@ -127,13 +127,6 @@ func stringOf(s *string) string {
 	return *s
 }
 
-func intOf(i *int64) int64 {
-	if i == nil {
-		return 0
-	}
-	return *i
-}
-
 // ValidateSingleController checks that the archive's controller topology
 // supports a single-node replacement: one controller application, one live
 // controller unit for the replacement, no workload units sharing controller
