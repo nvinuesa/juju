@@ -18,10 +18,12 @@ import (
 
 	"github.com/juju/errors"
 	"github.com/juju/tc"
+	"gopkg.in/yaml.v3"
 
 	"github.com/juju/juju/api/jujuclient"
 	"github.com/juju/juju/cloud"
 	"github.com/juju/juju/cmd/cmd/cmdtesting"
+	"github.com/juju/juju/cmd/juju/backups"
 	"github.com/juju/juju/cmd/modelcmd"
 	jujuversion "github.com/juju/juju/core/version"
 	"github.com/juju/juju/domain/recovery"
@@ -38,19 +40,24 @@ func (s *recoverySuite) TestInit(c *tc.C) {
 		pattern string
 	}{
 		{nil, "a backup archive is required"},
-		{[]string{"backup.tar.gz"}, "--sha256 is required"},
-		{[]string{"backup.tar.gz", "--sha256", "bad"}, "--sha256 must be.*"},
-		{[]string{"backup.tar.gz", "lxd", "--sha256", strings.Repeat("a", 64)}, "unrecognized args.*"},
-		{[]string{"backup.tar.gz", "--credential", "source"}, "(flag|option) provided but not defined.*"},
-		{[]string{"backup.tar.gz", "--config", "ca-cert=override"}, "(flag|option) provided but not defined.*"},
+		{[]string{"backup.tar.gz"}, "a backup assertion file is required"},
+		{[]string{"", "backup.tar.gz.assert"}, "a backup archive is required"},
+		{[]string{"backup.tar.gz", ""}, "a backup assertion file is required"},
+		{[]string{"backup.tar.gz", "backup.tar.gz.assert", "extra"}, "unrecognized args.*"},
+		{[]string{"backup.tar.gz", "backup.tar.gz.assert", "--sha256", "bad"}, "(flag|option) provided but not defined.*"},
+		{[]string{"backup.tar.gz", "backup.tar.gz.assert", "--credential", "source"}, "(flag|option) provided but not defined.*"},
+		{[]string{"backup.tar.gz", "backup.tar.gz.assert", "--config", "ca-cert=override"}, "(flag|option) provided but not defined.*"},
 	} {
 		err := cmdtesting.InitCommand(newRecoveryCommand(), test.args)
 		c.Check(err, tc.ErrorMatches, test.pattern)
 	}
-	for _, sum := range []string{strings.Repeat("a", 64), "sha256-" + strings.Repeat("a", 64)} {
-		err := cmdtesting.InitCommand(newRecoveryCommand(), []string{"backup.tar.gz", "--sha256", sum})
-		c.Assert(err, tc.ErrorIsNil)
-	}
+	// Both paths are recorded for recovery, as given.
+	command := &recoveryCommand{}
+	wrapped := modelcmd.Wrap(command, modelcmd.WrapSkipModelFlags, modelcmd.WrapSkipDefaultModel)
+	err := cmdtesting.InitCommand(wrapped, []string{"backup.tar.gz", "elsewhere/backup.tar.gz.assert"})
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(command.archivePath, tc.Equals, "backup.tar.gz")
+	c.Check(command.assertionPath, tc.Equals, "elsewhere/backup.tar.gz.assert")
 }
 
 func (s *recoverySuite) TestBootstrapRejectsRecoveryFlags(c *tc.C) {
@@ -62,12 +69,13 @@ func (s *recoverySuite) TestBootstrapRejectsRecoveryFlags(c *tc.C) {
 
 func (s *recoverySuite) TestRegisteredControllerRefused(c *tc.C) {
 	path, sum := writeRecoveryArchive(c, recoveryArchiveFiles(jujuversion.Current.String()))
+	assertion := writeRecoveryAssertion(c, path, sum)
 	store := jujuclient.NewMemStore()
 	store.Controllers["source-ctrl"] = jujuclient.ControllerDetails{ControllerUUID: "other-controller"}
 	command := &recoveryCommand{}
 	command.SetClientStore(store)
 	wrapped := modelcmd.Wrap(command, modelcmd.WrapSkipModelFlags, modelcmd.WrapSkipDefaultModel)
-	_, err := cmdtesting.RunCommand(c, wrapped, path, "--sha256", sum)
+	_, err := cmdtesting.RunCommand(c, wrapped, path, assertion)
 	c.Check(err, tc.ErrorMatches, `controller "source-ctrl" is registered locally; run juju unregister source-ctrl before recovery`)
 	c.Check(store.Controllers["source-ctrl"].ControllerUUID, tc.Equals, "other-controller")
 }
@@ -76,7 +84,8 @@ func (s *recoverySuite) TestMissingSourceName(c *tc.C) {
 	files := recoveryArchiveFiles(jujuversion.Current.String())
 	files["juju-backup/dump/controller.yaml"] = []byte(strings.ReplaceAll(string(files["juju-backup/dump/controller.yaml"]), "value: source-ctrl", "value: ''"))
 	path, sum := writeRecoveryArchive(c, files)
-	_, err := (&recoveryCommand{archivePath: path, sha256: sum}).preflight(cmdtesting.Context(c))
+	assertion := writeRecoveryAssertion(c, path, sum)
+	_, err := (&recoveryCommand{archivePath: path, assertionPath: assertion}).preflight(cmdtesting.Context(c))
 	c.Check(err, tc.ErrorMatches, "recovery archive does not record the source controller name")
 }
 
@@ -260,9 +269,31 @@ func writeRecoveryArchive(c *tc.C, files map[string][]byte) (string, string) {
 	return path, hex.EncodeToString(sum[:])
 }
 
+// writeRecoveryAssertion writes a valid assertion for the archive,
+// recording the given checksum, beside it.
+func writeRecoveryAssertion(c *tc.C, archivePath, checksum string) string {
+	data, err := yaml.Marshal(backups.Assertion{
+		Checksum:       checksum,
+		ChecksumFormat: "SHA-256",
+	})
+	c.Assert(err, tc.ErrorIsNil)
+	path := archivePath + ".assert"
+	c.Assert(os.WriteFile(path, data, 0o600), tc.ErrorIsNil)
+	return path
+}
+
+// writeRecoveryAssertionData writes raw assertion content beside the
+// archive, for tests that need malformed or incomplete assertions.
+func writeRecoveryAssertionData(c *tc.C, archivePath, content string) string {
+	path := archivePath + ".assert"
+	c.Assert(os.WriteFile(path, []byte(content), 0o600), tc.ErrorIsNil)
+	return path
+}
+
 func (s *recoverySuite) preflightCmd(c *tc.C, files map[string][]byte) *recoveryCommand {
 	path, sum := writeRecoveryArchive(c, files)
-	return &recoveryCommand{archivePath: path, sha256: sum}
+	assertion := writeRecoveryAssertion(c, path, sum)
+	return &recoveryCommand{archivePath: path, assertionPath: assertion}
 }
 
 func (s *recoverySuite) TestPreflightSuccess(c *tc.C) {
@@ -295,10 +326,77 @@ func (s *recoverySuite) TestPreflightMixedModelTypes(c *tc.C) {
 	c.Check(info.Models[1].ModelType, tc.Equals, "caas")
 }
 
+// TestPreflightChecksumMismatch verifies that an assertion recording a
+// wrong, but well-formed, checksum stops recovery before anything is
+// provisioned.
 func (s *recoverySuite) TestPreflightChecksumMismatch(c *tc.C) {
 	path, _ := writeRecoveryArchive(c, recoveryArchiveFiles(jujuversion.Current.String()))
-	cmd := &recoveryCommand{archivePath: path, sha256: "deadbeef"}
+	assertion := writeRecoveryAssertion(c, path, strings.Repeat("0", 64))
+	cmd := &recoveryCommand{archivePath: path, assertionPath: assertion}
 
 	_, err := cmd.preflight(cmdtesting.Context(c))
 	c.Assert(err, tc.ErrorMatches, "invalid recovery archive: archive checksum mismatch.*")
+}
+
+func (s *recoverySuite) TestPreflightMissingArchive(c *tc.C) {
+	path := filepath.Join(c.MkDir(), "juju-backup.tar.gz")
+	assertion := writeRecoveryAssertion(c, path, strings.Repeat("a", 64))
+	cmd := &recoveryCommand{archivePath: path, assertionPath: assertion}
+
+	_, err := cmd.preflight(cmdtesting.Context(c))
+	c.Check(err, tc.ErrorMatches, "invalid recovery archive: .*")
+}
+
+// TestPreflightAssertionFailures verifies that an unreadable, empty or
+// malformed assertion stops recovery before the archive is read.
+func (s *recoverySuite) TestPreflightAssertionFailures(c *tc.C) {
+	path, _ := writeRecoveryArchive(c, recoveryArchiveFiles(jujuversion.Current.String()))
+
+	cmd := &recoveryCommand{archivePath: path, assertionPath: path + ".missing"}
+	_, err := cmd.preflight(cmdtesting.Context(c))
+	c.Check(err, tc.ErrorMatches, `reading backup assertion ".*": .*no such file or directory`)
+
+	assertion := writeRecoveryAssertionData(c, path, "")
+	cmd = &recoveryCommand{archivePath: path, assertionPath: assertion}
+	_, err = cmd.preflight(cmdtesting.Context(c))
+	c.Check(err, tc.ErrorMatches, `reading backup assertion ".*": backup assertion is empty`)
+
+	assertion = writeRecoveryAssertionData(c, path, "checksum: [unclosed\n")
+	cmd = &recoveryCommand{archivePath: path, assertionPath: assertion}
+	_, err = cmd.preflight(cmdtesting.Context(c))
+	c.Check(err, tc.ErrorMatches, `reading backup assertion ".*": cannot parse backup assertion: .*`)
+}
+
+// TestInvalidAssertionFailsBeforeStoreAccess verifies that an invalid
+// assertion stops Run in preflight, before the client store is
+// consulted or anything is provisioned.
+func (s *recoverySuite) TestInvalidAssertionFailsBeforeStoreAccess(c *tc.C) {
+	path, _ := writeRecoveryArchive(c, recoveryArchiveFiles(jujuversion.Current.String()))
+	assertion := writeRecoveryAssertion(c, path, "deadbeef")
+	cmd := &recoveryCommand{archivePath: path, assertionPath: assertion}
+
+	// No client store is configured: Run must fail in preflight.
+	err := cmd.Run(cmdtesting.Context(c))
+	c.Check(err, tc.ErrorMatches, `reading backup assertion ".*": backup assertion checksum must be a SHA-256 checksum: 64 hexadecimal characters`)
+}
+
+// TestPreflightResolvesRelativePaths verifies that relative archive and
+// assertion paths resolve against the command context, including files
+// in different directories with unrelated basenames.
+func (s *recoverySuite) TestPreflightResolvesRelativePaths(c *tc.C) {
+	path, sum := writeRecoveryArchive(c, recoveryArchiveFiles(jujuversion.Current.String()))
+	assertion := writeRecoveryAssertion(c, path, sum)
+
+	dir := c.MkDir()
+	c.Assert(os.MkdirAll(filepath.Join(dir, "archives"), 0o755), tc.ErrorIsNil)
+	c.Assert(os.MkdirAll(filepath.Join(dir, "metadata"), 0o755), tc.ErrorIsNil)
+	archivePath := filepath.Join("archives", "renamed.tgz")
+	assertionPath := filepath.Join("metadata", "record.yaml")
+	c.Assert(os.Rename(path, filepath.Join(dir, archivePath)), tc.ErrorIsNil)
+	c.Assert(os.Rename(assertion, filepath.Join(dir, assertionPath)), tc.ErrorIsNil)
+
+	cmd := &recoveryCommand{archivePath: archivePath, assertionPath: assertionPath}
+	info, err := cmd.preflight(cmdtesting.ContextForDir(c, dir))
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(info.ControllerUUID, tc.Equals, "ctrl-uuid")
 }

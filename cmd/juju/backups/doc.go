@@ -26,7 +26,11 @@
 // a single point-in-time snapshot of the whole controller; create backups
 // during a quiet window (see the create-backup help).
 
+// create-backup saves the backup summary, including the archive's SHA-256
+// checksum, as an unsigned YAML assertion file named by appending
+// ".assert" to the archive filename.
+
 // To recover an archive, provision a replacement controller with:
-//   juju recovery <archive> --sha256 <hex>
+//   juju recover <archive> <assertion-file>
 
 package backups

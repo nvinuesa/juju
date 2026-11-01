@@ -1,6 +1,8 @@
 # create_backup_on_k8s_controller creates a backup on the current
 # Kubernetes controller; 4.1 streams the archive to the client in the
-# same request. Prints the local path and SHA-256 hex digest, separated by a tab.
+# same request. A successful run prints nothing and saves the backup
+# summary beside the archive as an assertion file. Prints the local
+# archive path and its assertion path, separated by a tab.
 create_backup_on_k8s_controller() {
 	local controller_name namespace
 	controller_name=${1}
@@ -14,15 +16,19 @@ create_backup_on_k8s_controller() {
 		echo "==> create-backup failed: ${output}" >&2
 		return 1
 	fi
-
-	sum=$(awk '$1 == "checksum:" {print $2}' <<<"${output}")
-	sum=${sum#sha256-}
-	if [[ ! ${sum} =~ ^[[:xdigit:]]{64}$ ]]; then
-		echo "==> cannot parse create-backup checksum: ${output}" >&2
+	if [[ -n ${output} ]]; then
+		echo "==> create-backup was expected to be silent, got: ${output}" >&2
 		return 1
 	fi
 
-	# The downloaded bytes must match the reported checksum before the
+	sum=$(yq -e -r '.checksum' "${local_path}.assert") || return 1
+	sum=${sum#sha256-}
+	if [[ ! ${sum} =~ ^[[:xdigit:]]{64}$ ]]; then
+		echo "==> cannot parse create-backup assertion checksum" >&2
+		return 1
+	fi
+
+	# The downloaded bytes must match the recorded checksum before the
 	# test trusts them.
 	local local_sum
 	local_sum=$(sha256sum "${local_path}") || return 1
@@ -32,7 +38,7 @@ create_backup_on_k8s_controller() {
 		return 1
 	fi
 
-	printf '%s\t%s\n' "${local_path}" "${sum}"
+	printf '%s\t%s\n' "${local_path}" "${local_path}.assert"
 }
 
 # prepare_recovery_k8s_workload records persistent data, a secret and a
@@ -178,9 +184,9 @@ test_recovery_k8s() {
 		exit 1
 	fi
 
-	local archive sum backup
+	local archive assertion backup
 	backup=$(create_backup_on_k8s_controller "${controller_name}") || return 1
-	IFS=$'\t' read -r archive sum <<<"${backup}"
+	IFS=$'\t' read -r archive assertion <<<"${backup}"
 	metadata_agent_image=$(tar -xOf "${archive}" juju-backup/metadata.json |
 		yq -e -r '.Kubernetes.AgentImage')
 	metadata_charm_image=$(tar -xOf "${archive}" juju-backup/metadata.json |
@@ -201,8 +207,7 @@ test_recovery_k8s() {
 	# The source controller is still running under its own name: the
 	# substrate check must refuse the recovery before anything is
 	# provisioned.
-	OUT=$(juju recovery "${archive}" \
-		--sha256 "${sum}" 2>&1 || true)
+	OUT=$(juju recover "${archive}" "${assertion}" 2>&1 || true)
 	echo "${OUT}" | grep "not fenced" || {
 		echo "==> expected unfenced-source refusal, got: ${OUT}"
 		exit 1
@@ -217,10 +222,10 @@ test_recovery_k8s() {
 	fi
 	echo "==> unfenced source refused cleanly"
 
-	# Recovery accepts only the archive path and uses its recorded name.
+	# Recovery accepts only the archive and assertion paths.
 	echo "==> recovery CLI: extra controller-name argument refused"
-	OUT=$(juju recovery "${archive}" test-k8s-wrong-name \
-		--sha256 "${sum}" 2>&1 || true)
+	OUT=$(juju recover "${archive}" "${assertion}" test-k8s-wrong-name \
+		2>&1 || true)
 	echo "${OUT}" | grep "unrecognized args" || {
 		echo "==> expected extra argument refusal, got: ${OUT}"
 		exit 1
@@ -237,7 +242,7 @@ test_recovery_k8s() {
 	kubectl delete ns "${namespace}" --wait=true
 
 	echo "==> recovering replacement from the archive"
-	juju recovery "${archive}" --sha256 "${sum}"
+	juju recover "${archive}" "${assertion}"
 	handoff_recovery_k8s_endpoint "${namespace}" "${source_service_ip}"
 
 	# The replacement's pod can still drop API connections while it

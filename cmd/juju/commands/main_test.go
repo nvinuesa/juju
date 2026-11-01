@@ -217,7 +217,7 @@ var commandNames = []string{
 	"autoload-credentials",
 	"bind",
 	"bootstrap",
-	"recovery",
+	"recover",
 	"cancel-task",
 	"change-user-password",
 	"charm-resources",

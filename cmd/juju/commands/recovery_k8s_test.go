@@ -73,7 +73,7 @@ func (s *k8sRecoverySuite) TestArchivedImagesSurvivePreflightAndPodConfiguration
 		{"example.com/juju/agent@sha256:" + strings.Repeat("a", 64), "example.com/juju/charm@sha256:" + strings.Repeat("b", 64)},
 	} {
 		path, sum := writeRecoveryArchive(c, k8sRecoveryArchiveFiles(c, 3, images[0], images[1]))
-		cmd := &recoveryCommand{archivePath: path, sha256: sum}
+		cmd := &recoveryCommand{archivePath: path, assertionPath: writeRecoveryAssertion(c, path, sum)}
 		info, err := cmd.preflight(cmdtesting.Context(c))
 		c.Assert(err, tc.ErrorIsNil)
 		c.Check(info.Kubernetes.AgentImage, tc.Equals, images[0])
@@ -99,7 +99,7 @@ func (s *k8sRecoverySuite) TestPreflightRejectsInvalidArchivedImages(c *tc.C) {
 		{"example.com/agent:tag", "bad image", "invalid archived controller charm image.*"},
 	} {
 		path, sum := writeRecoveryArchive(c, k8sRecoveryArchiveFiles(c, 3, test.agent, test.charm))
-		cmd := &recoveryCommand{archivePath: path, sha256: sum}
+		cmd := &recoveryCommand{archivePath: path, assertionPath: writeRecoveryAssertion(c, path, sum)}
 		// Run reaches preflight before consulting the client store or provisioning.
 		c.Check(cmd.Run(cmdtesting.Context(c)), tc.ErrorMatches, test.message)
 	}
@@ -107,7 +107,7 @@ func (s *k8sRecoverySuite) TestPreflightRejectsInvalidArchivedImages(c *tc.C) {
 
 func (s *k8sRecoverySuite) TestPreflightRejectsOldKubernetesArchive(c *tc.C) {
 	path, sum := writeRecoveryArchive(c, k8sRecoveryArchiveFiles(c, 2, "example.com/agent:tag", "example.com/charm:tag"))
-	cmd := &recoveryCommand{archivePath: path, sha256: sum}
+	cmd := &recoveryCommand{archivePath: path, assertionPath: writeRecoveryAssertion(c, path, sum)}
 	c.Check(cmd.Run(cmdtesting.Context(c)), tc.ErrorMatches, "Kubernetes recovery requires source provisioning metadata.*")
 }
 
@@ -128,7 +128,7 @@ func (s *k8sRecoverySuite) TestPreflightRejectsMissingOrInconsistentProvisioning
 		files["juju-backup/metadata.json"], err = json.Marshal(metadata)
 		c.Assert(err, tc.ErrorIsNil)
 		path, sum := writeRecoveryArchive(c, files)
-		cmd := &recoveryCommand{archivePath: path, sha256: sum}
+		cmd := &recoveryCommand{archivePath: path, assertionPath: writeRecoveryAssertion(c, path, sum)}
 		c.Check(cmd.Run(cmdtesting.Context(c)), tc.ErrorMatches, test.message)
 	}
 }

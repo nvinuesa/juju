@@ -1,7 +1,8 @@
 # create_backup_on_controller creates a backup on the current controller;
 # 4.1 streams the archive to the client in the same request and keeps
-# nothing on the controller. Prints the local path and SHA-256 hex digest,
-# separated by a tab.
+# nothing on the controller. A successful run prints nothing and saves
+# the backup summary beside the archive as an assertion file. Prints the
+# local archive path and its assertion path, separated by a tab.
 create_backup_on_controller() {
 	juju switch controller >&2 || return 1
 
@@ -27,15 +28,19 @@ create_backup_on_controller() {
 		echo "==> create-backup failed: ${output}" >&2
 		return 1
 	fi
-
-	sum=$(awk '$1 == "checksum:" {print $2}' <<<"${output}")
-	sum=${sum#sha256-}
-	if [[ ! ${sum} =~ ^[[:xdigit:]]{64}$ ]]; then
-		echo "==> cannot parse create-backup checksum: ${output}" >&2
+	if [[ -n ${output} ]]; then
+		echo "==> create-backup was expected to be silent, got: ${output}" >&2
 		return 1
 	fi
 
-	# The downloaded bytes must match the reported checksum before the
+	sum=$(yq -e -r '.checksum' "${local_path}.assert") || return 1
+	sum=${sum#sha256-}
+	if [[ ! ${sum} =~ ^[[:xdigit:]]{64}$ ]]; then
+		echo "==> cannot parse create-backup assertion checksum" >&2
+		return 1
+	fi
+
+	# The downloaded bytes must match the recorded checksum before the
 	# test trusts them.
 	local local_sum
 	local_sum=$(sha256sum "${local_path}") || return 1
@@ -51,20 +56,23 @@ create_backup_on_controller() {
 		return 1
 	fi
 
-	printf '%s\t%s\n' "${local_path}" "${sum}"
+	printf '%s\t%s\n' "${local_path}" "${local_path}.assert"
 }
 
 # test_recovery_preflight_failures checks that invalid archives are refused
 # client-side before anything is provisioned. Needs an archive path and
-# its checksum as produced by create_backup_on_controller.
+# its assertion path as produced by create_backup_on_controller.
 test_recovery_preflight_failures() {
-	local archive sum
+	local archive assertion
 	archive=${1}
-	sum=${2}
+	assertion=${2}
 
 	echo "==> recovery preflight: checksum mismatch refused"
-	OUT=$(juju recovery "${archive}" \
-		--sha256 0000000000000000000000000000000000000000000000000000000000000000 2>&1 || true)
+	local mismatched="${archive}.mismatched.assert"
+	cp "${assertion}" "${mismatched}"
+	zerodigest="sha256-0000000000000000000000000000000000000000000000000000000000000000" yq -i \
+		'.checksum = strenv(zerodigest)' "${mismatched}"
+	OUT=$(juju recover "${archive}" "${mismatched}" 2>&1 || true)
 	echo "${OUT}" | grep "checksum mismatch" || {
 		echo "==> expected checksum mismatch refusal, got: ${OUT}"
 		exit 1
@@ -86,10 +94,17 @@ test_recovery_preflight_failures() {
 		"${repack}/juju-backup/manifest.json"
 	local repacked="${TEST_DIR}/recovery-repacked.tar.gz"
 	tar -czf "${repacked}" -C "${repack}" juju-backup
-	local repacked_sum
+	local repacked_sum repacked_size
 	repacked_sum=$(sha256sum "${repacked}" | awk '{print $1}')
-	OUT=$(juju recovery "${repacked}" \
-		--sha256 "${repacked_sum}" 2>&1 || true)
+	repacked_size=$(wc -c <"${repacked}")
+	# The repacked archive needs its own assertion: the original one
+	# belongs to the positive recovery below and must not be mutated.
+	cp "${assertion}" "${repacked}.assert"
+	repacked_sum="${repacked_sum}" repacked_size="${repacked_size}" yq -i \
+		'.checksum = "sha256-" + strenv(repacked_sum) |
+		 .size = strenv(repacked_size) | .size |= tonumber |
+		 .juju-version = "1.2.3"' "${repacked}.assert"
+	OUT=$(juju recover "${repacked}" "${repacked}.assert" 2>&1 || true)
 	echo "${OUT}" | grep "agent for version" || {
 		echo "==> expected version mismatch refusal, got: ${OUT}"
 		exit 1
@@ -149,9 +164,9 @@ test_recovery_iaas() {
 	source_controller_uuid=$(juju show-controller --format json |
 		yq -e -r ".${BOOTSTRAPPED_JUJU_CTRL_NAME}.details.uuid")
 
-	local archive sum backup
+	local archive assertion backup
 	backup=$(create_backup_on_controller "${source_machine}") || return 1
-	IFS=$'\t' read -r archive sum <<<"${backup}"
+	IFS=$'\t' read -r archive assertion <<<"${backup}"
 
 	local old_ip
 	old_ip=$(fence_source_controller "${source_machine}")
@@ -173,10 +188,10 @@ test_recovery_iaas() {
 	# unregistered controller again.
 	sed -i "/^${BOOTSTRAPPED_JUJU_CTRL_NAME}$/d" "${TEST_DIR}/jujus" 2>/dev/null || true
 
-	test_recovery_preflight_failures "${archive}" "${sum}"
+	test_recovery_preflight_failures "${archive}" "${assertion}"
 
 	echo "==> recovering replacement from the archive"
-	juju recovery "${archive}" --sha256 "${sum}"
+	juju recover "${archive}" "${assertion}"
 	echo "${BOOTSTRAPPED_JUJU_CTRL_NAME}" >>"${TEST_DIR}/jujus"
 
 	echo "==> checking recovered identities"

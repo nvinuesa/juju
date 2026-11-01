@@ -7,7 +7,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/juju/errors"
 	"github.com/juju/tc"
@@ -43,7 +42,7 @@ func (s *recoverySuite) TestRecoveryCleanup(c *tc.C) {
 		}}
 		command.SetClientStore(store)
 		wrapped := modelcmd.Wrap(command, modelcmd.WrapSkipModelFlags, modelcmd.WrapSkipDefaultModel)
-		args := append([]string{"backup.tar.gz", "--sha256", strings.Repeat("a", 64)}, test.args...)
+		args := append([]string{"backup.tar.gz", "backup.tar.gz.assert"}, test.args...)
 		c.Assert(cmdtesting.InitCommand(wrapped, args), tc.ErrorIsNil)
 		// The recovery timeout must not prevent the default cleanup.
 		cancelled, cancel := context.WithCancel(c.Context())

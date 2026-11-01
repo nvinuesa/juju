@@ -1,5 +1,5 @@
-(command-juju-recovery)=
-# `juju recovery`
+(command-juju-recover)=
+# `juju recover`
 > See also: [bootstrap](#command-juju-bootstrap), [create-backup](#command-juju-create-backup), [unregister](#command-juju-unregister)
 
 ## Summary
@@ -7,7 +7,7 @@ Recover a controller from a backup archive.
 
 ## Usage
 ```text
-juju recovery [options] <backup-file>
+juju recover [options] <backup-file> <assertion-file>
 ```
 
 ### Options
@@ -15,10 +15,9 @@ juju recovery [options] <backup-file>
 | --- | --- | --- |
 | `-B`, `--no-browser-login` | false | Do not use web browser for authentication |
 | `--keep-broken` | false | Do not remove replacement cloud resources if recovery fails |
-| `--sha256` |  | SHA-256 checksum of the backup archive (64 hexadecimal characters) |
 
 ## Examples
-    juju recovery juju-backup.tar.gz --sha256 <checksum>
+    juju recover juju-backup.tar.gz juju-backup.tar.gz.assert
 
 ## Details
 Recover a replacement controller using the cloud, region and controller name
@@ -39,7 +38,10 @@ client, run juju unregister first. Kubernetes recovery requires the original
 cluster and surviving workload namespaces. Each workload model is checked on
 its own archived cluster before the replacement is created.
 
-The archive checksum is required. Local credentials are tried first; if none
+The archive and its assertion file are given explicitly. The unsigned
+assertion, the "&lt;archive&gt;.assert" file written by create-backup, supplies
+the expected SHA-256 checksum, which the archive must match.
+Local credentials are tried first; if none
 are available, the credential archived for each model cloud is used. An ambiguous
 credential selection or authentication failure stops recovery.
 

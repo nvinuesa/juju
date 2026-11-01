@@ -5,11 +5,8 @@ package commands
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/juju/errors"
@@ -19,6 +16,7 @@ import (
 	jujucloud "github.com/juju/juju/cloud"
 	jujucmd "github.com/juju/juju/cmd"
 	"github.com/juju/juju/cmd/cmd"
+	"github.com/juju/juju/cmd/juju/backups"
 	"github.com/juju/juju/cmd/juju/common"
 	"github.com/juju/juju/cmd/modelcmd"
 	"github.com/juju/juju/domain/recovery"
@@ -35,15 +33,15 @@ func newRecoveryCommand() cmd.Command {
 
 type recoveryCommand struct {
 	modelcmd.ModelCommandBase
-	archivePath  string
-	sha256       string
-	keepBroken   bool
-	recoveryInfo *recovery.ArchiveInfo
+	archivePath   string
+	assertionPath string
+	keepBroken    bool
+	recoveryInfo  *recovery.ArchiveInfo
 }
 
 func (c *recoveryCommand) Info() *cmd.Info {
 	return jujucmd.Info(&cmd.Info{
-		Name: "recovery", Args: "<backup-file>", Purpose: "Recover a controller from a backup archive.",
+		Name: "recover", Args: "<backup-file> <assertion-file>", Purpose: "Recover a controller from a backup archive.",
 		Doc: `Recover a replacement controller using the cloud, region and controller name
 recorded in the archive. The controller UUID, model UUIDs and controller CA are
 preserved. The replacement runs the exact agent version recorded in the backup.
@@ -62,7 +60,10 @@ client, run juju unregister first. Kubernetes recovery requires the original
 cluster and surviving workload namespaces. Each workload model is checked on
 its own archived cluster before the replacement is created.
 
-The archive checksum is required. Local credentials are tried first; if none
+The archive and its assertion file are given explicitly. The unsigned
+assertion, the "<archive>.assert" file written by create-backup, supplies
+the expected SHA-256 checksum, which the archive must match.
+Local credentials are tried first; if none
 are available, the credential archived for each model cloud is used. An ambiguous
 credential selection or authentication failure stops recovery.
 
@@ -79,14 +80,13 @@ hosting other workload units or containers are refused before provisioning.
 The restored object store remains file-backed until the operator explicitly
 authorises an S3 transition with authorize-s3-transition=true.
 `,
-		Examples: "    juju recovery juju-backup.tar.gz --sha256 <checksum>",
+		Examples: "    juju recover juju-backup.tar.gz juju-backup.tar.gz.assert",
 		SeeAlso:  []string{"bootstrap", "create-backup", "unregister"},
 	})
 }
 
 func (c *recoveryCommand) SetFlags(f *gnuflag.FlagSet) {
 	c.ModelCommandBase.SetFlags(f)
-	f.StringVar(&c.sha256, "sha256", "", "SHA-256 checksum of the backup archive (64 hexadecimal characters)")
 	f.BoolVar(&c.keepBroken, "keep-broken", false,
 		"Do not remove replacement cloud resources if recovery fails")
 }
@@ -95,16 +95,20 @@ func (c *recoveryCommand) Init(args []string) error {
 	if len(args) == 0 {
 		return errors.New("a backup archive is required")
 	}
-	if err := cmd.CheckEmpty(args[1:]); err != nil {
+	if len(args) == 1 {
+		return errors.New("a backup assertion file is required")
+	}
+	if err := cmd.CheckEmpty(args[2:]); err != nil {
 		return err
 	}
-	if c.sha256 == "" {
-		return errors.New("--sha256 is required")
+	if args[0] == "" {
+		return errors.New("a backup archive is required")
 	}
-	if err := validateRecoverySHA256(c.sha256); err != nil {
-		return err
+	if args[1] == "" {
+		return errors.New("a backup assertion file is required")
 	}
 	c.archivePath = args[0]
+	c.assertionPath = args[1]
 	return nil
 }
 
@@ -136,7 +140,15 @@ func (c *recoveryCommand) preflight(ctx *cmd.Context) (*recovery.ArchiveInfo, er
 	if !filepath.IsAbs(archivePath) {
 		archivePath = ctx.AbsPath(archivePath)
 	}
-	info, err := internalrecovery.ValidateArchive(ctx.Context, logger, archivePath, c.sha256)
+	assertionPath := c.assertionPath
+	if !filepath.IsAbs(assertionPath) {
+		assertionPath = ctx.AbsPath(assertionPath)
+	}
+	assertion, err := c.readAssertion(assertionPath)
+	if err != nil {
+		return nil, err
+	}
+	info, err := internalrecovery.ValidateArchive(ctx.Context, logger, archivePath, assertion.Checksum)
 	if err != nil {
 		return nil, errors.Annotate(err, "invalid recovery archive")
 	}
@@ -295,15 +307,23 @@ func (c *recoveryCommand) localRecoveryCredential(ctx *cmd.Context, provider env
 	return credential, name, detected, err
 }
 
-// validateRecoverySHA256 enforces the operator-supplied checksum format:
-// 64 hexadecimal characters, optionally prefixed by sha256-. A malformed
-// checksum fails before the preflight reads the archive.
-func validateRecoverySHA256(sum string) error {
-	decoded, err := hex.DecodeString(strings.TrimPrefix(sum, "sha256-"))
-	if err != nil || len(decoded) != sha256.Size {
-		return errors.New("--sha256 must be a SHA-256 checksum: 64 hexadecimal characters")
+// readAssertion opens and parses the backup assertion file. Every open,
+// read and close failure carries the assertion filename; a parse error
+// wins over a close failure.
+func (c *recoveryCommand) readAssertion(assertionPath string) (*backups.Assertion, error) {
+	file, err := c.Filesystem().Open(assertionPath)
+	if err != nil {
+		return nil, errors.Annotatef(err, "reading backup assertion %q", assertionPath)
 	}
-	return nil
+	assertion, err := backups.ReadAssertion(file)
+	closeErr := file.Close()
+	if err != nil {
+		return nil, errors.Annotatef(err, "reading backup assertion %q", assertionPath)
+	}
+	if closeErr != nil {
+		return nil, errors.Annotatef(closeErr, "reading backup assertion %q", assertionPath)
+	}
+	return assertion, nil
 }
 
 // recoveryModels maps the archived model inventory to the provider-facing

@@ -47,7 +47,7 @@ See more: {ref}`manage-constraints-for-a-controller`, {ref}`make-a-controller-hi
 ```
 ````
 ````{dropdown} Tips for production - Kubernetes
-Kubernetes controllers do not currently support high availability. Single-replica Kubernetes controllers can be backed up (`juju create-backup`) and recovered (`juju recovery`); recovery requires the same cluster, the same controller name, and excludes controllers that also manage machine models. Consider bootstrapping your controller on a machine cloud and then adding your Kubernetes cloud(s) to it, in a multi-cloud controller setup (`juju add-k8s myk8scloud --controller mymachinecontroller`) when you need machine-model workloads under the same controller.
+Kubernetes controllers do not currently support high availability. Single-replica Kubernetes controllers can be backed up (`juju create-backup`) and recovered (`juju recover`); recovery requires the same cluster, the same controller name, and excludes controllers that also manage machine models. Consider bootstrapping your controller on a machine cloud and then adding your Kubernetes cloud(s) to it, in a multi-cloud controller setup (`juju add-k8s myk8scloud --controller mymachinecontroller`) when you need machine-model workloads under the same controller.
 
 ```{ibnote}
 See more: {ref}`add-a-cloud`
@@ -482,8 +482,11 @@ To create a controller backup, run:
 juju create-backup --filename juju-backup.tar.gz
 ```
 
-The command downloads the archive and reports its SHA-256 checksum. Keep both
-for recovery. Only one archive can be created at a time across the controller;
+The command downloads the archive and, on success, prints nothing. It also
+saves the backup summary beside the archive as an unsigned YAML assertion
+file named by appending `.assert` to the archive filename; the assertion
+records the archive's SHA-256 checksum. Keep both files together for
+recovery. Only one archive can be created at a time across the controller;
 if another creation is running, retry after it finishes. Downloading an archive
 that has already been created does not hold the creation lock.
 
@@ -516,10 +519,11 @@ juju unregister oldcontroller
 See more: {ref}`command-juju-unregister`
 ```
 
-Recover using the downloaded archive and its reported checksum:
+Recover using the downloaded archive and its assertion file, which supplies
+the expected SHA-256 checksum:
 
 ```text
-juju recovery juju-backup.tar.gz --sha256 <checksum>
+juju recover juju-backup.tar.gz juju-backup.tar.gz.assert
 ```
 
 The archive determines the cloud, region and controller name. Recovery preserves
@@ -540,7 +544,7 @@ set its `authorize-s3-transition` configuration to `true`. Recovery resets any
 approval recorded in the backup, so an old approval cannot start a new transition.
 
 ```{ibnote}
-See more: {ref}`command-juju-recovery`
+See more: {ref}`command-juju-recover`
 ```
 
 For the provisioning and startup design, see {ref}`controller-recovery`.
