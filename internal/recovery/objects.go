@@ -5,6 +5,7 @@ package recovery
 
 import (
 	"context"
+	"crypto/sha512"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,8 +29,17 @@ func CheckObjectStore(ctx context.Context, inventories []domainrecovery.ObjectIn
 			return errors.Capture(err)
 		}
 		for _, p := range inventory.Paths {
+			if !isHexSHA384(p.SHA384) {
+				return errors.Errorf(
+					"recovered object metadata references an invalid blob hash %q (namespace %q, path %q)",
+					p.SHA384, inventory.Namespace, p.Path)
+			}
 			blob := filepath.Join(dataDir, objectStoreDirName, inventory.Namespace, p.SHA384)
-			if _, err := os.Stat(blob); errors.Is(err, os.ErrNotExist) {
+			info, err := os.Stat(blob)
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				return errors.Capture(err)
+			}
+			if err != nil || !info.Mode().IsRegular() {
 				// A metadata row without a path is still
 				// reachable by hash; report the hash.
 				name := p.Path
@@ -37,8 +47,6 @@ func CheckObjectStore(ctx context.Context, inventories []domainrecovery.ObjectIn
 					name = p.SHA384
 				}
 				missing = append(missing, inventory.Namespace+"/"+name)
-			} else if err != nil {
-				return errors.Capture(err)
 			}
 		}
 	}
@@ -48,4 +56,18 @@ func CheckObjectStore(ctx context.Context, inventories []domainrecovery.ObjectIn
 			strings.Join(missing, "; "))
 	}
 	return nil
+}
+
+// isHexSHA384 reports whether s is a hex-encoded SHA-384 hash.
+func isHexSHA384(s string) bool {
+	if len(s) != 2*sha512.Size384 {
+		return false
+	}
+	for i := range len(s) {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+			return false
+		}
+	}
+	return true
 }

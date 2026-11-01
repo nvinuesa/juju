@@ -128,7 +128,7 @@ func (s *validateSuite) TestUnpackObjectStore(c *tc.C) {
 	dest := c.MkDir()
 	n, err := recovery.UnpackObjectStore(c.Context(), archivePath, dest)
 	c.Assert(err, tc.ErrorIsNil)
-	c.Check(n, tc.Equals, 1)
+	c.Check(n, tc.Equals, 2)
 
 	content, err := os.ReadFile(filepath.Join(dest, "objectstore", "some-ns", "somehash"))
 	c.Assert(err, tc.ErrorIsNil)
@@ -150,7 +150,7 @@ func (s *validateSuite) TestUnpackObjectStoreOverwritesPresentBlob(c *tc.C) {
 
 	n, err := recovery.UnpackObjectStore(c.Context(), archivePath, dest)
 	c.Assert(err, tc.ErrorIsNil)
-	c.Check(n, tc.Equals, 1)
+	c.Check(n, tc.Equals, 2)
 
 	content, err := os.ReadFile(existing)
 	c.Assert(err, tc.ErrorIsNil)

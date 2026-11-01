@@ -15,7 +15,7 @@ import (
 )
 
 // GetControllerMachineName resolves the archived machine the replacement
-// maps onto: the lowest-named ALIVE machine hosting a unit of the
+// maps onto: the lowest-named ALIVE machine hosting an ALIVE unit of the
 // controller application. An HA source may have lost its "0" machine; the
 // patch target must be a machine that actually exists and is alive in the
 // archive, never an assumed ordinal.
@@ -25,8 +25,9 @@ func (st *State) GetControllerMachineName(ctx context.Context) (string, error) {
 	}
 	stmt, err := st.Prepare(`
 SELECT m.name AS &machine.name FROM machine AS m
-JOIN v_machine_is_controller AS vic ON vic.machine_uuid = m.uuid
-WHERE m.life_id = 0 ORDER BY m.name LIMIT 1`, machine{})
+JOIN unit AS u ON u.net_node_uuid = m.net_node_uuid
+JOIN application_controller AS ac ON ac.application_uuid = u.application_uuid
+WHERE m.life_id = 0 AND u.life_id = 0 ORDER BY m.name LIMIT 1`, machine{})
 	if err != nil {
 		return "", errors.Capture(err)
 	}
@@ -106,10 +107,13 @@ WHERE mci.machine_uuid = $machinePatch.uuid`, input)
 }
 
 // PatchControllerUnitAddresses replaces the controller unit's IP and DNS
-// observations. Kubernetes pod names live in fqdn_address, independently of the
-// application's Service addresses. Only the unit's observations are replaced;
-// shared DNS rows and Service addresses belonging to other nodes are preserved.
-func (st *State) PatchControllerUnitAddresses(ctx context.Context, patch domainrecovery.ControllerUnitAddressPatch) error {
+// observations. With a machine name the patched unit is the live controller
+// unit on that machine; without one (Kubernetes) it is the lowest-named
+// live controller unit. Kubernetes pod names live in fqdn_address,
+// independently of the application's Service addresses. Only the unit's
+// observations are replaced; shared DNS rows and Service addresses
+// belonging to other nodes are preserved.
+func (st *State) PatchControllerUnitAddresses(ctx context.Context, machineName string, patch domainrecovery.ControllerUnitAddressPatch) error {
 	if len(patch.Addresses) == 0 {
 		return nil
 	}
@@ -128,16 +132,25 @@ func (st *State) PatchControllerUnitAddresses(ctx context.Context, patch domainr
 			OriginID    int    `db:"origin_id"`
 			ScopeID     int    `db:"scope_id"`
 		}
+		type target struct {
+			MachineName string `db:"machine_name"`
+		}
+		// An empty machine name selects the lowest-named live controller
+		// unit; otherwise only the live unit on that live machine matches.
 		query, err := sqlair.Prepare(`
 SELECT u.net_node_uuid AS &observation.net_node_uuid
 FROM unit AS u
 JOIN application_controller AS ac ON ac.application_uuid = u.application_uuid
-WHERE u.name = 'controller/0'`, observation{})
+LEFT JOIN machine AS m ON m.net_node_uuid = u.net_node_uuid AND m.life_id = 0
+WHERE u.life_id = 0
+AND ($target.machine_name = '' OR m.name = $target.machine_name)
+ORDER BY u.name
+LIMIT 1`, observation{}, target{})
 		if err != nil {
 			return errors.Capture(err)
 		}
 		var node observation
-		if err := tx.Query(ctx, query).Get(&node); errors.Is(err, sqlair.ErrNoRows) {
+		if err := tx.Query(ctx, query, target{MachineName: machineName}).Get(&node); errors.Is(err, sqlair.ErrNoRows) {
 			return errors.New("controller unit not found")
 		} else if err != nil {
 			return errors.Errorf("finding controller unit: %w", err)

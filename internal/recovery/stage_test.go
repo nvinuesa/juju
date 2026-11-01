@@ -13,6 +13,7 @@ import (
 	"github.com/juju/tc"
 
 	"github.com/juju/juju/core/database"
+	coremodel "github.com/juju/juju/core/model"
 	domainrecovery "github.com/juju/juju/domain/recovery"
 	recoveryservice "github.com/juju/juju/domain/recovery/service"
 	"github.com/juju/juju/domain/schema"
@@ -44,8 +45,8 @@ func (s *loadSuite) openModelDB(c *tc.C, modelUUID string) *sql.DB {
 }
 
 // controllerModelDumpYAML is the controller model's database dump with the
-// source controller application, unit and machine.
-const controllerModelDumpYAML = `version: 4.1.0
+// source controller application, unit, machine and object store metadata.
+var controllerModelDumpYAML = `version: 4.1.0
 payload:
   net_node:
   - uuid: nn-0
@@ -130,6 +131,18 @@ payload:
     root_disk: null
     root_disk_source: null
     virt_type: null
+` + objectStoreMetadataYAML
+
+// objectStoreMetadataYAML is the object store metadata of
+// controllerModelDumpYAML: one charm blob with its path.
+var objectStoreMetadataYAML = `  object_store_metadata:
+  - uuid: obj-meta-0
+    sha_256: ` + testObjectSHA256 + `
+    sha_384: ` + testObjectSHA384 + `
+    size: 10
+  object_store_metadata_path:
+  - path: charms/foo
+    metadata_uuid: obj-meta-0
 `
 
 const emptyModelDumpYAML = `version: 4.1.0
@@ -536,6 +549,10 @@ func (s *loadSuite) TestLoadStageEndToEnd(c *tc.C) {
 	c.Assert(err, tc.ErrorIsNil)
 	c.Check(controllerUUID, tc.Equals, testControllerUUID)
 
+	// The referenced object blob was unpacked into the replacement's store.
+	_, err = os.Stat(filepath.Join(dataDir, "objectstore",
+		testControllerModelUUID, testObjectSHA384))
+	c.Assert(err, tc.ErrorIsNil)
 }
 
 // TestLoadStageKubernetes drives the Kubernetes recovery path: there is no
@@ -690,6 +707,58 @@ func (s *loadSuite) TestLoadStageHAWorkloadMachineNotDead(c *tc.C) {
 	c.Check(summary.DeadControllerMachines, tc.DeepEquals, []string{"0"})
 }
 
+// TestLoadStageControllerModelMismatch checks that the archive's controller
+// model identity gates the load: a divergent bootstrap identity fails before
+// anything is written.
+func (s *loadSuite) TestLoadStageControllerModelMismatch(c *tc.C) {
+	files := validFiles()
+	archivePath, sum := writeArchive(c, files)
+
+	_, err := recovery.Load(c.Context(), recovery.LoadParams{
+		Service:             s.recoveryService(c, nil),
+		ArchivePath:         archivePath,
+		ExpectedSHA256:      sum,
+		DataDir:             c.MkDir(),
+		ControllerModelUUID: testModelAUUID,
+		Logger:              loggertesting.WrapCheckLog(c),
+	})
+	c.Assert(err, tc.ErrorMatches,
+		`archive controller model .* does not match the bootstrap controller model .*`)
+
+	// Nothing was loaded: the controller table is still empty.
+	var count int
+	c.Assert(s.DB().QueryRow("SELECT COUNT(*) FROM controller").Scan(&count), tc.ErrorIsNil)
+	c.Check(count, tc.Equals, 0)
+}
+
+// TestLoadStageMissingObjectBlob checks the object completeness gate end to
+// end: a metadata row whose blob the files archive does not carry fails the
+// stage.
+func (s *loadSuite) TestLoadStageMissingObjectBlob(c *tc.C) {
+	files := map[string][]byte{
+		"juju-backup/metadata.json": []byte(metadataJSON("4.1.0")),
+		"juju-backup/dump/controller.yaml": []byte(controllerDump(
+			modelRow(testControllerModelUUID, "controller", "cloud-lxd"),
+			modelRow(testModelAUUID, "workload-a", "cloud-lxd"),
+		)),
+		"juju-backup/dump/models/" + testControllerModelUUID + ".yaml": []byte(controllerModelDumpYAML),
+		"juju-backup/dump/models/" + testModelAUUID + ".yaml":          []byte(emptyModelDumpYAML),
+		"juju-backup/root.tar": rootTarMissingObjectBlob(c),
+	}
+	archivePath, sum := writeArchive(c, files)
+
+	_, err := recovery.Load(c.Context(), recovery.LoadParams{
+		Service:             s.recoveryService(c, nil),
+		ArchivePath:         archivePath,
+		ExpectedSHA256:      sum,
+		DataDir:             c.MkDir(),
+		ControllerModelUUID: testControllerModelUUID,
+		Logger:              loggertesting.WrapCheckLog(c),
+	})
+	c.Assert(err, tc.ErrorMatches,
+		"recovered object metadata references blobs that are not in the archive: .*")
+}
+
 func (s *loadSuite) TestLoadStageChecksumMismatch(c *tc.C) {
 	files := validFiles()
 	files["juju-backup/root.tar"] = rootTar(c)
@@ -718,6 +787,7 @@ func (s *loadSuite) TestLoadStageValidatesParamsFirst(c *tc.C) {
 	valid := recovery.LoadParams{
 		Service:             s.recoveryService(c, nil),
 		ArchivePath:         filepath.Join(c.MkDir(), "nonexistent.tar.gz"),
+		ExpectedSHA256:      "deadbeef",
 		DataDir:             c.MkDir(),
 		ControllerModelUUID: testControllerModelUUID,
 		Logger:              loggertesting.WrapCheckLog(c),
@@ -730,6 +800,7 @@ func (s *loadSuite) TestLoadStageValidatesParamsFirst(c *tc.C) {
 		{func(p *recovery.LoadParams) { p.Logger = nil }, "missing logger"},
 		{func(p *recovery.LoadParams) { p.ArchivePath = "" }, "missing archive path"},
 		{func(p *recovery.LoadParams) { p.DataDir = "" }, "missing data directory"},
+		{func(p *recovery.LoadParams) { p.ExpectedSHA256 = "" }, "missing expected archive checksum"},
 		{func(p *recovery.LoadParams) { p.ControllerModelUUID = "" }, "missing controller model UUID"},
 	} {
 		params := valid
@@ -769,6 +840,49 @@ func (s *loadSuite) TestLoadStageCleansUpStagingOnFailure(c *tc.C) {
 	entries, err := os.ReadDir(stagingDir)
 	c.Assert(err, tc.ErrorIsNil)
 	c.Check(entries, tc.HasLen, 0)
+}
+
+func (s *loadSuite) TestLoadStageReportsStagingCleanupFailure(c *tc.C) {
+	if os.Geteuid() == 0 {
+		c.Skip("directory permissions do not restrict root")
+	}
+	files := validFiles()
+	for _, model := range []string{testControllerModelUUID, testModelAUUID, testModelBUUID} {
+		files["juju-backup/dump/models/"+model+".yaml"] = []byte(emptyModelDumpYAML)
+	}
+	files["juju-backup/root.tar"] = rootTar(c)
+	archivePath, sum := writeArchive(c, files)
+	stagingDir := c.MkDir()
+	c.Setenv("TMPDIR", stagingDir)
+	c.Cleanup(func() { _ = os.Chmod(stagingDir, 0o700) })
+	service := &cleanupFailingService{
+		RecoveryService: s.recoveryService(c, nil),
+		stagingDir:      stagingDir,
+	}
+
+	summary, err := recovery.Load(c.Context(), recovery.LoadParams{
+		Service:             service,
+		ArchivePath:         archivePath,
+		ExpectedSHA256:      sum,
+		DataDir:             c.MkDir(),
+		ControllerModelUUID: testControllerModelUUID,
+		Logger:              loggertesting.WrapCheckLog(c),
+	})
+	c.Assert(err, tc.ErrorMatches, "cleaning up staged recovery dumps: .*permission denied")
+	c.Check(summary, tc.IsNil)
+}
+
+type cleanupFailingService struct {
+	recovery.RecoveryService
+	stagingDir string
+}
+
+func (s *cleanupFailingService) BuildSummary(ctx context.Context, info *domainrecovery.ArchiveInfo,
+	models []coremodel.UUID, machineName string, objectsCopied int) (*domainrecovery.Summary, error) {
+	if err := os.Chmod(s.stagingDir, 0o500); err != nil {
+		return nil, err
+	}
+	return s.RecoveryService.BuildSummary(ctx, info, models, machineName, objectsCopied)
 }
 
 func (s *loadSuite) recoveryService(c *tc.C, open func(context.Context, string) (*sql.DB, error)) *recoveryservice.Service {

@@ -21,11 +21,15 @@ type State interface {
 	LoadModelDump(context.Context, *domainrecovery.ModelDump, string) error
 	// Object queries describe the files required by persisted metadata.
 	GetObjectMetadataPaths(context.Context) ([]domainrecovery.ObjectMetadataPath, error)
-	// Machine lookup returns the first live controller machine in name order.
+	// Machine lookup returns the first live machine hosting a live
+	// controller unit, in name order.
 	GetControllerMachineName(context.Context) (string, error)
 	// Patches complete their writes before returning. Failure rolls back.
 	PatchControllerMachine(context.Context, domainrecovery.MachinePatch) error
-	PatchControllerUnitAddresses(context.Context, domainrecovery.ControllerUnitAddressPatch) error
+	// PatchControllerUnitAddresses targets the live controller unit on the
+	// named machine, or the lowest-named live controller unit when the
+	// name is empty.
+	PatchControllerUnitAddresses(context.Context, string, domainrecovery.ControllerUnitAddressPatch) error
 	// Summary queries return persisted observations after recovery patches.
 	GetOtherControllerMachines(context.Context, string) ([]string, error)
 	GetRecoveryCounts(context.Context) (domainrecovery.RecoveryCounts, error)
@@ -92,8 +96,11 @@ func (s *Service) PatchControllerMachine(ctx context.Context, model coremodel.UU
 	return name, nil
 }
 
-// PatchControllerUnitAddresses prepares identifiers before persistence starts.
-func (s *Service) PatchControllerUnitAddresses(ctx context.Context, model coremodel.UUID, values []string) error {
+// PatchControllerUnitAddresses replaces the controller unit's IP and DNS
+// observations with the replacement's addresses. machineName is the patch
+// target PatchControllerMachine returned; it is empty where there is no
+// machine (Kubernetes).
+func (s *Service) PatchControllerUnitAddresses(ctx context.Context, model coremodel.UUID, machineName string, values []string) error {
 	st, err := s.modelState(ctx, model)
 	if err != nil {
 		return errors.Capture(err)
@@ -102,7 +109,7 @@ func (s *Service) PatchControllerUnitAddresses(ctx context.Context, model coremo
 	if err != nil {
 		return errors.Capture(err)
 	}
-	return errors.Capture(st.PatchControllerUnitAddresses(ctx, patch))
+	return errors.Capture(st.PatchControllerUnitAddresses(ctx, machineName, patch))
 }
 
 // BuildSummary aggregates persisted observations after patches are applied.

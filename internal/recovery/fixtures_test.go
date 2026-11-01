@@ -32,7 +32,13 @@ const (
 	// testModelAUUID and testModelBUUID are fixture workload models.
 	testModelAUUID = "c0ffee00-bbbb-2222-3333-444455556666"
 	testModelBUUID = "c0ffee00-cccc-2222-3333-444455556666"
+
+	// testObjectSHA384 is the hex SHA-384 name of the fixture object blob;
+	// testObjectSHA256 is its recorded SHA-256.
+	testObjectSHA256 = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
 )
+
+var testObjectSHA384 = testHash("ab")
 
 // metadataJSON renders a backup metadata manifest for the given agent
 // version.
@@ -321,17 +327,36 @@ func withManifest(c *tc.C, files map[string][]byte) map[string][]byte {
 	return files
 }
 
-// rootTar renders the archive's root.tar file with one object blob.
+// rootTar renders the archive's root.tar file with the archive's object
+// blobs, including the one the controller model dump's metadata references.
 func rootTar(c *tc.C) []byte {
+	return rootTarBlobs(c, true)
+}
+
+// rootTarMissingObjectBlob renders the archive's root.tar file without the
+// object blob the controller model dump's metadata references.
+func rootTarMissingObjectBlob(c *tc.C) []byte {
+	return rootTarBlobs(c, false)
+}
+
+// rootTarBlobs renders the archive's root.tar file, with or without the
+// referenced object blob.
+func rootTarBlobs(c *tc.C, withObjectBlob bool) []byte {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
-	content := []byte("blob content")
-	c.Assert(tw.WriteHeader(&tar.Header{
-		Name: "var/lib/juju/objectstore/some-ns/somehash", Mode: 0o600,
-		Size: int64(len(content)), Typeflag: tar.TypeReg,
-	}), tc.ErrorIsNil)
-	_, err := tw.Write(content)
-	c.Assert(err, tc.ErrorIsNil)
+	add := func(name, content string) {
+		c.Assert(tw.WriteHeader(&tar.Header{
+			Name: name, Mode: 0o600,
+			Size: int64(len(content)), Typeflag: tar.TypeReg,
+		}), tc.ErrorIsNil)
+		_, err := tw.Write([]byte(content))
+		c.Assert(err, tc.ErrorIsNil)
+	}
+	add("var/lib/juju/objectstore/some-ns/somehash", "blob content")
+	if withObjectBlob {
+		add(filepath.Join("var/lib/juju/objectstore",
+			testControllerModelUUID, testObjectSHA384), "charm blob")
+	}
 	c.Assert(tw.Close(), tc.ErrorIsNil)
 	return buf.Bytes()
 }

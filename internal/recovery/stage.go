@@ -36,8 +36,10 @@ type RecoveryService interface {
 	// replacement's physical facts, returning the chosen machine name.
 	PatchControllerMachine(context.Context, coremodel.UUID, domainrecovery.MachinePatch) (string, error)
 
-	// PatchControllerUnitAddresses prepares identifiers before persistence starts.
-	PatchControllerUnitAddresses(context.Context, coremodel.UUID, []string) error
+	// PatchControllerUnitAddresses replaces the controller unit's IP and DNS
+	// observations: the unit on the named machine, or the lowest-named live
+	// controller unit when the name is empty.
+	PatchControllerUnitAddresses(context.Context, coremodel.UUID, string, []string) error
 
 	// BuildSummary aggregates persisted observations after patches are applied.
 	BuildSummary(context.Context, *domainrecovery.ArchiveInfo, []coremodel.UUID, string, int) (*domainrecovery.Summary, error)
@@ -53,7 +55,8 @@ type LoadParams struct {
 	// ArchivePath is the uploaded archive on the target's disk.
 	ArchivePath string
 
-	// ExpectedSHA256 is the operator-supplied archive checksum (hex).
+	// ExpectedSHA256 is the operator-supplied archive checksum (hex). It is
+	// required: the archive is trusted only after it matches.
 	ExpectedSHA256 string
 
 	// DataDir is the replacement's data directory; blobs install into
@@ -81,7 +84,7 @@ type LoadParams struct {
 // the controller database, install the object blobs, load every model
 // database and patch the replacement's physical facts in place. Any
 // failure fails bootstrap; the target is discarded and bootstrap re-run.
-func Load(ctx context.Context, params LoadParams) (*domainrecovery.Summary, error) {
+func Load(ctx context.Context, params LoadParams) (summary *domainrecovery.Summary, err error) {
 	// Validate before any side effect: ReadArchive streams,
 	// checksum-verifies and stages the whole archive to disk, and the
 	// logger is dereferenced by it.
@@ -97,6 +100,9 @@ func Load(ctx context.Context, params LoadParams) (*domainrecovery.Summary, erro
 	if params.DataDir == "" {
 		return nil, errors.New("missing data directory")
 	}
+	if params.ExpectedSHA256 == "" {
+		return nil, errors.New("missing expected archive checksum")
+	}
 	if params.ControllerModelUUID == "" {
 		return nil, errors.New("missing controller model UUID")
 	}
@@ -105,7 +111,17 @@ func Load(ctx context.Context, params LoadParams) (*domainrecovery.Summary, erro
 	if err != nil {
 		return nil, errors.Capture(err)
 	}
-	defer func() { _ = contents.Close() }()
+	defer func() {
+		if closeErr := contents.Close(); closeErr != nil {
+			summary = nil
+			err = errors.Join(err, errors.Errorf("cleaning up staged recovery dumps: %w", closeErr))
+		}
+	}()
+	if info.ControllerModelUUID != params.ControllerModelUUID {
+		return nil, errors.Errorf(
+			"archive controller model %q does not match the bootstrap controller model %q",
+			info.ControllerModelUUID, params.ControllerModelUUID)
+	}
 	params.Logger.Infof(ctx, "recovering controller %q from backup finished at %s",
 		info.ControllerUUID, info.BackupFinished)
 
@@ -120,7 +136,6 @@ func Load(ctx context.Context, params LoadParams) (*domainrecovery.Summary, erro
 	sort.Strings(modelUUIDs)
 
 	models := make([]coremodel.UUID, 0, len(modelUUIDs))
-	controllerModelFound := false
 	for _, modelUUID := range modelUUIDs {
 		if err := ctx.Err(); err != nil {
 			return nil, errors.Capture(err)
@@ -134,13 +149,7 @@ func Load(ctx context.Context, params LoadParams) (*domainrecovery.Summary, erro
 			return nil, errors.Capture(err)
 		}
 		models = append(models, model)
-		if modelUUID == params.ControllerModelUUID {
-			controllerModelFound = true
-		}
 		params.Logger.Tracef(ctx, "loaded database for model %s", modelUUID)
-	}
-	if !controllerModelFound {
-		return nil, errors.Errorf("controller model %q has no database dump", params.ControllerModelUUID)
 	}
 
 	// Unpack the archived object blobs straight into the replacement's
@@ -176,12 +185,13 @@ func Load(ctx context.Context, params LoadParams) (*domainrecovery.Summary, erro
 		// Synchronise the unit's IP and DNS observations with the
 		// replacement before workers can publish them.
 		if err := params.Service.PatchControllerUnitAddresses(ctx,
-			coremodel.UUID(params.ControllerModelUUID), params.ControllerUnitAddresses); err != nil {
+			coremodel.UUID(params.ControllerModelUUID), patchTarget,
+			params.ControllerUnitAddresses); err != nil {
 			return nil, errors.Capture(err)
 		}
 	}
 
-	summary, err := params.Service.BuildSummary(ctx, info, models, patchTarget, installed)
+	summary, err = params.Service.BuildSummary(ctx, info, models, patchTarget, installed)
 	if err != nil {
 		return nil, errors.Capture(err)
 	}

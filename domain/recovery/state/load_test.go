@@ -766,7 +766,7 @@ func (s *loadSuite) TestPatchControllerUnitAddressesInsertsMissing(c *tc.C) {
 	// one: the old observation is replaced and the device is retained.
 	patch, err := service.NewControllerUnitAddressPatch([]string{"10.1.0.1", "10.1.0.2"})
 	c.Assert(err, tc.ErrorIsNil)
-	err = s.modelState(c).PatchControllerUnitAddresses(c.Context(), patch)
+	err = s.modelState(c).PatchControllerUnitAddresses(c.Context(), "", patch)
 	c.Assert(err, tc.ErrorIsNil)
 
 	type addrRow struct {
@@ -820,7 +820,7 @@ func (s *loadSuite) TestPatchControllerUnitAddressesRepresentations(c *tc.C) {
 	} {
 		patch, err := service.NewControllerUnitAddressPatch(values)
 		c.Assert(err, tc.ErrorIsNil)
-		err = s.modelState(c).PatchControllerUnitAddresses(c.Context(), patch)
+		err = s.modelState(c).PatchControllerUnitAddresses(c.Context(), "", patch)
 		c.Assert(err, tc.ErrorIsNil)
 		observed, err := consumer.GetControllerUnitNetwork(c.Context(), "controller/0")
 		c.Assert(err, tc.ErrorIsNil)
@@ -855,11 +855,11 @@ func (s *loadSuite) TestPatchControllerUnitAddressesWithoutArchivedDevice(c *tc.
 	c.Assert(err, tc.ErrorIsNil)
 	patch, err := service.NewControllerUnitAddressPatch([]string{"pod.example.com"})
 	c.Assert(err, tc.ErrorIsNil)
-	err = s.modelState(c).PatchControllerUnitAddresses(c.Context(), patch)
+	err = s.modelState(c).PatchControllerUnitAddresses(c.Context(), "", patch)
 	c.Assert(err, tc.ErrorIsNil)
 	patch, err = service.NewControllerUnitAddressPatch([]string{"10.1.0.1"})
 	c.Assert(err, tc.ErrorIsNil)
-	err = s.modelState(c).PatchControllerUnitAddresses(c.Context(), patch)
+	err = s.modelState(c).PatchControllerUnitAddresses(c.Context(), "", patch)
 	c.Assert(err, tc.ErrorIsNil)
 	var deviceUUID string
 	err = db.QueryRowContext(c.Context(),
@@ -868,7 +868,7 @@ func (s *loadSuite) TestPatchControllerUnitAddressesWithoutArchivedDevice(c *tc.
 	c.Check(deviceUUID, tc.Equals, patch.DeviceUUID)
 	patch.Addresses[0].UUID = ""
 	patch.Addresses = append(patch.Addresses, patch.Addresses[0])
-	err = s.modelState(c).PatchControllerUnitAddresses(c.Context(), patch)
+	err = s.modelState(c).PatchControllerUnitAddresses(c.Context(), "", patch)
 	c.Assert(err, tc.ErrorMatches, ".*UNIQUE constraint failed.*")
 	// A failed replacement retains the previously committed observations.
 	err = db.QueryRowContext(c.Context(), "SELECT device_uuid FROM ip_address").Scan(&deviceUUID)
@@ -881,14 +881,135 @@ func (s *loadSuite) TestPatchControllerUnitAddressesMissingUnit(c *tc.C) {
 	defer db.Close()
 	patch, err := service.NewControllerUnitAddressPatch(nil)
 	c.Assert(err, tc.ErrorIsNil)
-	err = s.modelState(c).PatchControllerUnitAddresses(c.Context(), patch)
+	err = s.modelState(c).PatchControllerUnitAddresses(c.Context(), "", patch)
 	c.Assert(err, tc.ErrorIsNil)
 	_, err = service.NewControllerUnitAddressPatch([]string{""})
 	c.Assert(err, tc.ErrorMatches, "empty controller unit address")
 	patch, err = service.NewControllerUnitAddressPatch([]string{"pod.example.com"})
 	c.Assert(err, tc.ErrorIsNil)
-	err = s.modelState(c).PatchControllerUnitAddresses(c.Context(), patch)
+	err = s.modelState(c).PatchControllerUnitAddresses(c.Context(), "", patch)
 	c.Assert(err, tc.ErrorMatches, "controller unit not found")
+}
+
+// seedSecondControllerUnit adds a live controller/1 with its own net node,
+// device and stale IP observation.
+func (s *loadSuite) seedSecondControllerUnit(c *tc.C, db *sql.DB) {
+	insert := func(query string, args ...any) {
+		_, err := db.Exec(query, args...)
+		c.Assert(err, tc.ErrorIsNil)
+	}
+	insert("INSERT INTO net_node (uuid) VALUES ('nn-1')")
+	insert(`INSERT INTO unit (uuid, name, life_id, application_uuid, net_node_uuid, charm_uuid)
+		VALUES ('unit-uuid-1', 'controller/1', 0, 'app-uuid-0', 'nn-1', 'charm-uuid-0')`)
+	insert(`INSERT INTO link_layer_device (uuid, net_node_uuid, name, device_type_id, virtual_port_type_id)
+		VALUES ('lld-uuid-1', 'nn-1', 'eth0', 2, 0)`)
+	insert(`INSERT INTO ip_address (uuid, net_node_uuid, device_uuid, address_value, type_id, config_type_id, origin_id, scope_id)
+		VALUES ('ip-uuid-1', 'nn-1', 'lld-uuid-1', '10.0.0.6/24', 0, 0, 0, 0)`)
+}
+
+// checkUnitAddressesPatched asserts nn-1's observations were replaced by the
+// patch while the dead ordinal's net node keeps its archived rows untouched.
+func (s *loadSuite) checkUnitAddressesPatched(c *tc.C, db *sql.DB, patched string) {
+	var values []string
+	rows, err := db.Query("SELECT address_value FROM ip_address WHERE net_node_uuid = 'nn-1'")
+	c.Assert(err, tc.ErrorIsNil)
+	defer rows.Close()
+	for rows.Next() {
+		var value string
+		c.Assert(rows.Scan(&value), tc.ErrorIsNil)
+		values = append(values, value)
+	}
+	c.Assert(rows.Err(), tc.ErrorIsNil)
+	c.Check(values, tc.DeepEquals, []string{patched})
+	var stale string
+	err = db.QueryRow("SELECT address_value FROM ip_address WHERE net_node_uuid = 'nn-0'").Scan(&stale)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(stale, tc.Equals, "10.0.0.5/24")
+}
+
+func (s *loadSuite) TestPatchControllerUnitAddressesTargetsUnitOnLiveMachine(c *tc.C) {
+	// An HA archive whose "0" machine died before the backup: the machine
+	// patch resolves the surviving machine "1", and the unit patch must hit
+	// that machine's unit, never the dead ordinal's.
+	db := s.openModelDB(c, sourceModelUUID)
+	defer db.Close()
+	s.seedControllerUnitApplication(c, db)
+	s.seedSecondControllerUnit(c, db)
+	insert := func(query string, args ...any) {
+		_, err := db.Exec(query, args...)
+		c.Assert(err, tc.ErrorIsNil)
+	}
+	insert("INSERT INTO machine (uuid, name, net_node_uuid, life_id) VALUES ('machine-uuid-0', '0', 'nn-0', 2)")
+	insert("INSERT INTO machine (uuid, name, net_node_uuid, life_id) VALUES ('machine-uuid-1', '1', 'nn-1', 0)")
+
+	name, err := s.modelState(c).GetControllerMachineName(c.Context())
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(name, tc.Equals, "1")
+
+	patch, err := service.NewControllerUnitAddressPatch([]string{"10.1.0.9"})
+	c.Assert(err, tc.ErrorIsNil)
+	err = s.modelState(c).PatchControllerUnitAddresses(c.Context(), name, patch)
+	c.Assert(err, tc.ErrorIsNil)
+	s.checkUnitAddressesPatched(c, db, "10.1.0.9")
+}
+
+func (s *loadSuite) TestPatchTargetsSkipLiveMachineWithDyingUnit(c *tc.C) {
+	// Machine "0" is alive but its controller/0 is dying, while "1" and
+	// controller/1 are both alive: the machine and unit-address patches
+	// must both resolve to "1", never split across the two identities.
+	db := s.openModelDB(c, sourceModelUUID)
+	defer db.Close()
+	s.seedControllerUnitApplication(c, db)
+	s.seedSecondControllerUnit(c, db)
+	insert := func(query string, args ...any) {
+		_, err := db.Exec(query, args...)
+		c.Assert(err, tc.ErrorIsNil)
+	}
+	insert("UPDATE unit SET life_id = 1 WHERE name = 'controller/0'")
+	insert("INSERT INTO machine (uuid, name, net_node_uuid, life_id) VALUES ('machine-uuid-0', '0', 'nn-0', 0)")
+	insert("INSERT INTO machine (uuid, name, net_node_uuid, life_id) VALUES ('machine-uuid-1', '1', 'nn-1', 0)")
+
+	name, err := s.modelState(c).GetControllerMachineName(c.Context())
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(name, tc.Equals, "1")
+
+	patch, err := service.NewControllerUnitAddressPatch([]string{"10.1.0.9"})
+	c.Assert(err, tc.ErrorIsNil)
+	err = s.modelState(c).PatchControllerUnitAddresses(c.Context(), name, patch)
+	c.Assert(err, tc.ErrorIsNil)
+	s.checkUnitAddressesPatched(c, db, "10.1.0.9")
+}
+
+func (s *loadSuite) TestPatchControllerUnitAddressesMachineWithoutLiveUnit(c *tc.C) {
+	// A machine name with no live controller unit on it is not silently
+	// redirected to another unit.
+	db := s.openModelDB(c, sourceModelUUID)
+	defer db.Close()
+	s.seedControllerUnitApplication(c, db)
+	_, err := db.Exec("INSERT INTO machine (uuid, name, net_node_uuid, life_id) VALUES ('machine-uuid-0', '0', 'nn-0', 0)")
+	c.Assert(err, tc.ErrorIsNil)
+
+	patch, err := service.NewControllerUnitAddressPatch([]string{"10.1.0.9"})
+	c.Assert(err, tc.ErrorIsNil)
+	err = s.modelState(c).PatchControllerUnitAddresses(c.Context(), "7", patch)
+	c.Assert(err, tc.ErrorMatches, "controller unit not found")
+}
+
+func (s *loadSuite) TestPatchControllerUnitAddressesTargetsLiveUnitWithoutMachine(c *tc.C) {
+	// No machines (Kubernetes): the patch falls back to the lowest-named
+	// live controller unit rather than the dead "0" ordinal.
+	db := s.openModelDB(c, sourceModelUUID)
+	defer db.Close()
+	s.seedControllerUnitApplication(c, db)
+	s.seedSecondControllerUnit(c, db)
+	_, err := db.Exec("UPDATE unit SET life_id = 2 WHERE name = 'controller/0'")
+	c.Assert(err, tc.ErrorIsNil)
+
+	patch, err := service.NewControllerUnitAddressPatch([]string{"10.1.0.9"})
+	c.Assert(err, tc.ErrorIsNil)
+	err = s.modelState(c).PatchControllerUnitAddresses(c.Context(), "", patch)
+	c.Assert(err, tc.ErrorIsNil)
+	s.checkUnitAddressesPatched(c, db, "10.1.0.9")
 }
 
 func dumpYAML(c *tc.C, dump *testDump) []byte {
