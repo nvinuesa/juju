@@ -345,10 +345,26 @@ payload:
     model_type_id: 0
 `
 	files := map[string][]byte{
-		"juju-backup/metadata.json":                                []byte(metadata),
-		"juju-backup/dump/controller.yaml":                         []byte(controllerDump),
-		"juju-backup/dump/models/" + controllerModelUUID + ".yaml": []byte("payload: {}\n"),
-		"juju-backup/root.tar":                                     []byte("blobs"),
+		"juju-backup/metadata.json":        []byte(metadata),
+		"juju-backup/dump/controller.yaml": []byte(controllerDump),
+		"juju-backup/dump/models/" + controllerModelUUID + ".yaml": []byte(`payload:
+  net_node:
+  - uuid: nn
+  application_controller:
+  - application_uuid: controller-app
+  unit:
+  - uuid: controller-unit
+    name: controller/0
+    application_uuid: controller-app
+    life_id: 0
+    net_node_uuid: nn
+  machine:
+  - uuid: controller-machine
+    name: "0"
+    net_node_uuid: nn
+    life_id: 0
+`),
+		"juju-backup/root.tar": []byte("blobs"),
 	}
 
 	var buf bytes.Buffer
