@@ -19,10 +19,14 @@ import (
 	"github.com/juju/errors"
 	"github.com/juju/tc"
 
+	"github.com/juju/juju/api/jujuclient"
+	"github.com/juju/juju/cloud"
 	"github.com/juju/juju/cmd/cmd"
 	"github.com/juju/juju/cmd/cmd/cmdtesting"
 	"github.com/juju/juju/cmd/modelcmd"
 	corebackups "github.com/juju/juju/core/backups"
+	"github.com/juju/juju/domain/recovery"
+	"github.com/juju/juju/environs"
 	coretesting "github.com/juju/juju/internal/testing"
 )
 
@@ -390,4 +394,75 @@ payload:
 	c.Assert(tw.Close(), tc.ErrorIsNil)
 	c.Assert(gz.Close(), tc.ErrorIsNil)
 	return buf.Bytes()
+}
+
+func (s *recoverySuite) TestCredentialSelection(c *tc.C) {
+	provider, err := environs.Provider("dummy")
+	c.Assert(err, tc.ErrorIsNil)
+	provider = noDetectionProvider{provider}
+	for _, mode := range []string{"local", "archived", "ambiguous", "revoked", "missing"} {
+		store := jujuclient.NewMemStore()
+		info := &recovery.ArchiveInfo{Region: "source-region", Credential: &recovery.CredentialInfo{
+			Name: "archived", AuthType: string(cloud.UserPassAuthType), Attributes: map[string]string{"username": "source", "password": "secret"},
+		}}
+		if mode == "local" || mode == "ambiguous" {
+			credentials := map[string]cloud.Credential{"local": cloud.NewCredential(cloud.UserPassAuthType, map[string]string{"username": "local", "password": "fresh"})}
+			if mode == "ambiguous" {
+				credentials["second"] = credentials["local"]
+			}
+			store.Credentials["dummy"] = cloud.CloudCredential{AuthCredentials: credentials}
+		}
+		if mode == "revoked" {
+			info.Credential.Revoked = true
+		}
+		if mode == "missing" {
+			info.Credential = nil
+		}
+		p := recoveryCommand{recoveryInfo: info}
+		p.SetClientStore(store)
+		credentials, region, err := p.recoveryCredentials(cmdtesting.Context(c), provider, cloud.Cloud{
+			Name: "dummy", Type: "dummy", AuthTypes: []cloud.AuthType{cloud.UserPassAuthType},
+			Regions: []cloud.Region{{Name: "source-region"}},
+		})
+		switch mode {
+		case "ambiguous":
+			c.Check(err, tc.ErrorIs, modelcmd.ErrMultipleCredentials)
+		case "revoked":
+			c.Check(err, tc.ErrorMatches, "archived controller credential is revoked or invalid.*")
+		case "missing":
+			c.Check(err, tc.ErrorMatches, "no local or archived controller credential is available.*")
+		default:
+			c.Assert(err, tc.ErrorIsNil)
+			c.Check(credentials.name, tc.Equals, mode)
+			c.Check(region, tc.Equals, "source-region")
+		}
+	}
+}
+
+type failingRecoveryProvider struct{ environs.EnvironProvider }
+
+func (p failingRecoveryProvider) FinalizeCredential(environs.FinalizeCredentialContext, environs.FinalizeCredentialParams) (*cloud.Credential, error) {
+	return nil, errors.New("credential authentication failed")
+}
+
+func (s *recoverySuite) TestLocalCredentialErrorDoesNotFallBack(c *tc.C) {
+	provider, err := environs.Provider("dummy")
+	c.Assert(err, tc.ErrorIsNil)
+	store := jujuclient.NewMemStore()
+	// A selected local credential that fails authentication must not fall back.
+	store.Credentials["dummy"] = cloud.CloudCredential{AuthCredentials: map[string]cloud.Credential{
+		"local": cloud.NewCredential(cloud.UserPassAuthType, map[string]string{"username": "local", "password": "fresh"}),
+	}}
+	p := recoveryCommand{recoveryInfo: &recovery.ArchiveInfo{Credential: &recovery.CredentialInfo{Name: "archived"}}}
+	p.SetClientStore(store)
+	_, _, err = p.recoveryCredentials(cmdtesting.Context(c), failingRecoveryProvider{provider}, cloud.Cloud{
+		Name: "dummy", Type: "dummy", AuthTypes: []cloud.AuthType{cloud.UserPassAuthType},
+	})
+	c.Check(err, tc.ErrorMatches, ".*credential authentication failed.*")
+}
+
+type noDetectionProvider struct{ environs.EnvironProvider }
+
+func (p noDetectionProvider) DetectCredentials(string) (*cloud.CloudCredential, error) {
+	return nil, errors.NotFoundf("local credentials")
 }
