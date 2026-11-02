@@ -7,11 +7,15 @@ import (
 	"path/filepath"
 
 	"github.com/juju/errors"
+	"github.com/juju/names/v6"
 
+	jujucloud "github.com/juju/juju/cloud"
 	jujucmd "github.com/juju/juju/cmd"
 	"github.com/juju/juju/cmd/cmd"
 	"github.com/juju/juju/cmd/juju/backups"
 	"github.com/juju/juju/cmd/modelcmd"
+	"github.com/juju/juju/domain/recovery"
+	"github.com/juju/juju/internal/docker"
 	internalrecovery "github.com/juju/juju/internal/recovery"
 )
 
@@ -58,6 +62,13 @@ func (c *recoveryCommand) Init(args []string) error {
 }
 
 func (c *recoveryCommand) Run(ctx *cmd.Context) error {
+	if _, err := c.preflight(ctx); err != nil {
+		return err
+	}
+	return errors.New("controller recovery provisioning is not available in this build")
+}
+
+func (c *recoveryCommand) preflight(ctx *cmd.Context) (*recovery.ArchiveInfo, error) {
 	archivePath := c.archivePath
 	if !filepath.IsAbs(archivePath) {
 		archivePath = ctx.AbsPath(archivePath)
@@ -68,12 +79,36 @@ func (c *recoveryCommand) Run(ctx *cmd.Context) error {
 	}
 	assertion, err := c.readAssertion(assertionPath)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if _, err := internalrecovery.ValidateArchive(ctx.Context, logger, archivePath, assertion.Checksum); err != nil {
-		return errors.Annotate(err, "invalid recovery archive")
+	info, err := internalrecovery.ValidateArchive(ctx.Context, logger, archivePath, assertion.Checksum)
+	if err != nil {
+		return nil, errors.Annotate(err, "invalid recovery archive")
 	}
-	return errors.New("controller recovery provisioning is not available in this build")
+	if info.CloudType == "manual" {
+		return nil, errors.NotSupportedf("automatic recovery provisioning on manual clouds")
+	}
+	if info.ControllerName == "" {
+		return nil, errors.New("recovery archive does not record the source controller name")
+	}
+	if info.CloudType == jujucloud.CloudTypeKubernetes {
+		if info.FormatVersion < 2 || info.Kubernetes == nil {
+			return nil, errors.New("Kubernetes recovery requires source provisioning metadata; create a new backup")
+		}
+		if info.Kubernetes.Architecture != info.ControllerArchitecture || info.Kubernetes.StorageSizeMiB == 0 {
+			return nil, errors.New("source Kubernetes provisioning disagrees with the archived controller")
+		}
+		if err := docker.ValidateDockerRegistryPath(info.Kubernetes.AgentImage); err != nil {
+			return nil, errors.Annotate(err, "invalid archived controller agent image")
+		}
+		if err := docker.ValidateDockerRegistryPath(info.Kubernetes.CharmImage); err != nil {
+			return nil, errors.Annotate(err, "invalid archived controller charm image")
+		}
+	}
+	if !names.IsValidCloud(info.CloudName) {
+		return nil, errors.NotValidf("archived cloud name %q", info.CloudName)
+	}
+	return info, nil
 }
 
 // readAssertion opens and parses the backup assertion file. Every open,
