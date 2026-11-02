@@ -4,9 +4,22 @@
 package recovery
 
 import (
+	"time"
+
+	"github.com/juju/juju/core/backups"
+	"github.com/juju/juju/core/constraints"
 	"github.com/juju/juju/core/semversion"
+	exportmodel "github.com/juju/juju/domain/export/types/v4_1_0"
 	"github.com/juju/juju/internal/errors"
 )
+
+// ControllerTopology holds only the placement rows needed by preflight.
+type ControllerTopology struct {
+	Machines              []exportmodel.Machine
+	Units                 []exportmodel.Unit
+	MachineParents        []exportmodel.MachineParent
+	ApplicationController []exportmodel.ApplicationController
+}
 
 // ApplicationInfo describes one archived workload application, used for
 // recovery substrate inventories on Kubernetes: the model's namespace must
@@ -27,7 +40,7 @@ type ApplicationInfo struct {
 	// so they are reported only as scale context, never checked.
 	Units []string
 
-	// FilesystemProviderIDs lists the kubernetes persistent volume claim
+	// FilesystemProviderIDs lists the Kubernetes persistent volume or claim
 	// names the archived storage filesystems record, one per attached
 	// volume. A claim that no longer exists comes back empty at the
 	// first reconcile, so it is reported as missing substrate.
@@ -36,6 +49,13 @@ type ApplicationInfo struct {
 
 // ModelInfo describes a single model recorded in a backup archive.
 type ModelInfo struct {
+	// Cloud, Region and Credential preserve this model's provider identity.
+	Cloud          CloudInfo
+	Region         string
+	CredentialUUID string
+	Credential     *CredentialInfo
+	Config         map[string]string
+
 	// UUID is the model's logical identity, preserved by recovery.
 	UUID string
 
@@ -64,9 +84,38 @@ type ModelInfo struct {
 // It is produced before anything is provisioned and drives the recovery
 // preflight checks.
 type ArchiveInfo struct {
+	// ControllerTopology holds only the placement rows needed by preflight.
+	ControllerTopology *ControllerTopology
+
+	// Provisioning requirements come from the archived source, not CLI defaults.
+	Constraints       constraints.Value
+	StoragePools      map[string]map[string]string
+	Kubernetes        *backups.KubernetesProvisioning
+	FormatVersion     int64
+	DatabaseSizeBytes int64
+
+	// Cloud and Region identify the original provisioning target.
+	Cloud  CloudInfo
+	Region string
+	// Credential is used only when local credentials are unavailable.
+	Credential *CredentialInfo
+	// ModelConfig contains the source controller model's provider settings.
+	ModelConfig map[string]string
 	// AgentVersion is the exact agent version of the source controller,
-	// read from the archive metadata (the manifest).
+	// read from metadata.json.
 	AgentVersion semversion.Number
+
+	// ControllerArchitecture and ControllerCharmBase describe the archived
+	// Kubernetes controller application platform used by the replacement pod.
+	ControllerArchitecture string
+	ControllerCharmBase    string
+
+	// SourceBase is the operating system base recorded in metadata.json.
+	SourceBase string
+	// MachineName is the source agent identity recorded in metadata.json.
+	MachineName      string
+	SystemIdentity   string
+	ControllerConfig map[string]string
 
 	// ControllerUUID is the source controller's logical identity.
 	ControllerUUID string
@@ -91,6 +140,10 @@ type ArchiveInfo struct {
 	// the remaining controller machines load as dead rows.
 	HANodes int64
 
+	// BackupFinished is when the source backup completed, telling the
+	// operator how much state drift to expect.
+	BackupFinished time.Time
+
 	// CloudName is the name of the controller model's cloud.
 	CloudName string
 
@@ -108,6 +161,62 @@ type ArchiveInfo struct {
 
 	// Size is the archive file's size in bytes.
 	Size int64
+
+	// ImportSize estimates unpacking, object copies and database import space.
+	ImportSize int64
+}
+
+// CloudInfo describes the cloud recorded in the controller export.
+type CloudInfo struct {
+	Name, Type                                  string
+	Endpoint, IdentityEndpoint, StorageEndpoint string
+	AuthTypes                                   []string
+	CACertificates                              []string
+	SkipTLSVerify                               bool
+	Regions                                     []RegionInfo
+}
+
+// RegionInfo retains the source region's endpoint overrides.
+type RegionInfo struct {
+	Name, Endpoint, IdentityEndpoint, StorageEndpoint string
+}
+
+// CredentialInfo describes the controller model's archived cloud credential.
+type CredentialInfo struct {
+	UUID             string
+	Name, AuthType   string
+	Attributes       map[string]string
+	Revoked, Invalid bool
+}
+
+// MachinePatch carries the replacement machine's physical facts, known to
+// bootstrap because it just created them.
+type MachinePatch struct {
+	// Nonce is the replacement machine's provisioned introduction nonce.
+	Nonce string
+
+	// MachineName is the name of the archived controller machine the
+	// replacement maps onto. It is resolved from the loaded dump by the
+	// recovery stage; the caller need not set it.
+	MachineName string
+
+	// InstanceID is the replacement's actual provider instance ID. It
+	// always overwrites the archived value.
+	InstanceID string
+
+	// DisplayName is the replacement's provider display name. It always
+	// overwrites the archived value; empty is a genuine value on providers
+	// that do not set one.
+	DisplayName string
+
+	// Arch is the replacement's architecture.
+	Arch string
+
+	// MemMB, Cores and RootDiskMB are the replacement's observed
+	// hardware. Zero values leave the archived observations in place.
+	MemMB      uint64
+	Cores      uint64
+	RootDiskMB uint64
 }
 
 // CheckAgentVersion enforces the exact-version recovery gate: an archive

@@ -72,9 +72,12 @@ func controllerDump(models ...[3]string) string {
 		"    api_port: \"17070\"\n" +
 		"    ca_cert: source-ca-cert\n" +
 		"    ca_private_key: source-ca-key\n" +
+		"    cert: null\n" +
+		"    private_key: null\n" +
+		"    system_identity: null\n" +
 		"  cloud:\n" +
-		"  - uuid: cloud-lxd\n    name: lxd\n    cloud_type_id: 1\n    endpoint: ''\n    skip_tls_verify: false\n" +
-		"  - uuid: cloud-k8s\n    name: myk8s\n    cloud_type_id: 2\n    endpoint: ''\n    skip_tls_verify: false\n" +
+		"  - uuid: cloud-lxd\n    name: lxd\n    cloud_type_id: 1\n    endpoint: ''\n    identity_endpoint: null\n    storage_endpoint: null\n    skip_tls_verify: false\n" +
+		"  - uuid: cloud-k8s\n    name: myk8s\n    cloud_type_id: 2\n    endpoint: ''\n    identity_endpoint: null\n    storage_endpoint: null\n    skip_tls_verify: false\n" +
 		"  cloud_type:\n" +
 		"  - id: 1\n    type: lxd\n" +
 		"  - id: 2\n    type: kubernetes\n" +
@@ -87,7 +90,8 @@ func controllerDump(models ...[3]string) string {
 	for _, m := range models {
 		fmt.Fprintf(&out,
 			"  - uuid: %s\n    name: %s\n    cloud_uuid: %s\n    model_type_id: %s\n"+
-				"    activated: true\n    life_id: 0\n    qualifier: ''\n",
+				"    activated: true\n    life_id: 0\n    qualifier: ''\n"+
+				"    cloud_region_uuid: null\n    cloud_credential_uuid: null\n",
 			m[0], m[1], m[2], "0")
 	}
 	return out.String()
@@ -107,25 +111,29 @@ func k8sModelDump(apps ...[2]string) string {
 	out.WriteString("  application:\n")
 	for _, app := range apps {
 		fmt.Fprintf(&out,
-			"  - uuid: %s\n    name: %s\n    life_id: 0\n    charm_uuid: charm-%s\n    password: ''\n",
+			"  - uuid: %s\n    name: %s\n    life_id: 0\n    charm_uuid: charm-%s\n"+
+				"    charm_modified_version: 0\n    charm_upgrade_on_error: null\n",
 			app[0], app[1], app[1])
 	}
 	out.WriteString("  unit:\n")
 	for _, app := range apps {
 		fmt.Fprintf(&out,
-			"  - uuid: unit-%s\n    name: %s/0\n    life_id: 0\n    application_uuid: %s\n    net_node_uuid: node-%s\n",
+			"  - uuid: unit-%s\n    name: %s/0\n    life_id: 0\n    application_uuid: %s\n    net_node_uuid: node-%s\n"+
+				"    password_hash_algorithm_id: null\n    password_hash: null\n",
 			app[1], app[1], app[0], app[1])
 	}
 	out.WriteString("  storage_filesystem:\n")
 	for _, app := range apps {
 		fmt.Fprintf(&out,
-			"  - uuid: fs-%s\n    filesystem_id: %s-vol\n    life_id: 0\n    provider_id: %s-%s-0\n",
+			"  - uuid: fs-%s\n    filesystem_id: %s-vol\n    life_id: 0\n    provider_id: %s-%s-0\n"+
+				"    provision_scope_id: 0\n    size_mib: null\n    obliterate_on_cleanup: null\n",
 			app[1], app[1], app[1], app[0][:6])
 	}
 	out.WriteString("  storage_filesystem_attachment:\n")
 	for _, app := range apps {
 		fmt.Fprintf(&out,
-			"  - uuid: att-%s\n    storage_filesystem_uuid: fs-%s\n    net_node_uuid: node-%s\n    life_id: 0\n",
+			"  - uuid: att-%s\n    storage_filesystem_uuid: fs-%s\n    net_node_uuid: node-%s\n    life_id: 0\n"+
+				"    provision_scope_id: 0\n    provider_id: null\n    mount_point: null\n    read_only: null\n",
 			app[1], app[1], app[1])
 	}
 	return out.String()
