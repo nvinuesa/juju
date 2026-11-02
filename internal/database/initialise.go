@@ -122,22 +122,34 @@ func (s *DqliteSession) BindAddress() string {
 // schema. It does not insert bootstrap data. The session owns the database and
 // closes it when initialisation finishes, including if schema application fails.
 func (s *DqliteSession) OpenDatabase(ctx context.Context, namespace string, schema Schema) (coredatabase.TxnRunner, error) {
+	_, runner, err := s.OpenDatabaseForImport(ctx, namespace, schema)
+	return runner, err
+}
+
+// OpenSQLDatabase exposes a session-owned SQL handle for archive import.
+// The handle must not outlive the session.
+func (s *DqliteSession) OpenSQLDatabase(ctx context.Context, namespace string, schema Schema) (*sql.DB, error) {
+	db, _, err := s.OpenDatabaseForImport(ctx, namespace, schema)
+	return db, err
+}
+
+// OpenDatabaseForImport opens and migrates a database, returning its SQL handle
+// and a transaction runner sharing that handle. Both are owned by the session
+// and must not be used after initialisation returns.
+func (s *DqliteSession) OpenDatabaseForImport(ctx context.Context, namespace string, schema Schema) (*sql.DB, coredatabase.TxnRunner, error) {
 	db, err := s.app.Open(ctx, namespace)
 	if err != nil {
-		return nil, errors.Errorf("opening database for namespace %q: %w", namespace, err)
+		return nil, nil, errors.Errorf("opening database for namespace %q: %w", namespace, err)
 	}
 	s.databases = append(s.databases, db)
-
 	if err := pragma.SetPragma(ctx, db, pragma.ForeignKeysPragma, true); err != nil {
-		return nil, errors.Errorf("setting foreign keys pragma for namespace %q: %w", namespace, err)
+		return nil, nil, errors.Errorf("setting foreign keys pragma for namespace %q: %w", namespace, err)
 	}
-
 	runner := &txnRunner{db: db}
-	migration := NewDBMigration(runner, s.logger, schema)
-	if err := migration.Apply(ctx); err != nil {
-		return nil, errors.Errorf("creating database with namespace %q schema: %w", namespace, err)
+	if err := NewDBMigration(runner, s.logger, schema).Apply(ctx); err != nil {
+		return nil, nil, errors.Errorf("creating database with namespace %q schema: %w", namespace, err)
 	}
-	return runner, nil
+	return db, runner, nil
 }
 
 func (s *DqliteSession) close(ctx context.Context) {

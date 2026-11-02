@@ -4,6 +4,7 @@
 package podcfg_test
 
 import (
+	"strings"
 	stdtesting "testing"
 
 	"github.com/juju/tc"
@@ -118,4 +119,12 @@ func (*imageSuite) TestRecoverRepoFromOperatorPath(c *tc.C) {
 
 	_, err = podcfg.RecoverRepoFromOperatorPath("docker.io/jujusolutions/nope:2.6-beta3")
 	c.Assert(err, tc.ErrorMatches, `image path "docker.io/jujusolutions/nope:2.6-beta3" does not match the form somerepo/jujud-operator:\.\*`)
+}
+
+func (*imageSuite) TestPinnedControllerImageCanBeUpgraded(c *tc.C) {
+	image := "ghcr.io/juju/jujud-operator@sha256:" + strings.Repeat("a", 64)
+	c.Check(podcfg.IsJujuOCIImage(image), tc.IsTrue)
+	path, err := podcfg.RebuildOldOperatorImagePath(image, semversion.MustParse("4.2.0.7"))
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(path, tc.Equals, "ghcr.io/juju/jujud-operator:4.2.0.7")
 }

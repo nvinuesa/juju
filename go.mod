@@ -92,6 +92,7 @@ require (
 	github.com/mittwald/vaultgo v0.2.5
 	github.com/moby/sys/mountinfo v0.7.2
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826
+	github.com/opencontainers/go-digest v1.0.0
 	github.com/oracle/oci-go-sdk/v65 v65.121.0
 	github.com/pkg/sftp v1.13.11
 	github.com/prometheus/client_golang v1.23.2
@@ -256,7 +257,6 @@ require (
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/muhlemmer/gu v0.3.1 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pkg/term v1.1.0 // indirect

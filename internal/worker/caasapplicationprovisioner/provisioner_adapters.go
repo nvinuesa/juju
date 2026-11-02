@@ -182,20 +182,14 @@ func (s *provisionerFacadeShim) ProvisioningInfo(ctx context.Context, appName st
 		return provisionertypes.ProvisioningInfo{}, errors.Annotate(err, "parsing base from charm origin")
 	}
 
-	modelImage := cfg.CAASImageRepo() + "/" + podcfg.JujudOCIName
-	modelImageRepo, err := podcfg.RecoverRepoFromOperatorPath(modelImage)
-	if err != nil {
-		return provisionertypes.ProvisioningInfo{}, errors.Annotate(err, "recovering repo from operator path")
-	}
-
-	modelImagePath, err := podcfg.GetJujuOCIImagePathFromModelRepo(modelImageRepo, vers)
-	if err != nil {
-		return provisionertypes.ProvisioningInfo{}, errors.Annotate(err, "getting OCI image path")
-	}
-
-	imageRepoDetails, err := docker.NewImageRepoDetails(modelImageRepo)
+	imageRepoDetails, err := docker.NewImageRepoDetails(cfg.CAASImageRepo())
 	if err != nil {
 		return provisionertypes.ProvisioningInfo{}, errors.Annotate(err, "parsing image repo details")
+	}
+
+	modelImagePath, err := podcfg.GetJujuOCIImagePathFromModelRepo(imageRepoDetails.Repository, vers)
+	if err != nil {
+		return provisionertypes.ProvisioningInfo{}, errors.Annotate(err, "getting OCI image path")
 	}
 
 	charmModifiedVersion, err := s.appSvc.GetCharmModifiedVersion(ctx, appID)
