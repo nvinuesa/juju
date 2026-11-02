@@ -424,7 +424,7 @@ func (k *kubernetesClient) CreateModelResources(ctx context.Context, args enviro
 	return errors.Trace(k.createNamespace(ctx, k.namespace))
 }
 
-// EnsureImageRepoSecret ensures the image pull secret gets created.
+// EnsureImageRepoSecret stores private image repository credentials.
 func (k *kubernetesClient) EnsureImageRepoSecret(ctx context.Context, imageRepo docker.ImageRepoDetails) error {
 	if !imageRepo.IsPrivate() {
 		return nil

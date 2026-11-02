@@ -721,6 +721,39 @@ func Bootstrap(
 	return nil
 }
 
+// ControllerAgentInfoForCA generates the controller's leaf certificate from
+// the supplied CA pair and returns the controller agent information for the
+// given API port. The certificate carries a set of well-known static DNS
+// names; IP addresses are left for other workers to make subsequent
+// certificates.
+func ControllerAgentInfoForCA(caCert, caPrivateKey string, apiPort int) (controller.ControllerAgentInfo, error) {
+	authority, err := pki.NewDefaultAuthorityPemCAKey(
+		[]byte(caCert), []byte(caPrivateKey))
+	if err != nil {
+		return controller.ControllerAgentInfo{}, errors.Annotate(err, "loading juju certificate authority")
+	}
+
+	leaf, err := authority.LeafRequestForGroup(pki.DefaultLeafGroup).
+		AddDNSNames(controller.DefaultDNSNames...).
+		Commit()
+
+	if err != nil {
+		return controller.ControllerAgentInfo{}, errors.Annotate(err, "make juju default controller cert")
+	}
+
+	cert, key, err := leaf.ToPemParts()
+	if err != nil {
+		return controller.ControllerAgentInfo{}, errors.Annotate(err, "encoding default controller cert to pem")
+	}
+
+	return controller.ControllerAgentInfo{
+		APIPort:      apiPort,
+		Cert:         string(cert),
+		PrivateKey:   string(key),
+		CAPrivateKey: caPrivateKey,
+	}, nil
+}
+
 func finalizeInstanceBootstrapConfig(
 	ctx environs.BootstrapContext,
 	icfg *instancecfg.InstanceConfig,
@@ -743,23 +776,9 @@ func finalizeInstanceBootstrapConfig(
 		ModelTag: names.NewModelTag(cfg.UUID()),
 	}
 
-	authority, err := pki.NewDefaultAuthorityPemCAKey(
-		[]byte(caCert), []byte(args.CAPrivateKey))
+	agentInfo, err := ControllerAgentInfoForCA(caCert, args.CAPrivateKey, controllerCfg.APIPort())
 	if err != nil {
-		return errors.Annotate(err, "loading juju certificate authority")
-	}
-
-	leaf, err := authority.LeafRequestForGroup(pki.DefaultLeafGroup).
-		AddDNSNames(controller.DefaultDNSNames...).
-		Commit()
-
-	if err != nil {
-		return errors.Annotate(err, "make juju default controller cert")
-	}
-
-	cert, key, err := leaf.ToPemParts()
-	if err != nil {
-		return errors.Annotate(err, "encoding default controller cert to pem")
+		return errors.Trace(err)
 	}
 
 	agentVersion, has := cfg.AgentVersion()
@@ -767,12 +786,7 @@ func finalizeInstanceBootstrapConfig(
 		return errors.New("finalising instance bootstrap config, agent version not set on model config")
 	}
 
-	icfg.Bootstrap.ControllerAgentInfo = controller.ControllerAgentInfo{
-		APIPort:      controllerCfg.APIPort(),
-		Cert:         string(cert),
-		PrivateKey:   string(key),
-		CAPrivateKey: args.CAPrivateKey,
-	}
+	icfg.Bootstrap.ControllerAgentInfo = agentInfo
 	icfg.Bootstrap.StateInitializationParams.AgentVersion = agentVersion
 	icfg.Bootstrap.StateInitializationParams.ControllerModelAuthorizedKeys = args.ControllerModelAuthorizedKeys
 	icfg.Bootstrap.StateInitializationParams.BootstrapSSHAuthorizedKeys = args.BootstrapSSHAuthorizedKeys
@@ -814,34 +828,12 @@ func finalizePodBootstrapConfig(
 		ModelTag: names.NewModelTag(cfg.UUID()),
 	}
 
-	authority, err := pki.NewDefaultAuthorityPemCAKey(
-		[]byte(caCert), []byte(args.CAPrivateKey))
+	agentInfo, err := ControllerAgentInfoForCA(caCert, args.CAPrivateKey, controllerCfg.APIPort())
 	if err != nil {
-		return errors.Annotate(err, "loading juju certificate authority")
+		return errors.Trace(err)
 	}
 
-	// We generate a controller certificate with a set of well known static dns
-	// names. IP addresses are left for other workers to make subsequent
-	// certificates.
-	leaf, err := authority.LeafRequestForGroup(pki.DefaultLeafGroup).
-		AddDNSNames(controller.DefaultDNSNames...).
-		Commit()
-
-	if err != nil {
-		return errors.Annotate(err, "make juju default controller cert")
-	}
-
-	cert, key, err := leaf.ToPemParts()
-	if err != nil {
-		return errors.Annotate(err, "encoding default controller cert to pem")
-	}
-
-	pcfg.Bootstrap.ControllerAgentInfo = controller.ControllerAgentInfo{
-		APIPort:      controllerCfg.APIPort(),
-		Cert:         string(cert),
-		PrivateKey:   string(key),
-		CAPrivateKey: args.CAPrivateKey,
-	}
+	pcfg.Bootstrap.ControllerAgentInfo = agentInfo
 	if _, ok := cfg.AgentVersion(); !ok {
 		return errors.New("controller model configuration has no agent-version")
 	}

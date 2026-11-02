@@ -5,7 +5,10 @@ package kubernetes_test
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,6 +42,7 @@ import (
 	envtesting "github.com/juju/juju/environs/testing"
 	"github.com/juju/juju/internal/cloudconfig/podcfg"
 	"github.com/juju/juju/internal/docker"
+	"github.com/juju/juju/internal/docker/registry"
 	"github.com/juju/juju/internal/featureflag"
 	"github.com/juju/juju/internal/provider/kubernetes"
 	k8sexec "github.com/juju/juju/internal/provider/kubernetes/exec"
@@ -302,6 +306,34 @@ func (s *bootstrapSuite) TestGetControllerSvcSpec(c *tc.C) {
 	}
 }
 
+type deniedRegistryTransport struct{}
+
+func (deniedRegistryTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, fmt.Errorf("registry access denied")
+}
+
+func (s *bootstrapSuite) TestControllerStackDoesNotContactRegistry(c *tc.C) {
+	s.PatchValue(&registry.DefaultTransport, http.RoundTripper(deniedRegistryTransport{}))
+	newClient, newRestClient := s.setupK8sRestClient(c, s.pcfg.ControllerName)
+	var watchers []k8swatcher.KubernetesNotifyWatcher
+	s.setupBroker(c, newClient, newRestClient, &watchers)
+
+	for _, repository := range []string{"example.com/juju", "ghcr.io/juju"} {
+		s.controllerCfg[controller.CAASImageRepo] = repository
+		s.pcfg.AgentImage = repository + "/jujud-operator:4.1-beta3"
+		s.pcfg.CharmImage = repository + "/charm-base:latest"
+		spec := s.controllerStackerGetter().BuildContainerSpecForController(c)
+		found := false
+		for _, container := range spec.Containers {
+			if container.Name == "api-server" {
+				found = true
+				c.Check(container.Image, tc.Equals, s.pcfg.AgentImage)
+			}
+		}
+		c.Check(found, tc.IsTrue)
+	}
+}
+
 func (s *bootstrapSuite) TestControllerSpecWaitsForLocalControllerCharm(c *tc.C) {
 	newK8sClientFunc, newK8sRestClientFunc := s.setupK8sRestClient(c, s.pcfg.ControllerName)
 	var bootstrapWatchers []k8swatcher.KubernetesNotifyWatcher
@@ -326,6 +358,35 @@ func (s *bootstrapSuite) TestControllerSpecWaitsForLocalControllerCharm(c *tc.C)
 	c.Check(startup, tc.Contains, "until test -e $JUJU_DATA_DIR/charms/controller.charm; do sleep 1; done")
 	c.Check(startup, tc.Contains, "$JUJU_TOOLS_DIR/jujuagentd bootstrap-state --data-dir $JUJU_DATA_DIR --debug --timeout 10m0s")
 	c.Check(startup, tc.Not(tc.Contains), "test -e $JUJU_DATA_DIR/agents/controller-0/agent.conf ||")
+}
+
+func (s *bootstrapSuite) TestControllerSpecUsesSeparateInitialisation(c *tc.C) {
+	newK8sClientFunc, newK8sRestClientFunc := s.setupK8sRestClient(c, s.pcfg.ControllerName)
+	var watchers []k8swatcher.KubernetesNotifyWatcher
+	s.setupBroker(c, newK8sClientFunc, newK8sRestClientFunc, &watchers)
+	s.pcfg.AgentImage = "ghcr.io/juju/jujud-operator@sha256:" + strings.Repeat("a", 64)
+	s.pcfg.Initialisation = &podcfg.ControllerInitialisation{
+		Directory: "recovery", Files: map[string]string{"is-recovery": "true", "params": "parameters"},
+		SetupCommand: "jujuagentd recovery-state --show-log || exit 1",
+	}
+	spec := s.controllerStackerGetter().BuildContainerSpecForController(c)
+	for _, container := range append(spec.InitContainers, spec.Containers...) {
+		if strings.Contains(container.Image, "jujud-operator") {
+			c.Check(container.Image, tc.Equals, s.pcfg.AgentImage)
+		}
+		if container.Name == "controller-config-seed" {
+			c.Check(container.Args[0], tc.Contains, "recovery/is-recovery")
+			c.Check(container.Args[0], tc.Contains, "chmod 600")
+			c.Check(container.Args[0], tc.Contains, `if [ "${controller_id}" = "0" ]; then`)
+		}
+		if container.Name == "api-server" {
+			c.Check(container.Args[1], tc.Contains, "recovery-state")
+			c.Check(container.Args[1], tc.Not(tc.Contains), "bootstrap-state")
+			for _, mount := range container.VolumeMounts {
+				c.Check(mount.MountPath, tc.Not(tc.Contains), "bootstrap-params")
+			}
+		}
+	}
 }
 
 func (s *bootstrapSuite) TestIsLocalControllerCharmPath(c *tc.C) {

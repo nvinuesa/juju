@@ -5,6 +5,8 @@ package kubernetes
 
 import (
 	"fmt"
+	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/juju/errors"
@@ -17,6 +19,7 @@ import (
 
 	"github.com/juju/juju/core/semversion"
 	"github.com/juju/juju/internal/cloudconfig/podcfg"
+	"github.com/juju/juju/internal/docker/registry"
 	k8sconstants "github.com/juju/juju/internal/provider/kubernetes/constants"
 	"github.com/juju/juju/internal/provider/kubernetes/utils"
 )
@@ -84,7 +87,7 @@ func (s *ControllerUpgraderSuite) TestControllerUpgrade(c *tc.C) {
 		}, meta.CreateOptions{})
 	c.Assert(err, tc.ErrorIsNil)
 
-	c.Assert(controllerUpgrade(c.Context(), appName, semversion.MustParse("9.9.9"), s.broker), tc.ErrorIsNil)
+	c.Assert(controllerUpgrade(c.Context(), appName, semversion.MustParse("9.9.9"), "", s.broker), tc.ErrorIsNil)
 
 	ss, err := s.broker.Client().AppsV1().StatefulSets(s.broker.Namespace()).
 		Get(c.Context(), appName, meta.GetOptions{})
@@ -99,7 +102,38 @@ func (s *ControllerUpgraderSuite) TestControllerDoesNotExist(c *tc.C) {
 	var (
 		appName = k8sconstants.JujuControllerStackName
 	)
-	err := controllerUpgrade(c.Context(), appName, semversion.MustParse("9.9.9"), s.broker)
+	err := controllerUpgrade(c.Context(), appName, semversion.MustParse("9.9.9"), "", s.broker)
 	c.Assert(err, tc.NotNil)
 	c.Assert(err, tc.ErrorIs, errors.NotFound)
+}
+
+type upgradeDeniedTransport struct{}
+
+func (upgradeDeniedTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, fmt.Errorf("registry access denied")
+}
+
+func (s *ControllerUpgraderSuite) TestUpgradeControllerUsesTargetTagWithoutRegistry(c *tc.C) {
+	oldTransport := registry.DefaultTransport
+	registry.DefaultTransport = upgradeDeniedTransport{}
+	defer func() { registry.DefaultTransport = oldTransport }()
+	for _, image := range []string{
+		"example.com/juju/jujud-operator:9.9.8",
+		"example.com/juju/jujud-operator@sha256:" + strings.Repeat("a", 64),
+	} {
+		client := fake.NewSimpleClientset(&apps.StatefulSet{
+			ObjectMeta: meta.ObjectMeta{Name: "controller", Namespace: "test"},
+			Spec: apps.StatefulSetSpec{
+				Selector: &meta.LabelSelector{MatchLabels: map[string]string{"app": "controller"}},
+				Template: core.PodTemplateSpec{Spec: core.PodSpec{Containers: []core.Container{{
+					Name: "jujuagentd", Image: image,
+				}}}},
+			},
+		})
+		broker := &kubernetesClient{clientUnlocked: client, namespace: "test", labelVersion: k8sconstants.LabelVersion2}
+		c.Assert(broker.upgradeController(c.Context(), semversion.MustParse("9.9.9")), tc.ErrorIsNil)
+		set, err := client.AppsV1().StatefulSets("test").Get(c.Context(), "controller", meta.GetOptions{})
+		c.Assert(err, tc.ErrorIsNil)
+		c.Check(set.Spec.Template.Spec.Containers[0].Image, tc.Equals, "example.com/juju/jujud-operator:9.9.9")
+	}
 }

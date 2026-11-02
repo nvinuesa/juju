@@ -9,10 +9,12 @@ import (
 	"github.com/juju/errors"
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/juju/juju/core/semversion"
 	"github.com/juju/juju/environs/bootstrap"
+	"github.com/juju/juju/internal/cloudconfig/podcfg"
 	"github.com/juju/juju/internal/provider/kubernetes/constants"
 	"github.com/juju/juju/internal/provider/kubernetes/resources"
 	providerutils "github.com/juju/juju/internal/provider/kubernetes/utils"
@@ -51,11 +53,11 @@ func (u *upgradeCAASControllerBridge) Namespace() string {
 	return u.namespaceFn()
 }
 
-func controllerUpgrade(ctx context.Context, appName string, vers semversion.Number, broker UpgradeCAASControllerBroker) error {
+func controllerUpgrade(ctx context.Context, appName string, vers semversion.Number, image string, broker UpgradeCAASControllerBroker) error {
 	return upgradeOperatorOrControllerStatefulSet(
 		ctx,
 		appName,
-		"",
+		image,
 		vers,
 		broker.LabelVersion(),
 		broker.Client().AppsV1().StatefulSets(broker.Namespace()))
@@ -67,7 +69,19 @@ func (k *kubernetesClient) upgradeController(ctx context.Context, vers semversio
 		namespaceFn:    k.Namespace,
 		labelVersionFn: k.LabelVersion,
 	}
-	return controllerUpgrade(ctx, bootstrap.ControllerModelName, vers, broker)
+	set, err := k.client().AppsV1().StatefulSets(k.Namespace()).Get(ctx, bootstrap.ControllerModelName, metav1.GetOptions{})
+	if err != nil {
+		return errors.Trace(err)
+	}
+	index, found := findJujudContainer(set.Spec.Template.Spec.Containers)
+	if !found {
+		return errors.New("controller has no agent container")
+	}
+	image, err := podcfg.RebuildOldOperatorImagePath(set.Spec.Template.Spec.Containers[index].Image, vers)
+	if err != nil {
+		return err
+	}
+	return controllerUpgrade(ctx, bootstrap.ControllerModelName, vers, image, broker)
 }
 
 // InClusterCredentialUpgrade implements upgrades.upgradeKubernetesClusterCredential
