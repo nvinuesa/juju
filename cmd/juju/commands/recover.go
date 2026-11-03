@@ -41,7 +41,7 @@ type recoveryCommand struct {
 func (c *recoveryCommand) Info() *cmd.Info {
 	return jujucmd.Info(&cmd.Info{
 		Name: "recover", Args: "<backup-file> <assertion-file>", Purpose: "Recover a controller from a backup archive.",
-		Doc: `This build allocates replacement machines but does not initialise recovered
+		Doc: `This build allocates replacement resources but does not initialise recovered
 controllers. Workloads on other clouds or regions are not supported by this build.
 
 Recover a replacement controller using the cloud, region and controller name
