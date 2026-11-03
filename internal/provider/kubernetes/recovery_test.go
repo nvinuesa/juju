@@ -4,20 +4,32 @@
 package kubernetes
 
 import (
+	"context"
 	"fmt"
+	"strings"
 	stdtesting "testing"
+	"time"
 
+	"github.com/juju/clock"
+	jujuerrors "github.com/juju/errors"
 	"github.com/juju/tc"
 	apps "k8s.io/api/apps/v1"
 	core "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
 
 	"github.com/juju/juju/environs"
 	envtesting "github.com/juju/juju/environs/testing"
+	"github.com/juju/juju/internal/cloudconfig/instancecfg"
+	"github.com/juju/juju/internal/cloudconfig/podcfg"
 	"github.com/juju/juju/internal/provider/kubernetes/constants"
+	"github.com/juju/juju/internal/provider/kubernetes/exec"
 	"github.com/juju/juju/internal/provider/kubernetes/utils"
 )
 
@@ -104,6 +116,26 @@ func (s *recoverySuite) TestPrepareRecoveryNodeListError(c *tc.C) {
 	broker := &kubernetesClient{clientUnlocked: client, labelVersion: constants.LastLabelVersion}
 	_, err := broker.PrepareForRecovery(envtesting.BootstrapContext(c.Context(), c), substrateParams())
 	c.Assert(err, tc.ErrorMatches, ".*node list unavailable.*")
+}
+
+func (s *recoverySuite) TestRecoveryStorageClassIsExact(c *tc.C) {
+	for _, archived := range []string{"source", ""} {
+		client := fake.NewClientset(
+			&storagev1.StorageClass{ObjectMeta: v1.ObjectMeta{Name: "source"}},
+			&storagev1.StorageClass{ObjectMeta: v1.ObjectMeta{Name: "controller-source"}},
+		)
+		stack := &controllerStack{
+			broker: &kubernetesClient{clientUnlocked: client, namespace: "controller"},
+			pcfg:   &podcfg.ControllerPodConfig{RecoveryStorageClass: &archived},
+		}
+		set := &apps.StatefulSet{}
+		c.Assert(stack.buildStorageSpecForController(c.Context(), set), tc.ErrorIsNil)
+		c.Assert(set.Spec.VolumeClaimTemplates, tc.HasLen, 1)
+		class := set.Spec.VolumeClaimTemplates[0].Spec.StorageClassName
+		c.Assert(class, tc.NotNil)
+		c.Check(*class, tc.Equals, archived)
+		c.Check(client.Actions(), tc.HasLen, 0)
+	}
 }
 
 func (s *recoverySuite) TestSubstrateControllerNotFenced(c *tc.C) {
@@ -217,4 +249,162 @@ func (s *recoverySuite) TestForeignApplicationAbortsRecovery(c *tc.C) {
 	client := fake.NewClientset(ownedNamespace(c, "workload", "model-uuid-1"), statefulSet)
 	_, err := CheckRecoverySubstrate(c.Context(), client, constants.LastLabelVersion, substrateParamsWithApp())
 	c.Check(err, tc.ErrorMatches, `workload statefulset "gitlab" in "workload" belongs to another application`)
+}
+
+func (s *recoverySuite) TestCleanupUsesOnlyOwnedNamespaceUID(c *tc.C) {
+	target := recoveryNamespace("controller-source-ctrl", nil)
+	target.UID = "target-uid"
+	client := fake.NewClientset(target, ownedNamespace(c, "workload", "model-uuid-1"))
+	client.PrependReactor("delete", "namespaces", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		deletion := action.(clienttesting.DeleteAction)
+		c.Check(deletion.GetName(), tc.Equals, "controller-source-ctrl")
+		c.Assert(deletion.GetDeleteOptions().Preconditions, tc.NotNil)
+		c.Assert(deletion.GetDeleteOptions().Preconditions.UID, tc.NotNil)
+		c.Check(*deletion.GetDeleteOptions().Preconditions.UID, tc.Equals, target.UID)
+		return false, nil, nil
+	})
+	broker := &kubernetesClient{clientUnlocked: client}
+	cleanup := broker.recoveryNamespaceCleanup(target.Name, target.UID)
+	c.Assert(cleanup(c.Context()), tc.ErrorIsNil)
+	_, err := client.CoreV1().Namespaces().Get(c.Context(), "workload", v1.GetOptions{})
+	c.Assert(err, tc.ErrorIsNil)
+	c.Assert(cleanup(c.Context()), tc.ErrorIsNil)
+}
+
+func (s *recoverySuite) TestServiceAccountRetainsArchivedBinding(c *tc.C) {
+	annotations := map[string]string{utils.AnnotationControllerUUIDKey(constants.LastLabelVersion): "ctrl-uuid"}
+	binding := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: v1.ObjectMeta{Name: "controller-source-ctrl", UID: "archived", Annotations: annotations},
+		RoleRef:    rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: "cluster-admin"},
+		Subjects:   []rbacv1.Subject{{Kind: "ServiceAccount", Name: "controller", Namespace: "controller-source-ctrl"}},
+	}
+	client := fake.NewClientset(binding)
+	broker := &kubernetesClient{clientUnlocked: client, namespace: binding.Name, controllerUUID: "ctrl-uuid"}
+	uid, err := broker.createRecoveryServiceAccount(c.Context(), nil, annotations)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(uid, tc.Equals, types.UID(""))
+	cleanup := broker.recoveryControllerCleanup(binding.Name, "namespace-uid", &uid)
+	c.Assert(cleanup(c.Context()), tc.ErrorIsNil)
+	actual, err := client.RbacV1().ClusterRoleBindings().Get(c.Context(), binding.Name, v1.GetOptions{})
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(actual, tc.DeepEquals, binding)
+}
+
+func (s *recoverySuite) TestServiceAccountRejectsForeignBinding(c *tc.C) {
+	client := fake.NewClientset(&rbacv1.ClusterRoleBinding{ObjectMeta: v1.ObjectMeta{Name: "controller-source-ctrl"}})
+	broker := &kubernetesClient{clientUnlocked: client, namespace: "controller-source-ctrl", controllerUUID: "ctrl-uuid"}
+	uid, err := broker.createRecoveryServiceAccount(c.Context(), nil, nil)
+	c.Check(err, tc.ErrorMatches, "existing controller cluster role binding has unexpected ownership or permissions")
+	c.Check(uid, tc.Equals, types.UID(""))
+	for _, action := range client.Actions() {
+		if action.GetResource().Resource == "clusterrolebindings" {
+			c.Check(action.GetVerb(), tc.Equals, "get")
+		}
+	}
+}
+
+func (s *recoverySuite) TestCleanupDeletesCreatedBindingWithUID(c *tc.C) {
+	client := fake.NewClientset()
+	client.PrependReactor("create", "clusterrolebindings", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		binding := action.(clienttesting.CreateAction).GetObject().(*rbacv1.ClusterRoleBinding)
+		binding.UID = "new-binding-uid"
+		return false, nil, nil
+	})
+	client.PrependReactor("delete", "clusterrolebindings", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		deletion := action.(clienttesting.DeleteAction)
+		c.Check(deletion.GetName(), tc.Equals, "controller-source-ctrl")
+		c.Assert(deletion.GetDeleteOptions().Preconditions, tc.NotNil)
+		c.Assert(deletion.GetDeleteOptions().Preconditions.UID, tc.NotNil)
+		c.Check(*deletion.GetDeleteOptions().Preconditions.UID, tc.Equals, types.UID("new-binding-uid"))
+		return false, nil, nil
+	})
+	broker := &kubernetesClient{clientUnlocked: client, namespace: "controller-source-ctrl", controllerUUID: "ctrl-uuid"}
+	uid, err := broker.createRecoveryServiceAccount(c.Context(), nil, nil)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(uid, tc.Equals, types.UID("new-binding-uid"))
+	cleanup := broker.recoveryControllerCleanup(broker.namespace, "namespace-uid", &uid)
+	c.Assert(cleanup(c.Context()), tc.ErrorIsNil)
+	c.Assert(cleanup(c.Context()), tc.ErrorIsNil)
+}
+
+type archiveExecutor struct {
+	checksum string
+	commands []string
+	copies   []exec.CopyParams
+}
+
+func (e *archiveExecutor) Status(context.Context, exec.StatusParams) (*exec.Status, error) {
+	return nil, nil
+}
+func (e *archiveExecutor) RawClient() kubernetes.Interface { return nil }
+func (e *archiveExecutor) NameSpace() string               { return "controller-source-ctrl" }
+func (e *archiveExecutor) Exec(_ context.Context, params exec.ExecParams, _ <-chan struct{}) error {
+	e.commands = append(e.commands, strings.Join(params.Commands, " "))
+	if params.Commands[0] == "sha256sum" {
+		_, err := fmt.Fprintln(params.Stdout, e.checksum, params.Commands[1])
+		return err
+	}
+	return nil
+}
+func (e *archiveExecutor) Copy(_ context.Context, params exec.CopyParams, _ <-chan struct{}) error {
+	e.copies = append(e.copies, params)
+	return nil
+}
+
+func (s *recoverySuite) TestArchiveIsPublishedOnlyAfterChecksumVerification(c *tc.C) {
+	for _, sum := range []string{strings.Repeat("a", 64), "sha256-" + strings.Repeat("a", 64)} {
+		for _, valid := range []bool{true, false} {
+			file := instancecfg.InitialisationFile{Source: "/tmp/source.tar.gz", Destination: "/var/lib/juju/recovery/archive.tar.gz", SHA256: sum}
+			client := &archiveExecutor{checksum: strings.Repeat("a", 64)}
+			if !valid {
+				client.checksum = strings.Repeat("b", 64)
+			}
+			stack := &controllerStack{controllerExecClientFactory: func() (exec.Executor, error) { return client, nil }}
+			err := stack.uploadRecoveryArchive(c.Context(), "controller-0", file)
+			if valid {
+				c.Assert(err, tc.ErrorIsNil)
+				c.Check(client.commands[len(client.commands)-1], tc.Equals, "mv -f "+file.Destination+".partial "+file.Destination)
+			} else {
+				c.Check(err, tc.ErrorIs, jujuerrors.NotValid)
+				for _, command := range client.commands {
+					c.Check(command, tc.Not(tc.HasPrefix), "mv ")
+				}
+			}
+			c.Check(client.commands[1], tc.Equals, "chmod 0700 /var/lib/juju/recovery")
+			c.Assert(client.copies, tc.HasLen, 1)
+			c.Check(client.copies[0].Src.Path, tc.Equals, file.Source)
+			c.Check(client.copies[0].Dest.Path, tc.Equals, file.Destination+".partial")
+			c.Check(client.copies[0].Dest.ContainerName, tc.Equals, "api-server")
+		}
+	}
+}
+
+func (s *recoverySuite) TestRecoveryWaitsForExecWithoutReadiness(c *tc.C) {
+	pod := &core.Pod{ObjectMeta: v1.ObjectMeta{Name: "controller-0", Namespace: "controller-test"},
+		Status: core.PodStatus{ContainerStatuses: []core.ContainerStatus{{Name: apiServerContainerName, Ready: false,
+			State: core.ContainerState{Running: &core.ContainerStateRunning{}}}}}}
+	client := fake.NewClientset(pod)
+	broker := &kubernetesClient{clientUnlocked: client, namespace: pod.Namespace, clock: clock.WallClock}
+	c.Assert(broker.waitForRecoveryContainer(c.Context(), pod.Name, time.Minute), tc.ErrorIsNil)
+}
+
+func (s *recoverySuite) TestRecoveryContainerWaitHonoursCancellation(c *tc.C) {
+	ctx, cancel := context.WithCancel(c.Context())
+	cancel()
+	broker := &kubernetesClient{clientUnlocked: fake.NewClientset(), clock: clock.WallClock}
+	err := broker.waitForRecoveryContainer(ctx, "controller-0", time.Minute)
+	c.Assert(err, tc.ErrorIs, context.Canceled)
+}
+
+func (s *recoverySuite) TestRecoveryStartupProbeBudget(c *tc.C) {
+	cfg := &podcfg.ControllerPodConfig{}
+	stack := &controllerStack{pcfg: cfg}
+	c.Check(stack.startupProbeFailureThreshold(), tc.Equals, int32(apiServerStartupProbeFailure))
+	cfg.Initialisation = &podcfg.ControllerInitialisation{}
+	cfg.Bootstrap = &podcfg.BootstrapConfig{}
+	cfg.Bootstrap.Timeout = 20*time.Minute + time.Millisecond
+	attempts := stack.startupProbeFailureThreshold()
+	allowed := time.Duration(attempts) * apiServerStartupProbePeriod * time.Second
+	c.Check(allowed >= cfg.Bootstrap.Timeout+startupGraceTime*time.Second, tc.IsTrue)
+	c.Check(allowed < cfg.Bootstrap.Timeout+(startupGraceTime+apiServerStartupProbePeriod)*time.Second, tc.IsTrue)
 }

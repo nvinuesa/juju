@@ -40,7 +40,7 @@ import (
 func (c *recoveryCommand) provisionRecoveryController(ctx *cmd.Context) (resultErr error) {
 	info := c.recoveryInfo
 	if info.CloudType == cloud.CloudTypeKubernetes {
-		return errors.New("controller recovery provisioning is not available in this build")
+		return c.provisionK8sRecoveryController(ctx)
 	}
 	bundle, err := internalrecovery.SelectAgent(ctx, ctx.AbsPath(c.archivePath), info)
 	if err != nil {

@@ -131,3 +131,16 @@ func (s *backupProvisioningSuite) TestSourceErrors(c *tc.C) {
 		c.Check(err, tc.ErrorMatches, "failure reading "+resource)
 	}
 }
+
+func (s *backupProvisioningSuite) TestRecoveryRequiresSourceStorageClass(c *tc.C) {
+	broker := &kubernetesClient{clientUnlocked: fake.NewClientset()}
+	class := "missing"
+	_, err := broker.validateRecoveryControllerStorage(c.Context(), &class)
+	c.Check(err, tc.ErrorMatches, "storageclasses.storage.k8s.io.*not found")
+	_, err = broker.validateRecoveryControllerStorage(c.Context(), nil)
+	c.Check(err, tc.ErrorMatches, "archive does not identify controller storage class")
+	class = ""
+	got, err := broker.validateRecoveryControllerStorage(c.Context(), &class)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(got, tc.Equals, "")
+}
