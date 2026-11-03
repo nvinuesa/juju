@@ -11,6 +11,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -80,6 +81,9 @@ type ArchiveContents struct {
 	ModelDumps map[string]string
 
 	stagingDir string
+	// ImportSize includes unpacked files, their installed copies, and database
+	// staging/import headroom. It excludes the already uploaded archive.
+	ImportSize int64
 }
 
 // readArchive streams archivePath once, computing the archive's SHA-256
@@ -94,7 +98,7 @@ type ArchiveContents struct {
 // cannot escape, and rejecting outright would dead-end an archive the
 // operator cannot otherwise fix. When the archive carries a content
 // manifest, it is cross-checked against the entries actually read.
-func readArchive(ctx context.Context, logger corelogger.Logger, archivePath, expectedSHA256 string) (*ArchiveContents, string, int64, error) {
+func readArchive(ctx context.Context, logger corelogger.Logger, archivePath, expectedSHA256, stagingRoot string) (*ArchiveContents, string, int64, error) {
 	f, err := os.Open(archivePath)
 	if err != nil {
 		return nil, "", 0, errors.Errorf("opening archive: %w", err)
@@ -108,7 +112,7 @@ func readArchive(ctx context.Context, logger corelogger.Logger, archivePath, exp
 	}
 	defer func() { _ = gz.Close() }()
 
-	stagingDir, err := os.MkdirTemp("", "juju-recovery-dump-")
+	stagingDir, err := os.MkdirTemp(stagingRoot, "juju-recovery-dump-")
 	if err != nil {
 		return nil, "", 0, errors.Errorf("creating recovery workspace: %w", err)
 	}
@@ -151,6 +155,17 @@ func readArchive(ctx context.Context, logger corelogger.Logger, archivePath, exp
 	}
 	if len(contents.ControllerDump) == 0 {
 		return nil, "", 0, errors.Errorf("archive is missing %s", controllerDumpPath)
+	}
+
+	for name, digest := range reader.digests {
+		factor := int64(3)
+		if name == canonicalPaths.FilesArchive {
+			factor = 2
+		}
+		if digest.size > (math.MaxInt64-contents.ImportSize)/factor {
+			return nil, "", 0, errors.New("archive recovery size exceeds supported range")
+		}
+		contents.ImportSize += factor * digest.size
 	}
 
 	stat, err := os.Stat(archivePath)
@@ -388,4 +403,127 @@ func checkManifest(data []byte, digests map[string]entryDigest) error {
 		}
 	}
 	return nil
+}
+
+// objectStoreDirName is the directory every object store root has below
+// the data directory, in the archive and on disk.
+const objectStoreDirName = "objectstore"
+
+// UnpackObjectStore streams the archive once and unpacks the object-store
+// blobs held in the files archive (root.tar) directly into the
+// replacement's object store root below dataDir. Backup mirrors the
+// source data directory under its absolute path, so blob entries sit
+// below "<source data dir>/objectstore/"; only that subtree is
+// extracted, remapped onto the replacement's root. Everything else in
+// the files archive — agent configs, executables, raw database files —
+// is skipped: it is never executed or trusted.
+//
+// Entry hardening matches the metadata read: directories and regular
+// files only, no absolute paths, parent traversal, duplicates or links.
+// Files land with owner-only permissions. A blob already present — the
+// replacement's own bootstrap blobs — is overwritten: identical content
+// is keyed by the same hash. The returned count is the number of blob
+// files installed.
+func UnpackObjectStore(ctx context.Context, archivePath, dataDir string) (int, error) {
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return 0, errors.Errorf("opening archive: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return 0, errors.Errorf("reading archive: %w", err)
+	}
+
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return 0, errors.Errorf("reading archive: %w", err)
+		}
+		if (hdr.Typeflag == tar.TypeReg || hdr.Typeflag == tar.TypeRegA) &&
+			path.Clean(hdr.Name) == canonicalPaths.FilesArchive {
+			n, err := unpackObjectStoreTar(ctx, tr,
+				filepath.Join(dataDir, objectStoreDirName))
+			return n, errors.Capture(err)
+		}
+	}
+	return 0, errors.Errorf("archive is missing %s", canonicalPaths.FilesArchive)
+}
+
+// unpackObjectStoreTar writes the object-store entries of an
+// uncompressed tar stream into destDir. Entry names are validated before
+// any path is constructed; entries outside the object store root are
+// skipped, as are special entries within it: a skipped blob the metadata
+// references fails the completeness check after unpacking.
+func unpackObjectStoreTar(ctx context.Context, r io.Reader, destDir string) (int, error) {
+	tr := tar.NewReader(r)
+	seen := make(map[string]struct{})
+	installed := 0
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return installed, nil
+		}
+		if err != nil {
+			return installed, errors.Errorf("reading object archive: %w", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return installed, errors.Capture(err)
+		}
+		if strings.HasPrefix(hdr.Name, "/") || slices.Contains(strings.Split(hdr.Name, "/"), "..") {
+			return installed, errors.Errorf("object archive contains unsafe path %q", hdr.Name)
+		}
+		name := path.Clean(hdr.Name)
+
+		// The files archive mirrors the source data directory, whose own
+		// path may contain an "objectstore" component; the store root is
+		// the final one. Entries outside it are not unpacked.
+		segments := strings.Split(name, "/")
+		root := -1
+		for i := len(segments) - 1; i >= 0; i-- {
+			if segments[i] == objectStoreDirName {
+				root = i
+				break
+			}
+		}
+		if root < 0 || root == len(segments)-1 {
+			continue
+		}
+		rel := path.Join(segments[root+1:]...)
+		if _, dup := seen[rel]; dup {
+			return installed, errors.Errorf("object archive contains duplicate path %q", name)
+		}
+		seen[rel] = struct{}{}
+
+		target := filepath.Join(destDir, filepath.FromSlash(rel))
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0o700); err != nil {
+				return installed, errors.Errorf("creating directory %q: %w", name, err)
+			}
+		case tar.TypeReg, tar.TypeRegA:
+			if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+				return installed, errors.Errorf("creating directory for %q: %w", name, err)
+			}
+			out, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+			if err != nil {
+				return installed, errors.Errorf("creating file %q: %w", name, err)
+			}
+			if _, err := io.Copy(out, tr); err != nil {
+				_ = out.Close()
+				return installed, errors.Errorf("writing file %q: %w", name, err)
+			}
+			if err := out.Close(); err != nil {
+				return installed, errors.Errorf("writing file %q: %w", name, err)
+			}
+			installed++
+		default:
+			continue
+		}
+	}
 }

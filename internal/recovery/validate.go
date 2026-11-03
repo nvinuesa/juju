@@ -88,7 +88,23 @@ func ValidateArchive(ctx context.Context, logger corelogger.Logger, archivePath,
 // contents; the offline preflight consumes the summary alone via
 // [ValidateArchive]. The caller must Close the contents once consumed.
 func ReadArchive(ctx context.Context, logger corelogger.Logger, archivePath, expectedSHA256 string) (*ArchiveContents, *domainrecovery.ArchiveInfo, error) {
-	contents, checksum, size, err := readArchive(ctx, logger, archivePath, expectedSHA256)
+	return readArchiveIn(ctx, logger, archivePath, expectedSHA256, "")
+}
+
+// ValidateArchiveIn stages target-side validation on the data filesystem.
+func ValidateArchiveIn(ctx context.Context, logger corelogger.Logger, archivePath, expectedSHA256, dataDir string) (*domainrecovery.ArchiveInfo, error) {
+	contents, info, err := readArchiveIn(ctx, logger, archivePath, expectedSHA256, dataDir)
+	if err != nil {
+		return nil, err
+	}
+	if err := contents.Close(); err != nil {
+		return nil, err
+	}
+	return info, nil
+}
+
+func readArchiveIn(ctx context.Context, logger corelogger.Logger, archivePath, expectedSHA256, stagingRoot string) (*ArchiveContents, *domainrecovery.ArchiveInfo, error) {
+	contents, checksum, size, err := readArchive(ctx, logger, archivePath, expectedSHA256, stagingRoot)
 	if err != nil {
 		return nil, nil, errors.Capture(err)
 	}
@@ -99,6 +115,7 @@ func ReadArchive(ctx context.Context, logger corelogger.Logger, archivePath, exp
 	}
 	info.Checksum = checksum
 	info.Size = size
+	info.ImportSize = contents.ImportSize
 	return contents, info, nil
 }
 
