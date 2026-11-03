@@ -1,0 +1,344 @@
+// Copyright 2026 Canonical Ltd.
+// Licensed under the AGPLv3, see LICENCE file for details.
+
+package state
+
+import (
+	"context"
+
+	"github.com/canonical/sqlair"
+
+	"github.com/juju/juju/core/network"
+	"github.com/juju/juju/domain/ipaddress"
+	domainrecovery "github.com/juju/juju/domain/recovery"
+	"github.com/juju/juju/internal/errors"
+)
+
+// GetControllerMachineName resolves the archived machine the replacement
+// maps onto: the lowest-named ALIVE machine hosting an ALIVE unit of the
+// controller application. An HA source may have lost its "0" machine; the
+// patch target must be a machine that actually exists and is alive in the
+// archive, never an assumed ordinal.
+func (st *State) GetControllerMachineName(ctx context.Context) (string, error) {
+	type machine struct {
+		Name string `db:"name"`
+	}
+	stmt, err := st.Prepare(`
+SELECT m.name AS &machine.name FROM machine AS m
+JOIN unit AS u ON u.net_node_uuid = m.net_node_uuid
+JOIN application_controller AS ac ON ac.application_uuid = u.application_uuid
+WHERE m.life_id = 0 AND u.life_id = 0 ORDER BY m.name LIMIT 1`, machine{})
+	if err != nil {
+		return "", errors.Capture(err)
+	}
+	db, err := st.DB(ctx)
+	if err != nil {
+		return "", errors.Capture(err)
+	}
+	var found machine
+	err = db.Txn(ctx, func(ctx context.Context, tx *sqlair.TX) error {
+		return tx.Query(ctx, stmt).Get(&found)
+	})
+	if errors.Is(err, sqlair.ErrNoRows) {
+		return "", errors.New("archive contains no live controller machine")
+	}
+	return found.Name, errors.Capture(err)
+}
+
+// PatchControllerMachine updates the cloud instance without changing logical
+// identity. The instance ID and display name always take the replacement's
+// values: the record describes the physical replacement, and an empty display
+// name is a genuine observation on providers that do not set one. Zero arch,
+// memory, core and root-disk observations leave the archived values in place.
+// Stale network observations are removed in the same transaction so workers
+// cannot republish them; shared network definitions are retained for the
+// replacement's first discovery.
+func (st *State) PatchControllerMachine(ctx context.Context, patch domainrecovery.MachinePatch) error {
+	type machinePatch struct {
+		Name        string `db:"name"`
+		UUID        string `db:"uuid"`
+		NetNodeUUID string `db:"net_node_uuid"`
+		InstanceID  string `db:"instance_id"`
+		DisplayName string `db:"display_name"`
+		Arch        string `db:"arch"`
+		Mem         uint64 `db:"mem"`
+		Cores       uint64 `db:"cores"`
+		Disk        uint64 `db:"disk"`
+		Nonce       string `db:"nonce"`
+	}
+	input := machinePatch{Name: patch.MachineName, InstanceID: patch.InstanceID,
+		DisplayName: patch.DisplayName, Arch: patch.Arch, Mem: patch.MemMB,
+		Cores: patch.Cores, Disk: patch.RootDiskMB, Nonce: patch.Nonce}
+	get, err := st.Prepare(`SELECT m.uuid AS &machinePatch.uuid,
+m.net_node_uuid AS &machinePatch.net_node_uuid
+FROM machine AS m WHERE m.name = $machinePatch.name`, input)
+	if err != nil {
+		return errors.Capture(err)
+	}
+	update, err := st.Prepare(`
+UPDATE machine_cloud_instance AS mci
+SET instance_id = $machinePatch.instance_id,
+    display_name = $machinePatch.display_name,
+    arch = CASE WHEN $machinePatch.arch != '' THEN $machinePatch.arch ELSE mci.arch END,
+    mem = CASE WHEN $machinePatch.mem > 0 THEN $machinePatch.mem ELSE mci.mem END,
+    cpu_cores = CASE WHEN $machinePatch.cores > 0 THEN $machinePatch.cores ELSE mci.cpu_cores END,
+    root_disk = CASE WHEN $machinePatch.disk > 0 THEN $machinePatch.disk ELSE mci.root_disk END
+WHERE mci.machine_uuid = $machinePatch.uuid`, input)
+	if err != nil {
+		return errors.Capture(err)
+	}
+	updateNonce, err := st.Prepare(`UPDATE machine AS m SET nonce = $machinePatch.nonce
+WHERE m.uuid = $machinePatch.uuid`, input)
+	if err != nil {
+		return errors.Capture(err)
+	}
+	db, err := st.DB(ctx)
+	if err != nil {
+		return errors.Capture(err)
+	}
+	return errors.Capture(db.Txn(ctx, func(ctx context.Context, tx *sqlair.TX) error {
+		if err := tx.Query(ctx, get, input).Get(&input); errors.Is(err, sqlair.ErrNoRows) {
+			return errors.New("archived controller machine not found")
+		} else if err != nil {
+			return errors.Capture(err)
+		}
+		var outcome sqlair.Outcome
+		if err := tx.Query(ctx, update, input).Get(&outcome); err != nil {
+			return errors.Capture(err)
+		}
+		affected, err := outcome.Result().RowsAffected()
+		if err != nil {
+			return errors.Capture(err)
+		}
+		if affected == 0 {
+			return errors.New("archived controller machine has no cloud instance record")
+		}
+		if input.Nonce != "" {
+			if err := tx.Query(ctx, updateNonce, input).Run(); err != nil {
+				return errors.Capture(err)
+			}
+		}
+		if err := deleteNodeAddresses(ctx, tx, input.NetNodeUUID); err != nil {
+			return errors.Capture(err)
+		}
+		return errors.Capture(deleteNodeDevices(ctx, tx, input.NetNodeUUID))
+	}))
+}
+
+// PatchControllerUnitAddresses replaces the controller unit's IP and DNS
+// observations. With a machine name the patched unit is the live controller
+// unit on that machine; without one (Kubernetes) it is the lowest-named
+// live controller unit. Kubernetes pod names live in fqdn_address,
+// independently of the application's Service addresses. Only the unit's
+// observations are replaced; shared DNS rows and Service addresses
+// belonging to other nodes are preserved.
+func (st *State) PatchControllerUnitAddresses(ctx context.Context, machineName string, patch domainrecovery.ControllerUnitAddressPatch) error {
+	if len(patch.Addresses) == 0 {
+		return nil
+	}
+	db, err := st.DB(ctx)
+	if err != nil {
+		return errors.Capture(err)
+	}
+	return errors.Capture(db.Txn(ctx, func(ctx context.Context, tx *sqlair.TX) error {
+
+		type observation struct {
+			UUID        string `db:"uuid"`
+			NetNodeUUID string `db:"net_node_uuid"`
+			DeviceUUID  string `db:"device_uuid"`
+			Value       string `db:"address_value"`
+			TypeID      int    `db:"type_id"`
+			OriginID    int    `db:"origin_id"`
+			ScopeID     int    `db:"scope_id"`
+		}
+		type target struct {
+			MachineName string `db:"machine_name"`
+		}
+		// An empty machine name selects the lowest-named live controller
+		// unit; otherwise only the live unit on that live machine matches.
+		query, err := sqlair.Prepare(`
+SELECT u.net_node_uuid AS &observation.net_node_uuid
+FROM unit AS u
+JOIN application_controller AS ac ON ac.application_uuid = u.application_uuid
+LEFT JOIN machine AS m ON m.net_node_uuid = u.net_node_uuid AND m.life_id = 0
+WHERE u.life_id = 0
+AND ($target.machine_name = '' OR m.name = $target.machine_name)
+ORDER BY u.name
+LIMIT 1`, observation{}, target{})
+		if err != nil {
+			return errors.Capture(err)
+		}
+		var node observation
+		if err := tx.Query(ctx, query, target{MachineName: machineName}).Get(&node); errors.Is(err, sqlair.ErrNoRows) {
+			return errors.New("controller unit not found")
+		} else if err != nil {
+			return errors.Errorf("finding controller unit: %w", err)
+		}
+
+		if err := deleteNodeAddresses(ctx, tx, node.NetNodeUUID); err != nil {
+			return errors.Capture(err)
+		}
+
+		for _, address := range patch.Addresses {
+			input := observation{
+				UUID: address.UUID, NetNodeUUID: node.NetNodeUUID, Value: address.Value,
+				TypeID:   int(ipaddress.MarshallAddressType(address.Type)),
+				OriginID: int(ipaddress.MarshallOrigin(network.OriginProvider)),
+				ScopeID:  int(ipaddress.MarshallScope(network.ScopeCloudLocal)),
+			}
+			if address.Type == network.HostName {
+				// Reuse an existing name with the same scope. Other nodes may
+				// reference it, so mutating an archived DNS row is unsafe.
+				query, err := sqlair.Prepare(`
+INSERT INTO fqdn_address (uuid, address, scope_id)
+VALUES ($observation.uuid, $observation.address_value, 1)
+ON CONFLICT (address, scope_id) DO NOTHING`, input)
+				if err != nil {
+					return errors.Capture(err)
+				}
+				if err := tx.Query(ctx, query, input).Run(); err != nil {
+					return errors.Errorf("inserting controller unit DNS address: %w", err)
+				}
+				query, err = sqlair.Prepare(`
+INSERT INTO net_node_fqdn_address (net_node_uuid, address_uuid)
+SELECT $observation.net_node_uuid, fa.uuid FROM fqdn_address AS fa
+WHERE fa.address = $observation.address_value AND fa.scope_id = 1`, input)
+				if err != nil {
+					return errors.Capture(err)
+				}
+				if err := tx.Query(ctx, query, input).Run(); err != nil {
+					return errors.Errorf("linking controller unit DNS address: %w", err)
+				}
+				continue
+			}
+
+			if node.DeviceUUID == "" {
+				query, err := sqlair.Prepare(`
+SELECT lld.uuid AS &observation.device_uuid FROM link_layer_device AS lld
+WHERE lld.net_node_uuid = $observation.net_node_uuid ORDER BY lld.uuid LIMIT 1`, node)
+				if err != nil {
+					return errors.Capture(err)
+				}
+				if err := tx.Query(ctx, query, node).Get(&node); errors.Is(err, sqlair.ErrNoRows) {
+					node.DeviceUUID = patch.DeviceUUID
+					query, err := sqlair.Prepare(`
+INSERT INTO link_layer_device
+    (uuid, net_node_uuid, name, device_type_id, virtual_port_type_id)
+VALUES ($observation.device_uuid, $observation.net_node_uuid, '', 0, 0)`, node)
+					if err != nil {
+						return errors.Capture(err)
+					}
+					if err := tx.Query(ctx, query, node).Run(); err != nil {
+						return errors.Errorf("creating controller unit device: %w", err)
+					}
+				} else if err != nil {
+					return errors.Capture(err)
+				}
+			}
+			input.DeviceUUID = node.DeviceUUID
+			query, err := sqlair.Prepare(`
+INSERT INTO ip_address
+    (uuid, net_node_uuid, device_uuid, address_value,
+     type_id, config_type_id, origin_id, scope_id)
+VALUES ($observation.uuid, $observation.net_node_uuid, $observation.device_uuid,
+        $observation.address_value, $observation.type_id, 0,
+        $observation.origin_id, $observation.scope_id)`, input)
+			if err != nil {
+				return errors.Capture(err)
+			}
+			if err := tx.Query(ctx, query, input).Run(); err != nil {
+				return errors.Errorf("inserting controller unit IP address: %w", err)
+			}
+		}
+		return nil
+	}))
+}
+
+// deleteNodeAddresses removes observations without deleting shared DNS names.
+func deleteNodeAddresses(ctx context.Context, tx *sqlair.TX, netNodeUUID string) error {
+	type observation struct {
+		UUID        string `db:"uuid"`
+		NetNodeUUID string `db:"net_node_uuid"`
+	}
+	node := observation{NetNodeUUID: netNodeUUID}
+
+	type addressUUIDs []string
+	selectNames, err := sqlair.Prepare(`
+SELECT nnfa.address_uuid AS &observation.uuid
+FROM net_node_fqdn_address AS nnfa
+WHERE nnfa.net_node_uuid = $observation.net_node_uuid`, observation{})
+	if err != nil {
+		return errors.Capture(err)
+	}
+	var oldNames []observation
+	if err := tx.Query(ctx, selectNames, node).GetAll(&oldNames); err != nil && !errors.Is(err, sqlair.ErrNoRows) {
+		return errors.Capture(err)
+	}
+	for _, statement := range []string{
+		`WITH old_ips AS (
+    SELECT ipa.uuid AS uuid FROM ip_address AS ipa
+    WHERE ipa.net_node_uuid = $observation.net_node_uuid
+)
+DELETE FROM provider_ip_address AS pia WHERE pia.address_uuid IN old_ips`,
+		`DELETE FROM ip_address AS ipa WHERE ipa.net_node_uuid = $observation.net_node_uuid`,
+		`DELETE FROM net_node_fqdn_address AS nnfa WHERE nnfa.net_node_uuid = $observation.net_node_uuid`,
+	} {
+		query, err := sqlair.Prepare(statement, observation{})
+		if err != nil {
+			return errors.Capture(err)
+		}
+		if err := tx.Query(ctx, query, node).Run(); err != nil {
+			return errors.Errorf("removing stale controller unit addresses: %w", err)
+		}
+	}
+	if len(oldNames) > 0 {
+		ids := make(addressUUIDs, len(oldNames))
+		for i, name := range oldNames {
+			ids[i] = name.UUID
+		}
+		query, err := sqlair.Prepare(`
+WITH referenced AS (
+    SELECT nnfa.address_uuid AS uuid FROM net_node_fqdn_address AS nnfa
+)
+DELETE FROM fqdn_address AS fa
+WHERE fa.uuid IN ($addressUUIDs[:]) AND fa.uuid NOT IN referenced`, ids)
+		if err != nil {
+			return errors.Capture(err)
+		}
+		if err := tx.Query(ctx, query, ids).Run(); err != nil {
+			return errors.Errorf("removing stale controller unit DNS names: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// deleteNodeDevices removes physical observations owned by the lost machine.
+// Subnets, spaces and other shared network definitions remain intact.
+func deleteNodeDevices(ctx context.Context, tx *sqlair.TX, netNodeUUID string) error {
+	type node struct {
+		UUID string `db:"net_node_uuid"`
+	}
+	in := node{UUID: netNodeUUID}
+	devices := `WITH devices AS (
+        SELECT lld.uuid AS uuid FROM link_layer_device AS lld
+        WHERE lld.net_node_uuid = $node.net_node_uuid
+    ) `
+	for _, statement := range []string{
+		devices + `DELETE FROM provider_link_layer_device AS p WHERE p.device_uuid IN devices`,
+		devices + `DELETE FROM link_layer_device_dns_domain AS d WHERE d.device_uuid IN devices`,
+		devices + `DELETE FROM link_layer_device_dns_address AS d WHERE d.device_uuid IN devices`,
+		devices + `DELETE FROM link_layer_device_route AS r WHERE r.device_uuid IN devices`,
+		devices + `DELETE FROM link_layer_device_parent AS p WHERE p.device_uuid IN devices OR p.parent_uuid IN devices`,
+		`DELETE FROM link_layer_device AS lld WHERE lld.net_node_uuid = $node.net_node_uuid`,
+	} {
+		query, err := sqlair.Prepare(statement, in)
+		if err != nil {
+			return errors.Capture(err)
+		}
+		if err := tx.Query(ctx, query, in).Run(); err != nil {
+			return errors.Errorf("removing stale controller devices: %w", err)
+		}
+	}
+	return nil
+}
