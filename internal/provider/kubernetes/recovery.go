@@ -6,6 +6,7 @@ package kubernetes
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	core "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -127,6 +128,7 @@ func CheckRecoverySubstrate(
 				m.Name, got, m.UUID)
 		}
 
+		var volumeClaims *core.PersistentVolumeClaimList
 		for _, app := range m.Applications {
 			// The application's StatefulSet is named after the
 			// application in the model namespace. A missing one
@@ -145,6 +147,29 @@ func CheckRecoverySubstrate(
 				return nil, errors.Errorf("workload statefulset %q in %q belongs to another application", app.Name, m.Name)
 			}
 
+			for _, claim := range app.PersistentVolumeClaims {
+				_, err := client.CoreV1().PersistentVolumeClaims(m.Name).Get(
+					ctx, claim, v1.GetOptions{})
+				if k8serrors.IsNotFound(err) {
+					// Filesystem provider IDs can name the bound PV rather
+					// than its claim. Resolve them within the model namespace.
+					if volumeClaims == nil {
+						volumeClaims, err = client.CoreV1().PersistentVolumeClaims(m.Name).List(ctx, v1.ListOptions{})
+						if err != nil {
+							return nil, errors.Errorf("listing volume claims in %q: %w", m.Name, err)
+						}
+					}
+					if !slices.ContainsFunc(volumeClaims.Items, func(pvc core.PersistentVolumeClaim) bool {
+						return pvc.Spec.VolumeName == claim
+					}) {
+						report.MissingPersistentVolumeClaims = append(
+							report.MissingPersistentVolumeClaims, fmt.Sprintf("%s/%s", m.Name, claim))
+					}
+				} else if err != nil {
+					return nil, errors.Errorf(
+						"checking volume claim %q in %q: %w", claim, m.Name, err)
+				}
+			}
 		}
 	}
 	return report, nil

@@ -104,6 +104,21 @@ func (k *kubernetesClient) waitForRecoveryContainer(ctx context.Context, name st
 					return nil
 				}
 			}
+			for _, statuses := range [][]core.ContainerStatus{pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses} {
+				for _, status := range statuses {
+					waiting := status.State.Waiting
+					if waiting == nil || waiting.Reason == "" || waiting.Reason == "PodInitializing" || waiting.Reason == "ContainerCreating" {
+						continue
+					}
+					err := errors.Errorf("recovery container %q cannot start: %s: %s", status.Name, waiting.Reason, waiting.Message)
+					switch waiting.Reason {
+					case "InvalidImageName", "CreateContainerConfigError":
+						return err.Add(jujuerrors.NotValid)
+					default:
+						return err
+					}
+				}
+			}
 			return errors.New("waiting for recovery container to start")
 		},
 		IsFatalError: func(err error) bool {

@@ -364,6 +364,19 @@ Recovery complete
 		fmt.Fprintf(ctx.Stdout, `  HA source:       %d nodes; the other controller machines loaded as dead machines and must be removed
 `, info.HANodes)
 	}
+	if !report.Empty() {
+		fmt.Fprintf(ctx.Stdout, `
+Missing workload substrate (reported before provisioning; the first
+reconcile recreates workload objects, and a recreated volume comes
+back empty):
+`)
+		for _, workload := range report.MissingWorkloads {
+			fmt.Fprintf(ctx.Stdout, "  missing workload objects: %s\n", workload)
+		}
+		for _, claim := range report.MissingPersistentVolumeClaims {
+			fmt.Fprintf(ctx.Stdout, "  missing volume (recreated empty): %s\n", claim)
+		}
+	}
 	fmt.Fprintf(ctx.Stdout, `
 The controller reconciles immediately: pending removals, dying entities and
 recorded operations from the backup now run. Check the controller log for the

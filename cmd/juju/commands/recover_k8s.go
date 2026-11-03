@@ -85,6 +85,14 @@ func (c *recoveryCommand) provisionK8sRecoveryController(ctx *cmd.Context) (resu
 	if err != nil {
 		return err
 	}
+	if !report.Empty() {
+		for _, name := range report.MissingWorkloads {
+			ctx.Warningf("Missing workload objects: %s; reconciliation will recreate them", name)
+		}
+		for _, name := range report.MissingPersistentVolumeClaims {
+			ctx.Warningf("Missing volume: %s; a recreated volume will be empty", name)
+		}
+	}
 	sourceCloud.HostCloudRegion = report.HostCloudRegion
 	adminPassword, err := password.RandomPassword()
 	if err != nil {

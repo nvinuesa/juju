@@ -10,6 +10,7 @@ import (
 	"github.com/juju/juju/environs/imagemetadata"
 	"github.com/juju/juju/environs/simplestreams"
 	"github.com/juju/juju/internal/errors"
+	"github.com/juju/juju/internal/storage"
 )
 
 // PrepareRecoveryMachine selects images and applies bootstrap defaults only
@@ -50,6 +51,22 @@ func PrepareRecoveryMachine(ctx context.Context, env environs.Environ, args envi
 	}
 	if checker, ok := env.(environs.DefaultConstraintsChecker); !ok || checker.ShouldApplyControllerConstraints(cons) {
 		cons = withDefaultControllerConstraints(cons)
+	}
+	if cons.HasRootDiskSource() {
+		if attrs, found := args.StoragePools[*cons.RootDiskSource]; found {
+			providerType, _ := attrs["type"].(string)
+			provider, err := env.StorageProvider(storage.ProviderType(providerType))
+			if err != nil {
+				return args, err
+			}
+			pool, err := storage.NewConfig(*cons.RootDiskSource, storage.ProviderType(providerType), attrs)
+			if err != nil {
+				return args, err
+			}
+			if err := provider.ValidateConfig(pool); err != nil {
+				return args, errors.Errorf("invalid archived root disk pool: %w", err)
+			}
+		}
 	}
 	args.BootstrapConstraints, args.ImageMetadata = cons, metadata
 	return args, nil
