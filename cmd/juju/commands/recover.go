@@ -5,6 +5,7 @@ package commands
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"time"
 
@@ -41,10 +42,7 @@ type recoveryCommand struct {
 func (c *recoveryCommand) Info() *cmd.Info {
 	return jujucmd.Info(&cmd.Info{
 		Name: "recover", Args: "<backup-file> <assertion-file>", Purpose: "Recover a controller from a backup archive.",
-		Doc: `This build allocates replacement resources but does not initialise recovered
-controllers. Workloads on other clouds or regions are not supported by this build.
-
-Recover a replacement controller using the cloud, region and controller name
+		Doc: `Recover a replacement controller using the cloud, region and controller name
 recorded in the archive. The controller UUID, model UUIDs and controller CA are
 preserved. The replacement runs the exact agent version recorded in the backup.
 Machine agents come from the archive; the CLI version does not select them.
@@ -59,8 +57,8 @@ the exact archived version, including its build number.
 
 Fence the source controller before recovery. If its name is registered on this
 client, run juju unregister first. Kubernetes recovery requires the original
-cluster and surviving workload namespaces. Each workload model is checked on
-its own archived cluster before the replacement is created.
+cluster and surviving workload namespaces. All workload models must use the
+controller's archived cloud, provider family and region in this build.
 
 The archive and its assertion file are given explicitly. The unsigned
 assertion, the "<archive>.assert" file written by create-backup, supplies
@@ -127,7 +125,14 @@ func (c *recoveryCommand) Run(ctx *cmd.Context) error {
 	c.recoveryInfo = info
 	targetCtx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
-	return c.provisionRecoveryController(ctx.With(targetCtx))
+	if err := c.provisionRecoveryController(ctx.With(targetCtx)); err != nil {
+		return err
+	}
+	// Land the operator on the recovered controller, as bootstrap does
+	// for a fresh one.
+	return errors.Annotate(
+		c.ClientStore().SetCurrentController(info.ControllerName),
+		"selecting recovered controller")
 }
 
 func (c *recoveryCommand) preflight(ctx *cmd.Context) (*recovery.ArchiveInfo, error) {
@@ -339,4 +344,33 @@ func recoveryModels(info *recovery.ArchiveInfo) []environs.RecoveryModel {
 		models[i] = environs.RecoveryModel{Name: m.Name, UUID: m.UUID, Applications: apps}
 	}
 	return models
+}
+
+// printRecoverySummary reports the recovered identities, the missing
+// substrate the surviving target no longer holds, and the immediate
+// reconciliation effects of the recovery. The agent-side load reports
+// the database-derived details (dead controller machines, pending
+// removals) in the controller log.
+func (c *recoveryCommand) printRecoverySummary(
+	ctx *cmd.Context,
+	info *recovery.ArchiveInfo,
+	report *environs.RecoverySubstrateReport,
+) {
+	fmt.Fprintf(ctx.Stdout, `
+Recovery complete
+  controller:      %s (%s)
+  agent version:   %s (backup finished %s)
+  models recovered: %d
+`, info.ControllerUUID, info.ControllerName,
+		info.AgentVersion, info.BackupFinished.Format("2006-01-02 15:04:05"),
+		len(info.Models))
+	if info.HANodes > 1 {
+		fmt.Fprintf(ctx.Stdout, `  HA source:       %d nodes; the other controller machines loaded as dead machines and must be removed
+`, info.HANodes)
+	}
+	fmt.Fprintf(ctx.Stdout, `
+The controller reconciles immediately: pending removals, dying entities and
+recorded operations from the backup now run. Check the controller log for the
+database-side recovery summary and review pending work before continuing.
+`)
 }

@@ -7,19 +7,27 @@ import (
 	"context"
 	"encoding/binary"
 	"maps"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"time"
 
 	"github.com/juju/errors"
+	"github.com/juju/names/v6"
 	"github.com/juju/utils/v4/ssh"
 
+	"github.com/juju/juju/api"
 	"github.com/juju/juju/api/jujuclient"
 	"github.com/juju/juju/cloud"
 	"github.com/juju/juju/cmd/cmd"
+	"github.com/juju/juju/cmd/juju/common"
+	"github.com/juju/juju/cmd/modelcmd"
 	"github.com/juju/juju/controller"
 	"github.com/juju/juju/core/base"
+	"github.com/juju/juju/core/constraints"
+	"github.com/juju/juju/core/instance"
 	"github.com/juju/juju/core/model"
+	"github.com/juju/juju/core/network"
 	"github.com/juju/juju/core/permission"
 	"github.com/juju/juju/domain/recovery"
 	"github.com/juju/juju/environs"
@@ -27,12 +35,14 @@ import (
 	"github.com/juju/juju/environs/cloudspec"
 	environscmd "github.com/juju/juju/environs/cmd"
 	"github.com/juju/juju/environs/config"
+	"github.com/juju/juju/internal/cloudconfig/instancecfg"
 	"github.com/juju/juju/internal/password"
 	internalrecovery "github.com/juju/juju/internal/recovery"
 	jujussh "github.com/juju/juju/internal/ssh"
 	"github.com/juju/juju/internal/storage"
 	"github.com/juju/juju/internal/tools"
 	"github.com/juju/juju/internal/uuid"
+	jujunames "github.com/juju/juju/juju/names"
 )
 
 // provisionRecoveryController owns replacement provisioning. It deliberately
@@ -69,7 +79,7 @@ func (c *recoveryCommand) provisionRecoveryController(ctx *cmd.Context) (resultE
 	if err != nil {
 		return errors.Annotate(err, "building recovery node configuration")
 	}
-	_, err = recoveryCertificate(info, controllerConfig)
+	certInfo, err := recoveryCertificate(info, controllerConfig)
 	if err != nil {
 		return err
 	}
@@ -87,6 +97,7 @@ func (c *recoveryCommand) provisionRecoveryController(ctx *cmd.Context) (resultE
 	stdCtx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
 	provisionCtx := environscmd.BootstrapContext(stdCtx, ctx)
+	var started instance.Id
 	var cleanup func(context.Context) error
 	registered := false
 	defer func() {
@@ -99,7 +110,7 @@ func (c *recoveryCommand) provisionRecoveryController(ctx *cmd.Context) (resultE
 	if _, err := provisioner.PrepareForRecovery(provisionCtx, environs.RecoverySubstrateParams{ControllerUUID: info.ControllerUUID, ControllerName: info.ControllerName, ControllerModelUUID: info.ControllerModelUUID}); err != nil {
 		return err
 	}
-	_, err = c.checkRecoveryModels(ctx, stdCtx, &environs.RecoverySubstrateReport{}, credentials)
+	credentialPatches, err := c.checkRecoveryModels(ctx, stdCtx, &environs.RecoverySubstrateReport{}, credentials)
 	if err != nil {
 		return err
 	}
@@ -144,6 +155,7 @@ func (c *recoveryCommand) provisionRecoveryController(ctx *cmd.Context) (resultE
 		ControllerConfig: controllerConfig, AuthorizedKeys: keys,
 		BootstrapConstraints: cons, AvailableTools: tools.List{bundle.Tools},
 		BootstrapBase: sourceBase, SupportedBootstrapBases: []base.Base{sourceBase},
+		InstanceStarted: func(id instance.Id) { started = id },
 	})
 	if err != nil {
 		return err
@@ -152,12 +164,72 @@ func (c *recoveryCommand) provisionRecoveryController(ctx *cmd.Context) (resultE
 	if err != nil {
 		return err
 	}
-	_, recoveryCleanup, err := provisioner.ProvisionRecoveryMachine(provisionCtx, environs.RecoveryMachineParams{BootstrapParams: params, MachineID: physicalID})
+	result, recoveryCleanup, err := provisioner.ProvisionRecoveryMachine(provisionCtx, environs.RecoveryMachineParams{BootstrapParams: params, MachineID: physicalID})
 	cleanup = recoveryCleanup
 	if err != nil {
 		return err
 	}
-	return errors.New("controller recovery initialisation is not available in this build")
+	icfg, err := instancecfg.NewBootstrapInstanceConfig(controllerConfig, params.BootstrapConstraints, constraints.Value{}, result.Base, "", nil)
+	if err != nil {
+		return err
+	}
+	// Physical resource names belong to this attempt. The installed agent
+	// retains the archived logical machine identity.
+	icfg.MachineId = info.MachineName
+	icfg.MachineAgentServiceName = jujunames.JujuAgentd + "-" + names.NewMachineTag(info.MachineName).String()
+	if result.Base != sourceBase {
+		return errors.New("replacement base differs from archived controller")
+	}
+	if result.Arch != bundle.Tools.Version.Arch {
+		return errors.New("replacement architecture differs from archived agent")
+	}
+	if err := icfg.SetTools(tools.List{bundle.Tools}); err != nil {
+		return err
+	}
+	icfg.APIInfo = &api.Info{Password: adminPassword, CACert: info.CACert, ModelTag: names.NewModelTag(info.ControllerModelUUID)}
+	icfg.Bootstrap.ControllerAgentInfo = certInfo
+	icfg.Bootstrap.ControllerCloud = sourceCloud
+	icfg.Bootstrap.ControllerCloudRegion = region
+	icfg.Bootstrap.ControllerCloudCredential = credentials.credential
+	icfg.Bootstrap.ControllerCloudCredentialName = credentials.name
+	icfg.Bootstrap.ControllerModelConfig = env.Config()
+	icfg.Bootstrap.ControllerConfig = controllerConfig
+	icfg.Bootstrap.AgentVersion = info.AgentVersion
+	icfg.Bootstrap.BootstrapSSHAuthorizedKeys = keys
+	icfg.Bootstrap.ControllerModelAuthorizedKeys, err = jujussh.SplitAuthorizedKeys(env.Config().AuthorizedKeys())
+	if err != nil {
+		return err
+	}
+	icfg.Initialisation = &instancecfg.ControllerInitialisation{
+		Command: "recovery-state", ParamsPath: internalrecovery.ParamsFile,
+		ModePath: internalrecovery.ModeFile, Mode: "true", Timeout: 20 * time.Minute,
+		Prepare: func(cfg *instancecfg.InstanceConfig) ([]byte, error) {
+			return (internalrecovery.Params{Credentials: credentialPatches, ArchivePath: filepath.Join(cfg.DataDir, "recovery", "archive.tar.gz"), SHA256: info.Checksum, AgentVersion: info.AgentVersion,
+				MachineName: info.MachineName, MachineNonce: cfg.MachineNonce, Node: cfg.Bootstrap.StateInitializationParams}).Marshal()
+		},
+		Files: []instancecfg.InitialisationFile{{Source: ctx.AbsPath(c.archivePath), Destination: filepath.Join(icfg.DataDir, "recovery", "archive.tar.gz"), SHA256: info.Checksum}},
+	}
+	if result.CloudBootstrapFinalizer == nil {
+		return errors.New("provider returned no machine controller finaliser")
+	}
+	if err := result.CloudBootstrapFinalizer(provisionCtx, icfg, environs.BootstrapDialOpts{IdentityFiles: keyFiles, Timeout: 20 * time.Minute, RetryDelay: 5 * time.Second, AddressesDelay: 5 * time.Second}); err != nil {
+		return err
+	}
+	addresses, err := recoveryInstanceAddresses(ctx, env, started)
+	if err != nil {
+		return err
+	}
+	if err := saveControllerConnection(provisionCtx, c.ClientStore(), info.ControllerName, env, controllerConfig, info.AgentVersion.String(), addresses); err != nil {
+		return err
+	}
+	if err := c.SetModelIdentifier(modelcmd.JoinModelName(info.ControllerName, "admin/controller"), false); err != nil {
+		return err
+	}
+	if err := waitForAgentInitialisation(provisionCtx, &c.ModelCommandBase, false, info.ControllerName, common.TryAPI); err != nil {
+		return err
+	}
+	c.printRecoverySummary(ctx, info, nil)
+	return nil
 }
 
 // cleanupFailedRecovery leaves successful recoveries untouched. On failure,
@@ -264,4 +336,15 @@ func (c *recoveryCommand) registerRecoveryController(info *recovery.ArchiveInfo,
 	return true, store.UpdateBootstrapConfig(info.ControllerName, jujuclient.BootstrapConfig{ControllerConfig: publicControllerConfig, Config: attrs, ControllerModelUUID: info.ControllerModelUUID,
 		Cloud: spec.Name, CloudType: spec.Type, CloudRegion: spec.Region, CloudEndpoint: spec.Endpoint, CloudIdentityEndpoint: spec.IdentityEndpoint, CloudStorageEndpoint: spec.StorageEndpoint,
 		CloudCACertificates: spec.CACertificates, SkipTLSVerify: spec.SkipTLSVerify, Credential: credentialName})
+}
+
+func recoveryInstanceAddresses(ctx context.Context, env environs.InstanceLister, id instance.Id) (network.ProviderAddresses, error) {
+	instances, err := env.Instances(ctx, []instance.Id{id})
+	if err != nil {
+		return nil, err
+	}
+	if len(instances) != 1 || instances[0] == nil || instances[0].Id() != id {
+		return nil, errors.NotFoundf("replacement instance %s", id)
+	}
+	return instances[0].Addresses(ctx)
 }

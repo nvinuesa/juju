@@ -3516,26 +3516,11 @@ func decodeOSType(osType sql.Null[int64]) (deployment.OSType, error) {
 }
 
 func hashConfigAndSettings(config []applicationConfig, settings applicationSettings) (string, error) {
-	h := sha256.New()
-
-	// Ensure we have a stable order for the keys.
-	sort.Slice(config, func(i, j int) bool {
-		return config[i].Key() < config[j].Key()
-	})
-
-	for _, c := range config {
-		if _, err := h.Write([]byte(c.Key())); err != nil {
-			return "", errors.Errorf("writing config key: %w", err)
-		}
-		if _, err := h.Write([]byte(c.Value())); err != nil {
-			return "", errors.Errorf("writing config value: %w", err)
-		}
+	values := make(map[string]string, len(config))
+	for _, entry := range config {
+		values[entry.Key()] = entry.Value()
 	}
-	if _, err := h.Write([]byte(strconv.FormatBool(settings.Trust))); err != nil {
-		return "", errors.Errorf("writing settings: %w", err)
-	}
-
-	return hex.EncodeToString(h.Sum(nil)), nil
+	return application.ConfigHash(values, settings.Trust), nil
 }
 
 func decodePlatform(channel string, os, arch sql.Null[int64]) (deployment.Platform, error) {
