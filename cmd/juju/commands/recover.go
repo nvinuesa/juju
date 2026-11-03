@@ -4,9 +4,12 @@
 package commands
 
 import (
+	"context"
 	"path/filepath"
+	"time"
 
 	"github.com/juju/errors"
+	"github.com/juju/gnuflag"
 	"github.com/juju/names/v6"
 
 	jujucloud "github.com/juju/juju/cloud"
@@ -31,16 +34,63 @@ type recoveryCommand struct {
 	modelcmd.ModelCommandBase
 	archivePath   string
 	assertionPath string
+	keepBroken    bool
 	recoveryInfo  *recovery.ArchiveInfo
 }
 
 func (c *recoveryCommand) Info() *cmd.Info {
 	return jujucmd.Info(&cmd.Info{
-		Name: "recover", Args: "<backup-file> <assertion-file>",
-		Purpose: "Validate a controller recovery archive.",
-		Doc:     "Validate an archive against its unsigned SHA-256 assertion. Controller recovery provisioning is not available in this build.",
-		SeeAlso: []string{"bootstrap", "create-backup", "unregister"},
+		Name: "recover", Args: "<backup-file> <assertion-file>", Purpose: "Recover a controller from a backup archive.",
+		Doc: `This build allocates replacement machines but does not initialise recovered
+controllers. Workloads on other clouds or regions are not supported by this build.
+
+Recover a replacement controller using the cloud, region and controller name
+recorded in the archive. The controller UUID, model UUIDs and controller CA are
+preserved. The replacement runs the exact agent version recorded in the backup.
+Machine agents come from the archive; the CLI version does not select them.
+Source constraints and observed hardware determine the replacement's capacity,
+with additional space reserved for archive staging and database import.
+
+Kubernetes backups record the source agent and controller charm image references,
+platform, volume size, storage class and Service exposure. Recovery reuses those
+references, which may be tags or digests. Images must be available to eligible
+cluster nodes through configured pulls or preloading. The running agent must have
+the exact archived version, including its build number.
+
+Fence the source controller before recovery. If its name is registered on this
+client, run juju unregister first. Kubernetes recovery requires the original
+cluster and surviving workload namespaces. Each workload model is checked on
+its own archived cluster before the replacement is created.
+
+The archive and its assertion file are given explicitly. The unsigned
+assertion, the "<archive>.assert" file written by create-backup, supplies
+the expected SHA-256 checksum, which the archive must match.
+Local credentials are tried first; if none
+are available, the credential archived for each model cloud is used. An ambiguous
+credential selection or authentication failure stops recovery.
+
+By default, a failed recovery removes the replacement's cloud resources.
+Use --keep-broken to retain them for diagnosis and manual repair. The failed
+controller is removed from the local client; access the retained resources
+directly using SSH or your cloud tools. Stop recovery and normal controller
+processes before starting safe mode. This flag does not pause recovery or make
+an incomplete import resumable. Remove retained resources manually when finished.
+
+Recovery produces one controller node. Lost controller peers are retired in the
+restored state without deleting their provider resources. Controller machines
+hosting other workload units or containers are refused before provisioning.
+The restored object store remains file-backed until the operator explicitly
+authorises an S3 transition with authorize-s3-transition=true.
+`,
+		Examples: "    juju recover juju-backup.tar.gz juju-backup.tar.gz.assert",
+		SeeAlso:  []string{"bootstrap", "create-backup", "unregister"},
 	})
+}
+
+func (c *recoveryCommand) SetFlags(f *gnuflag.FlagSet) {
+	c.ModelCommandBase.SetFlags(f)
+	f.BoolVar(&c.keepBroken, "keep-broken", false,
+		"Do not remove replacement cloud resources if recovery fails")
 }
 
 func (c *recoveryCommand) Init(args []string) error {
@@ -65,10 +115,19 @@ func (c *recoveryCommand) Init(args []string) error {
 }
 
 func (c *recoveryCommand) Run(ctx *cmd.Context) error {
-	if _, err := c.preflight(ctx); err != nil {
+	info, err := c.preflight(ctx)
+	if err != nil {
 		return err
 	}
-	return errors.New("controller recovery provisioning is not available in this build")
+	if _, err := c.ClientStore().ControllerByName(info.ControllerName); err == nil {
+		return errors.Errorf("controller %q is registered locally; run juju unregister %s before recovery", info.ControllerName, info.ControllerName)
+	} else if !errors.Is(err, errors.NotFound) {
+		return err
+	}
+	c.recoveryInfo = info
+	targetCtx, cancel := context.WithTimeout(ctx, 20*time.Minute)
+	defer cancel()
+	return c.provisionRecoveryController(ctx.With(targetCtx))
 }
 
 func (c *recoveryCommand) preflight(ctx *cmd.Context) (*recovery.ArchiveInfo, error) {
@@ -111,26 +170,14 @@ func (c *recoveryCommand) preflight(ctx *cmd.Context) (*recovery.ArchiveInfo, er
 	if !names.IsValidCloud(info.CloudName) {
 		return nil, errors.NotValidf("archived cloud name %q", info.CloudName)
 	}
+	controllerID := info.MachineName
+	if info.CloudType == jujucloud.CloudTypeKubernetes {
+		controllerID = "0"
+	}
+	if err := recovery.ValidateSingleController(info.ControllerTopology, controllerID); err != nil {
+		return nil, err
+	}
 	return info, nil
-}
-
-// readAssertion opens and parses the backup assertion file. Every open,
-// read and close failure carries the assertion filename; a parse error
-// wins over a close failure.
-func (c *recoveryCommand) readAssertion(assertionPath string) (*backups.Assertion, error) {
-	file, err := c.Filesystem().Open(assertionPath)
-	if err != nil {
-		return nil, errors.Annotatef(err, "reading backup assertion %q", assertionPath)
-	}
-	assertion, err := backups.ReadAssertion(file)
-	closeErr := file.Close()
-	if err != nil {
-		return nil, errors.Annotatef(err, "reading backup assertion %q", assertionPath)
-	}
-	if closeErr != nil {
-		return nil, errors.Annotatef(closeErr, "reading backup assertion %q", assertionPath)
-	}
-	return assertion, nil
 }
 
 func recoveryCloud(info *recovery.ArchiveInfo) jujucloud.Cloud {
@@ -253,6 +300,25 @@ func (c *recoveryCommand) localRecoveryCredential(ctx *cmd.Context, provider env
 		CloudIdentityEndpoint: region.IdentityEndpoint, CloudStorageEndpoint: region.StorageEndpoint,
 	})
 	return credential, name, detected, err
+}
+
+// readAssertion opens and parses the backup assertion file. Every open,
+// read and close failure carries the assertion filename; a parse error
+// wins over a close failure.
+func (c *recoveryCommand) readAssertion(assertionPath string) (*backups.Assertion, error) {
+	file, err := c.Filesystem().Open(assertionPath)
+	if err != nil {
+		return nil, errors.Annotatef(err, "reading backup assertion %q", assertionPath)
+	}
+	assertion, err := backups.ReadAssertion(file)
+	closeErr := file.Close()
+	if err != nil {
+		return nil, errors.Annotatef(err, "reading backup assertion %q", assertionPath)
+	}
+	if closeErr != nil {
+		return nil, errors.Annotatef(closeErr, "reading backup assertion %q", assertionPath)
+	}
+	return assertion, nil
 }
 
 // recoveryModels maps the archived model inventory to the provider-facing
