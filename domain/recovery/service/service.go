@@ -1,0 +1,200 @@
+// Copyright 2026 Canonical Ltd.
+// Licensed under the AGPLv3, see LICENCE file for details.
+
+package service
+
+import (
+	"context"
+	"sync"
+
+	"github.com/juju/juju/core/database"
+	coremodel "github.com/juju/juju/core/model"
+	domainrecovery "github.com/juju/juju/domain/recovery"
+	"github.com/juju/juju/internal/errors"
+)
+
+// State supplies recovery persistence for one database.
+type State interface {
+	// Load methods atomically replace tables selected by service policy,
+	// rebinding every object store placement to the supplied target node.
+	LoadControllerDump(context.Context, *domainrecovery.ControllerDump, string) error
+	LoadModelDump(context.Context, *domainrecovery.ModelDump, string) error
+	// PatchControllerObjectStoreConfig forces the recovered controller's
+	// object store configuration to its file backend and drops the
+	// archived S3 settings.
+	PatchControllerObjectStoreConfig(context.Context) error
+	// Object queries describe the files required by persisted metadata.
+	GetObjectMetadataPaths(context.Context) ([]domainrecovery.ObjectMetadataPath, error)
+	// Machine lookup returns the first live machine hosting a live
+	// controller unit, in name order.
+	GetControllerMachineName(context.Context) (string, error)
+	// Patches complete their writes before returning. Failure rolls back.
+	PatchControllerMachine(context.Context, domainrecovery.MachinePatch) error
+	// PatchControllerUnitAddresses targets the live controller unit on the
+	// named machine, or the lowest-named live controller unit when the
+	// name is empty.
+	PatchControllerUnitAddresses(context.Context, string, domainrecovery.ControllerUnitAddressPatch) error
+	// Credential patches rebind archived authentication to the replacement's.
+	PatchControllerCredential(context.Context, string, string, map[string]string) error
+	PatchCloudCredential(context.Context, string, string, map[string]string) error
+	// Summary queries return persisted observations after recovery patches.
+	GetOtherControllerMachines(context.Context, string) ([]string, error)
+	GetRecoveryCounts(context.Context) (domainrecovery.RecoveryCounts, error)
+}
+
+// Service coordinates persistence during exclusive recovery bootstrap. The
+// database session owns its runners and must outlive this service. Loading is
+// sequential: controller, models, object installation, patches, then report.
+// A failure can leave earlier databases committed; discard the recovery target.
+type Service struct {
+	controller State
+	openModel  func(context.Context, string) (State, error)
+	nodeID     string
+	mu         sync.Mutex
+	models     map[string]State
+}
+
+// NewService requires both dependencies before recovery can begin. The node
+// ID identifies the provisioned replacement's object store node; every
+// placement rebuilt during the loads rebinds to it.
+func NewService(controller State, openModel func(context.Context, string) (State, error), nodeID string) (*Service, error) {
+	if controller == nil || openModel == nil {
+		return nil, errors.New("recovery requires controller state and a model state factory")
+	}
+	return &Service{controller: controller, openModel: openModel, nodeID: nodeID, models: make(map[string]State)}, nil
+}
+
+// GetObjectInventory retrieves the required files after all dumps are loaded.
+func (s *Service) GetObjectInventory(ctx context.Context, models []coremodel.UUID) ([]domainrecovery.ObjectInventory, error) {
+	controller, err := objectInventory(ctx, database.ControllerNS, s.controller)
+	if err != nil {
+		return nil, errors.Capture(err)
+	}
+	result := []domainrecovery.ObjectInventory{controller}
+	for _, model := range models {
+		st, err := s.modelState(ctx, model)
+		if err != nil {
+			return nil, errors.Capture(err)
+		}
+		inventory, err := objectInventory(ctx, model.String(), st)
+		if err != nil {
+			return nil, errors.Errorf("model %q object inventory: %w", model, err)
+		}
+		result = append(result, inventory)
+	}
+	return result, nil
+}
+
+// PatchControllerMachine applies the replacement's physical facts to the
+// archived controller machine, returning the chosen machine name. A preset
+// patch name is honoured; otherwise the live archived machine is resolved
+// from the loaded dump.
+func (s *Service) PatchControllerMachine(ctx context.Context, model coremodel.UUID, patch domainrecovery.MachinePatch) (string, error) {
+	st, err := s.modelState(ctx, model)
+	if err != nil {
+		return "", errors.Capture(err)
+	}
+	name := patch.MachineName
+	if name == "" {
+		if name, err = st.GetControllerMachineName(ctx); err != nil {
+			return "", errors.Capture(err)
+		}
+	}
+	patch.MachineName = name
+	if err := st.PatchControllerMachine(ctx, patch); err != nil {
+		return "", errors.Errorf("patching controller machine %q: %w", name, err)
+	}
+	return name, nil
+}
+
+// PatchControllerCredential rebinds the controller model credential's
+// authentication, retaining its archived identity.
+func (s *Service) PatchControllerCredential(ctx context.Context, modelUUID, authType string, attributes map[string]string) error {
+	return errors.Capture(s.controller.PatchControllerCredential(ctx, modelUUID, authType, attributes))
+}
+
+// PatchCloudCredential rebinds the named archived credential's
+// authentication, retaining its identity.
+func (s *Service) PatchCloudCredential(ctx context.Context, credentialUUID, authType string, attributes map[string]string) error {
+	return errors.Capture(s.controller.PatchCloudCredential(ctx, credentialUUID, authType, attributes))
+}
+
+// PatchControllerUnitAddresses replaces the controller unit's IP and DNS
+// observations with the replacement's addresses. machineName is the patch
+// target PatchControllerMachine returned; it is empty where there is no
+// machine (Kubernetes).
+func (s *Service) PatchControllerUnitAddresses(ctx context.Context, model coremodel.UUID, machineName string, values []string) error {
+	st, err := s.modelState(ctx, model)
+	if err != nil {
+		return errors.Capture(err)
+	}
+	patch, err := NewControllerUnitAddressPatch(values)
+	if err != nil {
+		return errors.Capture(err)
+	}
+	return errors.Capture(st.PatchControllerUnitAddresses(ctx, machineName, patch))
+}
+
+// BuildSummary aggregates persisted observations after patches are applied.
+func (s *Service) BuildSummary(ctx context.Context, info *domainrecovery.ArchiveInfo, models []coremodel.UUID, machineName string, objectsCopied int) (*domainrecovery.Summary, error) {
+	st, err := s.modelState(ctx, coremodel.UUID(info.ControllerModelUUID))
+	if err != nil {
+		return nil, errors.Capture(err)
+	}
+	dead, err := st.GetOtherControllerMachines(ctx, machineName)
+	if err != nil {
+		return nil, errors.Capture(err)
+	}
+	summary := &domainrecovery.Summary{
+		ControllerUUID: info.ControllerUUID, ControllerName: info.ControllerName,
+		SourceAgentVersion: info.AgentVersion.String(), BackupFinished: info.BackupFinished,
+		HANodes: info.HANodes, Models: len(models), ObjectsCopied: objectsCopied,
+		DeadControllerMachines: dead,
+	}
+	for _, model := range models {
+		st, err := s.modelState(ctx, model)
+		if err != nil {
+			return nil, errors.Capture(err)
+		}
+		counts, err := st.GetRecoveryCounts(ctx)
+		if err != nil {
+			return nil, errors.Errorf("model %q recovery counts: %w", model, err)
+		}
+		summary.MachinesNotAlive += counts.MachinesNotAlive
+		summary.ApplicationsNotAlive += counts.ApplicationsNotAlive
+		summary.UnitsNotAlive += counts.UnitsNotAlive
+		summary.PendingRemovals += counts.PendingRemovals
+	}
+	return summary, nil
+}
+
+func (s *Service) modelState(ctx context.Context, model coremodel.UUID) (State, error) {
+	if err := model.Validate(); err != nil {
+		return nil, errors.Capture(err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, errors.Capture(err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if st, ok := s.models[model.String()]; ok {
+		return st, nil
+	}
+	st, err := s.openModel(ctx, model.String())
+	if err != nil {
+		return nil, errors.Errorf("opening database for model %q: %w", model, err)
+	}
+	if st == nil {
+		return nil, errors.Errorf("model %q state factory returned nil state", model)
+	}
+	s.models[model.String()] = st
+	return st, nil
+}
+
+func objectInventory(ctx context.Context, namespace string, st State) (domainrecovery.ObjectInventory, error) {
+	paths, err := st.GetObjectMetadataPaths(ctx)
+	if err != nil {
+		return domainrecovery.ObjectInventory{}, errors.Capture(err)
+	}
+	return domainrecovery.ObjectInventory{Namespace: namespace, Paths: paths}, nil
+}
