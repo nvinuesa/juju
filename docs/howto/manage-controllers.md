@@ -532,9 +532,6 @@ detected credentials first, and falls back to each model's archived cloud
 credential only when none are available locally. An ambiguous local selection or
 a credential failure stops recovery; configure a local default and retry.
 
-All workload models must use the controller's archived cloud, provider family
-and region in this build; cross-cloud workload recovery is not available yet.
-
 Recovery creates one replacement controller node. Arrange endpoint handoff for
 surviving machine agents, then check that workloads reconnect. Review the
 recovery summary and controller log: pending removals and other recorded work

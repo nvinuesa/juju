@@ -27,11 +27,6 @@ func (c *recoveryCommand) checkRecoveryModels(ctx *cmd.Context, deadline context
 ) (map[string]internalrecovery.CredentialPatch, error) {
 	patches := make(map[string]internalrecovery.CredentialPatch)
 	info := c.recoveryInfo
-	for _, model := range info.Models {
-		if model.UUID != info.ControllerModelUUID && (model.CloudName != info.CloudName || model.CloudType != info.CloudType || model.Region != info.Region) {
-			return nil, errors.New("recovering models on other clouds or regions is not supported by this build")
-		}
-	}
 	if info.Credential != nil && controllerCredentials.credential != nil {
 		patches[info.Credential.UUID] = internalrecovery.CredentialPatch{
 			AuthType:   string(controllerCredentials.credential.AuthType()),
