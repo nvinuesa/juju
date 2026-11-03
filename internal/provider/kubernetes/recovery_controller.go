@@ -80,7 +80,10 @@ func (k *kubernetesClient) ProvisionRecoveryController(ctx environs.BootstrapCon
 	if err := stack.deployResources(ctx); err != nil {
 		return cleanup, errors.Capture(err)
 	}
-	return cleanup, errors.New("controller recovery initialisation is not available in this build")
+	if err := k.waitForRecoveryContainer(ctx, cfg.GetPodName(), cfg.Bootstrap.Timeout); err != nil {
+		return cleanup, errors.Capture(err)
+	}
+	return cleanup, stack.uploadRecoveryArchive(ctx, cfg.GetPodName(), params.Archive)
 }
 
 // waitForRecoveryContainer waits for exec, not API readiness: the API cannot

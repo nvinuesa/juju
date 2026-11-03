@@ -32,6 +32,12 @@ type manifoldSuite struct {
 	baseSuite
 }
 
+type stubPrimaryFlag bool
+
+func (f stubPrimaryFlag) Check() bool {
+	return bool(f)
+}
+
 type stubRootDirReader struct {
 	rootDir string
 	err     error
@@ -52,6 +58,10 @@ func (s *manifoldSuite) TestValidateConfig(c *tc.C) {
 
 	cfg := s.getConfig(c)
 	c.Check(cfg.Validate(), tc.ErrorIsNil)
+
+	cfg = s.getConfig(c)
+	cfg.PrimaryControllerFlagName = ""
+	c.Check(cfg.Validate(), tc.ErrorIs, errors.NotValid)
 
 	cfg = s.getConfig(c)
 	cfg.FortressName = ""
@@ -116,10 +126,11 @@ func (s *manifoldSuite) TestValidateConfig(c *tc.C) {
 
 func (s *manifoldSuite) getConfig(c *tc.C) ManifoldConfig {
 	return ManifoldConfig{
-		FortressName:            "fortress",
-		ObjectStoreServicesName: "object-store-services",
-		ObjectStoreName:         "object-store",
-		S3ClientName:            "s3-client",
+		PrimaryControllerFlagName: "is-primary-controller",
+		FortressName:              "fortress",
+		ObjectStoreServicesName:   "object-store-services",
+		ObjectStoreName:           "object-store",
+		S3ClientName:              "s3-client",
 		GetControllerService: func(g dependency.Getter, s string) (ControllerService, error) {
 			return nil, nil
 		},
@@ -152,7 +163,12 @@ func (s *manifoldSuite) getConfig(c *tc.C) ManifoldConfig {
 }
 
 func (s *manifoldSuite) newGetter() dependency.Getter {
+	return s.newGetterWithPrimary(true)
+}
+
+func (s *manifoldSuite) newGetterWithPrimary(primary bool) dependency.Getter {
 	resources := map[string]any{
+		"is-primary-controller": stubPrimaryFlag(primary),
 		"fortress":              s.guard,
 		"s3-client":             s.s3Client,
 		"object-store":          s.objectStoreFlusher,
@@ -161,7 +177,7 @@ func (s *manifoldSuite) newGetter() dependency.Getter {
 	return dependencytesting.StubGetter(resources)
 }
 
-var expectedInputs = []string{"fortress", "s3-client", "object-store-services", "object-store"}
+var expectedInputs = []string{"is-primary-controller", "fortress", "s3-client", "object-store-services", "object-store"}
 
 func (s *manifoldSuite) TestInputs(c *tc.C) {
 	c.Assert(Manifold(s.getConfig(c)).Inputs, tc.SameContents, expectedInputs)
@@ -177,6 +193,22 @@ func (s *manifoldSuite) TestStart(c *tc.C) {
 	w, err := Manifold(s.getConfig(c)).Start(c.Context(), s.newGetter())
 	c.Assert(err, tc.ErrorIsNil)
 	workertest.CleanKill(c, w)
+}
+
+func (s *manifoldSuite) TestStartCoordinatesDrainingOnlyOnPrimary(c *tc.C) {
+	defer s.setupMocks(c).Finish()
+
+	for _, primary := range []bool{true, false} {
+		cfg := s.getConfig(c)
+		cfg.NewWorker = func(config Config) (worker.Worker, error) {
+			c.Check(config.GuardOnly, tc.Equals, !primary)
+			return workertest.NewErrorWorker(nil), nil
+		}
+		s.setupManifoldStartExpectations(c)
+		w, err := Manifold(cfg).Start(c.Context(), s.newGetterWithPrimary(primary))
+		c.Assert(err, tc.ErrorIsNil)
+		workertest.CleanKill(c, w)
+	}
 }
 
 // Note: This replicates the ability to get a controller domain services and
@@ -203,10 +235,11 @@ func (s *stubObjectStoreServices) ObjectStore() *objectstoreservice.WatchableSer
 // crash-recovery flow.
 func (s *manifoldSuite) getConfigWithRealWorker(c *tc.C) ManifoldConfig {
 	return ManifoldConfig{
-		FortressName:            "fortress",
-		ObjectStoreServicesName: "object-store-services",
-		ObjectStoreName:         "object-store",
-		S3ClientName:            "s3-client",
+		PrimaryControllerFlagName: "is-primary-controller",
+		FortressName:              "fortress",
+		ObjectStoreServicesName:   "object-store-services",
+		ObjectStoreName:           "object-store",
+		S3ClientName:              "s3-client",
 		GetControllerService: func(g dependency.Getter, name string) (ControllerService, error) {
 			return s.controllerService, nil
 		},

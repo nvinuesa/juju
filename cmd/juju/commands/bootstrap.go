@@ -53,11 +53,9 @@ import (
 	_ "github.com/juju/juju/internal/provider/all" // Import all the providers for bootstrap.
 	k8sconstants "github.com/juju/juju/internal/provider/kubernetes/constants"
 	"github.com/juju/juju/internal/provider/lxd/lxdnames"
-	"github.com/juju/juju/internal/proxy"
 	"github.com/juju/juju/internal/ssh"
 	"github.com/juju/juju/internal/storage"
 	"github.com/juju/juju/internal/uuid"
-	"github.com/juju/juju/juju"
 	"github.com/juju/juju/juju/osenv"
 )
 
@@ -1059,38 +1057,8 @@ func (c *bootstrapCommand) controllerDataRefresher(
 			"supplied BootstrapEnviron implements neither environs.InstanceBroker nor caas.ServiceGetterSetter")
 	}
 
-	var proxier proxy.Proxier
-	if conInfo, ok := environ.(environs.ConnectorInfo); ok {
-		proxier, err = conInfo.ConnectionProxyInfo(ctx)
-		if err != nil && !errors.Is(err, errors.NotFound) {
-			return errors.Trace(err)
-		}
-	}
-
-	// Use the retrieved bootstrap machine/service addresses to create
-	// host/port endpoints for local storage.
-	hps := make([]network.MachineHostPort, len(addrs))
-	for i, addr := range addrs {
-		hps[i] = network.MachineHostPort{
-			MachineAddress: addr.MachineAddress,
-			NetPort:        network.NetPort(bootstrapCfg.controller.APIPort()),
-		}
-	}
-	return errors.Annotate(
-		juju.UpdateControllerDetailsFromLogin(
-			c.ClientStore(),
-			c.controllerName,
-			juju.UpdateControllerParams{
-				AgentVersion:           agentVersion.String(),
-				CurrentHostPorts:       []network.MachineHostPorts{hps},
-				PublicDNSName:          newStringIfNonEmpty(bootstrapCfg.controller.AutocertDNSName()),
-				MachineCount:           new(1),
-				Proxier:                proxier,
-				ControllerMachineCount: new(1),
-			},
-		),
-		"saving bootstrap endpoint address",
-	)
+	return saveControllerConnection(ctx, c.ClientStore(), c.controllerName,
+		environ, bootstrapCfg.controller, agentVersion.String(), addrs)
 }
 
 func (c *bootstrapCommand) handleCommandLineErrorsAndInfoRequests(ctx *cmd.Context) (bool, error) {

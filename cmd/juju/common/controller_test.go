@@ -167,6 +167,26 @@ func (s *controllerSuite) TestWaitForAgentAPIReadyRetries(c *tc.C) {
 	})
 }
 
+func (s *controllerSuite) TestWaitForAgentPodReplacement(c *tc.C) {
+	s.PatchValue(&bootstrapReadyPollDelay, time.Millisecond)
+	count := 0
+	tryAPI := func(ctx context.Context, base *modelcmd.ModelCommandBase) error {
+		count++
+		if count == 1 {
+			return errors.New("starting proxy for api connection: connecting k8s " +
+				"proxy: waiting for pod controller-0 to become ready for tunnel: " +
+				"tunnel pod controller-0 is being deleted")
+		}
+		return nil
+	}
+	runInCommand(c, func(ctx *cmd.Context, base *modelcmd.ModelCommandBase) {
+		bootstrapCtx := environscmd.BootstrapContext(c.Context(), ctx)
+		err := WaitForAgentInitialisation(bootstrapCtx, base, true, "arthur", tryAPI)
+		c.Assert(err, tc.ErrorIsNil)
+		c.Check(count, tc.Equals, 2)
+	})
+}
+
 func runInCommand(c tc.LikeC, run func(ctx *cmd.Context, base *modelcmd.ModelCommandBase)) {
 	cmd := &testCommand{
 		run: run,

@@ -16,6 +16,8 @@ import (
 	"github.com/juju/juju/api"
 	"github.com/juju/juju/caas"
 	"github.com/juju/juju/cmd/cmd"
+	"github.com/juju/juju/cmd/juju/common"
+	"github.com/juju/juju/cmd/modelcmd"
 	"github.com/juju/juju/core/base"
 	"github.com/juju/juju/core/model"
 	"github.com/juju/juju/domain/recovery"
@@ -128,7 +130,24 @@ func (c *recoveryCommand) provisionK8sRecoveryController(ctx *cmd.Context) (resu
 	if err != nil {
 		return err
 	}
-	return errors.New("controller recovery initialisation is not available in this build")
+	service, err := broker.GetService(stdCtx, "controller", true)
+	if err != nil {
+		return err
+	}
+	if service == nil || len(service.Addresses) == 0 {
+		return errors.New("replacement controller service has no API addresses")
+	}
+	if err := saveControllerConnection(stdCtx, c.ClientStore(), info.ControllerName, broker, controllerConfig, info.AgentVersion.String(), service.Addresses); err != nil {
+		return err
+	}
+	if err := c.SetModelIdentifier(modelcmd.JoinModelName(info.ControllerName, "admin/controller"), false); err != nil {
+		return err
+	}
+	if err := waitForAgentInitialisation(provisionCtx, &c.ModelCommandBase, true, info.ControllerName, common.TryAPI); err != nil {
+		return err
+	}
+	c.printRecoverySummary(ctx, info, report)
+	return nil
 }
 
 func applyArchivedK8sProvisioning(pcfg *podcfg.ControllerPodConfig, info *recovery.ArchiveInfo, charmBase base.Base) {
