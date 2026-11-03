@@ -243,12 +243,70 @@ func substratePVC(namespace, name string) *core.PersistentVolumeClaim {
 	}
 }
 
+func (s *recoverySuite) TestSubstrateReportMissingWorkloadAndClaim(c *tc.C) {
+	// The namespace survives but neither the application's StatefulSet
+	// nor its volume claim do: both are reported, neither is fatal.
+	client := fake.NewClientset(ownedNamespace(c, "workload", "model-uuid-1"))
+
+	report, err := CheckRecoverySubstrate(c.Context(), client, constants.LastLabelVersion, substrateParamsWithApp())
+	c.Assert(err, tc.ErrorIsNil)
+	c.Assert(report, tc.NotNil)
+	c.Assert(report.MissingWorkloads, tc.DeepEquals, []string{"workload/gitlab"})
+	c.Assert(report.MissingPersistentVolumeClaims, tc.DeepEquals, []string{"workload/gitlab-appu-0"})
+	c.Check(report.Empty(), tc.IsFalse)
+}
+
+func (s *recoverySuite) TestSubstrateReportEmptyWhenSubstrateSurvives(c *tc.C) {
+	client := fake.NewClientset(
+		ownedNamespace(c, "workload", "model-uuid-1"),
+		substrateStatefulSet("workload", "gitlab"),
+		substratePVC("workload", "gitlab-appu-0"),
+	)
+
+	report, err := CheckRecoverySubstrate(c.Context(), client, constants.LastLabelVersion, substrateParamsWithApp())
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(report.Empty(), tc.IsTrue)
+}
+
 func (s *recoverySuite) TestForeignApplicationAbortsRecovery(c *tc.C) {
 	statefulSet := substrateStatefulSet("workload", "gitlab")
 	statefulSet.Annotations[utils.AnnotationKeyApplicationUUID(constants.LastLabelVersion)] = "foreign"
 	client := fake.NewClientset(ownedNamespace(c, "workload", "model-uuid-1"), statefulSet)
 	_, err := CheckRecoverySubstrate(c.Context(), client, constants.LastLabelVersion, substrateParamsWithApp())
 	c.Check(err, tc.ErrorMatches, `workload statefulset "gitlab" in "workload" belongs to another application`)
+}
+
+func (s *recoverySuite) TestSubstratePersistentVolumeID(c *tc.C) {
+	for _, namespace := range []string{"workload", "other-model"} {
+		pvc := substratePVC(namespace, "actual-claim")
+		pvc.Spec.VolumeName = "pvc-provider-id"
+		client := fake.NewClientset(
+			ownedNamespace(c, "workload", "model-uuid-1"),
+			substrateStatefulSet("workload", "gitlab"), pvc,
+		)
+		params := substrateParamsWithApp()
+		params.Models[1].Applications[0].PersistentVolumeClaims = []string{"pvc-provider-id"}
+		report, err := CheckRecoverySubstrate(c.Context(), client, constants.LastLabelVersion, params)
+		c.Assert(err, tc.ErrorIsNil)
+		if namespace == "workload" {
+			c.Check(report.Empty(), tc.IsTrue)
+		} else {
+			c.Check(report.MissingPersistentVolumeClaims, tc.DeepEquals, []string{"workload/pvc-provider-id"})
+		}
+	}
+}
+
+func (s *recoverySuite) TestSubstrateVolumeClaimsListError(c *tc.C) {
+	client := fake.NewClientset(
+		ownedNamespace(c, "workload", "model-uuid-1"),
+		substrateStatefulSet("workload", "gitlab"),
+	)
+	expected := jujuerrors.New("volume claims unavailable")
+	client.PrependReactor("list", "persistentvolumeclaims", func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, expected
+	})
+	_, err := CheckRecoverySubstrate(c.Context(), client, constants.LastLabelVersion, substrateParamsWithApp())
+	c.Check(err, tc.ErrorIs, expected)
 }
 
 func (s *recoverySuite) TestCleanupUsesOnlyOwnedNamespaceUID(c *tc.C) {

@@ -62,6 +62,3 @@ fresh credentials; the usual file-to-S3 transition then uploads the restored
 objects.
 
 For the operator procedure, see {ref}`manage-controllers`.
-
-This build does not inventory surviving PVCs/PVs or diagnose container waiting
-reasons yet. Check workload storage and container failures with cloud tools.
