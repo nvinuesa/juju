@@ -145,7 +145,7 @@ destroy_recovery_k8s_model() {
 # cluster, reusing the source controller name so the fresh controller
 # namespace keeps its name.
 test_recovery_k8s() {
- local controller_name namespace workload_model charm
+	local controller_name namespace workload_model charm secondary_model
 	controller_name="${BOOTSTRAPPED_JUJU_CTRL_NAME}"
 	namespace="controller-${controller_name}"
 	workload_model="${controller_name}-workload"
@@ -157,6 +157,14 @@ test_recovery_k8s() {
 	add_model "${workload_model}"
 	charm=$(pack_charm "${CURRENT_DIR}/../testcharms/charms/recovery-k8s")
 	prepare_recovery_k8s_workload "${workload_model}" "${charm}"
+	# Set this to a registered, independently reachable Kubernetes cloud to
+	# exercise per-model inventory and credential selection on two clusters.
+	if [[ -n ${RECOVERY_SECONDARY_CLOUD:-} ]]; then
+		secondary_model="${controller_name}-secondary"
+		juju add-model "${secondary_model}" "${RECOVERY_SECONDARY_CLOUD}"
+		add_client_ssh_key_to_juju_model "${secondary_model}"
+		prepare_recovery_k8s_workload "${secondary_model}" "${charm}"
+	fi
 	juju switch controller
 
 	local source_controller_uuid source_service_ip
@@ -265,6 +273,9 @@ test_recovery_k8s() {
 		exit 1
 	}
 	check_recovery_k8s_workload "${workload_model}"
+	if [[ -n ${secondary_model:-} ]]; then
+		check_recovery_k8s_workload "${secondary_model}"
+	fi
 	juju switch controller
 
 	echo "==> restarting the recovered controller pod"
@@ -288,8 +299,14 @@ test_recovery_k8s() {
 		exit 1
 	fi
 	check_recovery_k8s_workload "${workload_model}"
+	if [[ -n ${secondary_model:-} ]]; then
+		check_recovery_k8s_workload "${secondary_model}"
+	fi
 	juju switch controller
 
 	juju create-backup --filename "${TEST_DIR}/after-recovery-k8s.tar.gz" >/dev/null
 	destroy_recovery_k8s_model "${workload_model}"
+	if [[ -n ${secondary_model:-} ]]; then
+		destroy_recovery_k8s_model "${secondary_model}"
+	fi
 }

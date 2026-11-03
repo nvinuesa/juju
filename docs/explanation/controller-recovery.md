@@ -19,9 +19,9 @@ architecture, volume capacity and storage class, and Service exposure. Recovery
 reuses those references; eligible nodes must be able to pull the images or have
 them preloaded. Tags can change, so retain the original image or use a digest
 for immutable selection. The running agent must match the exact archived
-version, including its build number. All workload models must use the controller's
-archived cloud, provider family and region in this build. Cross-cloud workload
-recovery is not available yet.
+version, including its build number. Workload models are checked against their
+own clusters and credentials. Only the hosting cluster is checked for controller
+fencing.
 
 The client provisions the replacement, transfers the archive and starts its
 agent with recovery selected. The agent initialises Dqlite, imports the databases

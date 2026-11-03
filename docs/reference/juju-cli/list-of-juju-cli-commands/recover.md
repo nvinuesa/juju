@@ -35,8 +35,8 @@ the exact archived version, including its build number.
 
 Fence the source controller before recovery. If its name is registered on this
 client, run juju unregister first. Kubernetes recovery requires the original
-cluster and surviving workload namespaces. All workload models must use the
-controller's archived cloud, provider family and region in this build.
+cluster and surviving workload namespaces. Each workload model is checked on
+its own archived cluster before the replacement is created.
 
 The archive and its assertion file are given explicitly. The unsigned
 assertion, the "&lt;archive&gt;.assert" file written by create-backup, supplies
