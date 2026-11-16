@@ -24,6 +24,7 @@ import (
 	"github.com/juju/juju/core/base"
 	"github.com/juju/juju/core/constraints"
 	coreerrors "github.com/juju/juju/core/errors"
+	"github.com/juju/juju/core/instance"
 	"github.com/juju/juju/core/semversion"
 	jujuversion "github.com/juju/juju/core/version"
 	"github.com/juju/juju/domain/recovery"
@@ -51,10 +52,55 @@ type recoveryK8sBroker interface {
 	Namespace() string
 }
 
+// recoveryConfigs builds the controller and controller-model
+// configuration for a replacement controller from the recovery archive.
+// The archived identity and CA material are preserved so that surviving
+// agents keep trusting the replacement controller. Archived controller
+// settings are only honoured for keys the controller config schema knows;
+// persisted rows are strings, so each value is coerced to its schema type.
+func recoveryConfigs(info *recovery.ArchiveInfo) (controller.Config, *config.Config, error) {
+	fields, _, err := controller.ConfigSchema.ValidationSchema()
+	if err != nil {
+		return nil, nil, errors.Capture(err)
+	}
+	controllerAttrs := make(map[string]any)
+	for key, value := range info.ControllerConfig {
+		field, ok := fields[key]
+		if !ok {
+			continue
+		}
+		coerced, err := field.Coerce(value, []string{key})
+		if err != nil {
+			return nil, nil, errors.Capture(err)
+		}
+		controllerAttrs[key] = coerced
+	}
+	controllerAttrs[controller.ControllerName] = info.ControllerName
+	controllerConfig, err := controller.NewConfig(
+		info.ControllerUUID,
+		info.CACert,
+		controllerAttrs,
+	)
+	if err != nil {
+		return nil, nil, errors.Capture(err)
+	}
+	modelConfig, err := config.New(config.UseDefaults, map[string]any{
+		"name":                 bootstrap.ControllerModelName,
+		"type":                 info.CloudType,
+		config.UUIDKey:         info.ControllerModelUUID,
+		config.AgentVersionKey: info.AgentVersion.String(),
+	})
+	if err != nil {
+		return nil, nil, errors.Capture(err)
+	}
+	return controllerConfig, modelConfig, nil
+}
+
 // provisionRecovery installs and starts a replacement controller agent
 // from the recovery archive, through the ordinary bootstrap allocation
 // pipeline, and deliberately stops before initialising its database.
 func provisionRecovery(
+	command *recoveryCommand,
 	ctx *cmd.Context,
 	store jujuclient.ClientStore,
 	archivePath string,
@@ -210,14 +256,63 @@ func provisionRecovery(
 		SHA256: builtAgent.Sha256Hash,
 		Size:   builtAgent.Size,
 	}}
+
+	// Record the controller before starting its agent: the first API
+	// connection needs the archived identity and CA written here. A
+	// failed attempt must not leave that record behind.
+	recovered := false
+	if err := preparation.RegisterController(store, info.ControllerName); err != nil {
+		return errors.Capture(err)
+	}
+	defer func() {
+		if recovered {
+			return
+		}
+		if err := store.RemoveController(info.ControllerName); err != nil {
+			logger.Warningf(ctx, "could not remove recovery controller record %q: %v", info.ControllerName, err)
+		}
+	}()
+
 	started, err := bootstrap.RecoverIAAS(provisionCtx, preparation.Environ, iaasParams)
 	if err != nil {
 		return errors.Capture(err)
 	}
-	return errors.Errorf(
-		"controller recovery finalisation is not available in this build; imported recovery archive on instance %s",
-		started,
-	)
+
+	lister, ok := preparation.Environ.(environs.InstanceLister)
+	if !ok {
+		return errors.Errorf("recovery provider %T cannot list instances", preparation.Environ)
+	}
+	found, err := lister.Instances(stdCtx, []instance.Id{started})
+	if err != nil {
+		return errors.Capture(err)
+	}
+	if len(found) != 1 || found[0] == nil {
+		return errors.Errorf(
+			"recovery provisioning returned no usable replacement instance for %q", started)
+	}
+	addresses, err := found[0].Addresses(stdCtx)
+	if err != nil {
+		return errors.Capture(err)
+	}
+	if err := saveControllerConnection(stdCtx, store, info.ControllerName,
+		preparation.Environ, controllerConfig, info.AgentVersion.String(), addresses); err != nil {
+		return errors.Capture(err)
+	}
+	if err := store.SetCurrentController(info.ControllerName); err != nil {
+		return errors.Capture(err)
+	}
+	if err := command.SetModelIdentifier(
+		modelcmd.JoinModelName(info.ControllerName, bootstrap.ControllerModelName), false,
+	); err != nil {
+		return errors.Capture(err)
+	}
+	if err := common.WaitForAgentInitialisation(
+		provisionCtx, &command.ModelCommandBase, false, info.ControllerName, common.TryAPI,
+	); err != nil {
+		return errors.Capture(err)
+	}
+	recovered = true
+	return nil
 }
 
 // recoveryParamsFromArchive prepares the machine-specific inputs before cloud
@@ -302,30 +397,4 @@ func recoveryCredentials(ctx *cmd.Context, store jujuclient.ClientStore, info *r
 	}
 	spec.IsControllerCloud = true
 	return &recoveryTarget{cloud: *cloud, spec: spec, credentialName: name}, nil
-}
-
-// recoveryConfigs preserves the archived controller identity and CA so that
-// surviving agents can trust the replacement controller.
-func recoveryConfigs(info *recovery.ArchiveInfo) (controller.Config, *config.Config, error) {
-	controllerConfig, err := controller.NewConfig(
-		info.ControllerUUID,
-		info.CACert,
-		map[string]any{controller.ControllerName: info.ControllerName},
-	)
-	if err != nil {
-		return nil, nil, errors.Capture(err)
-	}
-	// TODO(recovery): reconcile archived settings instead of relying on
-	// allocation defaults when restoring the controller model. The local
-	// bootstrap name is conventional; the archived UUID identifies the model.
-	modelConfig, err := config.New(config.UseDefaults, map[string]any{
-		"name":                 bootstrap.ControllerModelName,
-		"type":                 info.CloudType,
-		config.UUIDKey:         info.ControllerModelUUID,
-		config.AgentVersionKey: info.AgentVersion.String(),
-	})
-	if err != nil {
-		return nil, nil, errors.Capture(err)
-	}
-	return controllerConfig, modelConfig, nil
 }

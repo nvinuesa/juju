@@ -658,28 +658,31 @@ func (a *MachineAgent) Run(ctx *cmd.Context) (err error) {
 	return cmdutil.AgentDone(logger, err)
 }
 
-func validateRecoveryEngineStart(dataDir string) error {
+func validateRecoveryEngineStart(dataDir string, isCaasAgent bool) (bool, error) {
 	isRecovery, err := internalrecovery.IsRecovery(dataDir)
 	if err != nil {
-		return errors.Capture(err)
+		return false, errors.Capture(err)
 	}
 	if !isRecovery {
-		return nil
+		return false, nil
 	}
 	params, err := internalrecovery.ReadParams(dataDir)
 	if err != nil {
-		return errors.Capture(err)
+		return false, errors.Capture(err)
 	}
 	initialised, err := internalrecovery.HasMarker(
 		dataDir, internalrecovery.InitialisedFile, params.SHA256,
 	)
 	if err != nil {
-		return errors.Capture(err)
+		return false, errors.Capture(err)
 	}
 	if !initialised {
-		return errors.New("recovery import has not completed")
+		return false, errors.New("recovery import has not completed")
 	}
-	return errors.New("recovery finalisation is not available in this build")
+	if isCaasAgent {
+		return false, errors.New("recovery finalisation is not available in this build")
+	}
+	return true, nil
 }
 
 func (a *MachineAgent) makeEngineCreator(
@@ -690,8 +693,9 @@ func (a *MachineAgent) makeEngineCreator(
 ) func(context.Context) (worker.Worker, error) {
 	return func(ctx context.Context) (worker.Worker, error) {
 		agentConfig := a.CurrentConfig()
-		if err := validateRecoveryEngineStart(agentConfig.DataDir()); err != nil {
-			logger.Errorf(ctx, "recovery import has not completed")
+		isRecovery, err := validateRecoveryEngineStart(agentConfig.DataDir(), a.isCaasAgent)
+		if err != nil {
+			logger.Errorf(ctx, "recovery engine start blocked: %v", err)
 			return nil, errors.Capture(err)
 		}
 		engineConfigFunc := agentengine.DependencyEngineConfig
@@ -732,6 +736,7 @@ func (a *MachineAgent) makeEngineCreator(
 			ConfigChangeSocketPath:            path.Join(agentConfig.DataDir(), "configchange.socket"),
 			ControlSocketPath:                 path.Join(agentConfig.DataDir(), "control.socket"),
 			DataDir:                           agentConfig.DataDir(),
+			IsRecovery:                        isRecovery,
 			APIPort:                           bootstrapAPIPort,
 			AgentPassword:                     bootstrapAgentPassword,
 			Agent:                             agent.APIHostPortsSetter{Agent: a},

@@ -111,6 +111,7 @@ import (
 	"github.com/juju/juju/internal/worker/proxyupdater"
 	"github.com/juju/juju/internal/worker/querylogger"
 	"github.com/juju/juju/internal/worker/reboot"
+	"github.com/juju/juju/internal/worker/recovery"
 	"github.com/juju/juju/internal/worker/secretbackendrotate"
 	"github.com/juju/juju/internal/worker/singular"
 	"github.com/juju/juju/internal/worker/sshkeyupdater"
@@ -182,6 +183,12 @@ type ManifoldsConfig struct {
 
 	// DataDir is the agent data directory used by bootstrap.
 	DataDir string
+
+	// IsRecovery reports that this agent runs a recovered controller. It is
+	// provisioned provenance read from the data directory, not a mutable
+	// database flag: bootstrap and recovery manifolds are mutually
+	// exclusive.
+	IsRecovery bool
 
 	// APIPort is the controller API port advertised during bootstrap.
 	APIPort int
@@ -392,6 +399,19 @@ func commonManifolds(config ManifoldsConfig) dependency.Manifolds {
 		// The agent manifold references the enclosing agent, and is the
 		// foundation stone on which most other manifolds ultimately depend.
 		agentName: agent.Manifold(config.Agent),
+
+		// Recovery is provisioned provenance, not a mutable database flag.
+		isRecoveryFlagName:    staticFlagManifold(config.IsRecovery),
+		isNotRecoveryFlagName: staticFlagManifold(!config.IsRecovery),
+		recoveryName: ifRecovery(ifControllerProxyReady(ifDatabaseUpgradeComplete(recovery.Manifold(recovery.ManifoldConfig{
+			GateName:            isBootstrapGateName,
+			DomainServicesName:  domainServicesName,
+			ProviderFactoryName: providerTrackerName,
+			DataDir:             config.DataDir,
+			APIPort:             config.APIPort,
+			AgentPassword:       config.AgentPassword,
+			ControllerID:        config.ControllerID,
+		})))),
 
 		// The upgrade database gate is used to coordinate workers that should
 		// not do anything until the upgrade-database worker has finished
@@ -1209,7 +1229,7 @@ func commonManifolds(config ManifoldsConfig) dependency.Manifolds {
 func IAASManifolds(config ManifoldsConfig) dependency.Manifolds {
 	manifolds := dependency.Manifolds{
 		// Bootstrap worker is responsible for setting up the initial machine.
-		bootstrapName: ifControllerProxyReady(ifDatabaseUpgradeComplete(bootstrap.Manifold(bootstrap.ManifoldConfig{
+		bootstrapName: ifNotRecovery(ifControllerProxyReady(ifDatabaseUpgradeComplete(bootstrap.Manifold(bootstrap.ManifoldConfig{
 			DomainServicesName:      domainServicesName,
 			HTTPClientName:          httpClientName,
 			BootstrapGateName:       isBootstrapGateName,
@@ -1230,7 +1250,7 @@ func IAASManifolds(config ManifoldsConfig) dependency.Manifolds {
 			BootstrapAddressFinderGetter:  bootstrap.IAASAddressFinder,
 			AgentFinalizer:                bootstrap.IAASAgentFinalizer,
 			RemoveBootstrapSSHKeys:        bootstrap.DeleteBootstrapSSHKeys,
-		}))),
+		})))),
 
 		// The controller proxy config updater uses local domain services
 		// instead of calling back through the controller API server.
@@ -1467,7 +1487,7 @@ func IAASManifolds(config ManifoldsConfig) dependency.Manifolds {
 func K8sManifolds(config ManifoldsConfig) dependency.Manifolds {
 	return mergeManifolds(config, dependency.Manifolds{
 		// Bootstrap worker is responsible for setting up the initial machine.
-		bootstrapName: ifControllerProxyReady(ifDatabaseUpgradeComplete(bootstrap.Manifold(bootstrap.ManifoldConfig{
+		bootstrapName: ifNotRecovery(ifControllerProxyReady(ifDatabaseUpgradeComplete(bootstrap.Manifold(bootstrap.ManifoldConfig{
 			DomainServicesName:      domainServicesName,
 			HTTPClientName:          httpClientName,
 			BootstrapGateName:       isBootstrapGateName,
@@ -1488,7 +1508,7 @@ func K8sManifolds(config ManifoldsConfig) dependency.Manifolds {
 			BootstrapAddressFinderGetter:  bootstrap.K8sAddressFinder,
 			AgentFinalizer:                bootstrap.K8sAgentFinalizer,
 			RemoveBootstrapSSHKeys:        func([]string) error { return nil },
-		}))),
+		})))),
 
 		// The controller proxy config updater uses local domain services
 		// instead of calling back through the controller API server.
@@ -1670,6 +1690,19 @@ var ifDatabaseUpgradeComplete = engine.Housing{
 	},
 }.Decorate
 
+// Keep selection outermost so a disabled operation acquires no dependencies.
+var ifRecovery = engine.Housing{Flags: []string{isRecoveryFlagName}}.Decorate
+var ifNotRecovery = engine.Housing{Flags: []string{isNotRecoveryFlagName}}.Decorate
+
+func staticFlagManifold(value bool) dependency.Manifold {
+	return dependency.Manifold{
+		Start: func(context.Context, dependency.Getter) (worker.Worker, error) {
+			return engine.NewStaticFlagWorker(value), nil
+		},
+		Output: engine.FlagOutput,
+	}
+}
+
 var ifControllerProxyReady = engine.Housing{
 	Flags: []string{
 		controllerProxyReadyFlagName,
@@ -1719,6 +1752,10 @@ const (
 	bootstrapName       = "bootstrap"
 	isBootstrapGateName = "is-bootstrap-gate"
 	isBootstrapFlagName = "is-bootstrap-flag"
+
+	recoveryName          = "recovery"
+	isRecoveryFlagName    = "is-recovery-flag"
+	isNotRecoveryFlagName = "is-not-recovery-flag"
 
 	upgradeDatabaseName     = "upgrade-database-runner"
 	upgradeDatabaseGateName = "upgrade-database-gate"

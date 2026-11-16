@@ -100,6 +100,10 @@ type ArchiveInfo struct {
 	// identity the archive recorded.
 	SystemIdentity string
 
+	// ControllerConfig holds the archived controller configuration rows.
+	// It drives the replacement controller's advisory settings.
+	ControllerConfig map[string]string
+
 	// HANodes is the number of controller nodes the source had. Recovery
 	// always produces a single-node replacement; values above one mean
 	// the remaining controller machines load as dead rows.

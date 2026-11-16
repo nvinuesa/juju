@@ -26,6 +26,7 @@ type controllerDumpPayload struct {
 	Controller []struct {
 		UUID           string  `yaml:"uuid"`
 		ModelUUID      string  `yaml:"model_uuid"`
+		APIPort        *string `yaml:"api_port"`
 		CACert         *string `yaml:"ca_cert"`
 		CAPrivateKey   *string `yaml:"ca_private_key"`
 		SystemIdentity *string `yaml:"system_identity"`
@@ -165,8 +166,10 @@ func buildArchiveInfo(ctx context.Context, logger corelogger.Logger, meta *coreb
 		ControllerUUID:      meta.Controller.UUID,
 		ControllerModelUUID: meta.Origin.Model,
 		HANodes:             meta.Controller.HANodes,
+		ControllerConfig:    make(map[string]string),
 	}
 	for _, cc := range payload.ControllerConfig {
+		info.ControllerConfig[cc.Key] = cc.Value
 		if cc.Key == controller.ControllerName {
 			info.ControllerName = cc.Value
 		}
@@ -183,6 +186,11 @@ func buildArchiveInfo(ctx context.Context, logger corelogger.Logger, meta *coreb
 	info.CAPrivateKey = *controller.CAPrivateKey
 	if controller.SystemIdentity != nil {
 		info.SystemIdentity = *controller.SystemIdentity
+	}
+	// The API port lives on the controller row, not in controller_config;
+	// the replacement keeps serving on the archived port.
+	if controller.APIPort != nil && *controller.APIPort != "" {
+		info.ControllerConfig["api-port"] = *controller.APIPort
 	}
 	if controller.ModelUUID != "" &&
 		info.ControllerModelUUID != controller.ModelUUID {

@@ -35,6 +35,10 @@ const (
 	// InitialisedFile records that the archive was fully imported and its
 	// object store verified.
 	InitialisedFile = "recovery/initialisation-complete"
+
+	// CompletedFile records that the recovered controller was finalised
+	// and ordinary workers may start.
+	CompletedFile = "recovery/completed"
 )
 
 // Params holds the recovery inputs delivered with the replacement instance.

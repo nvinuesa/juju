@@ -68,7 +68,9 @@ func (s *MachineSuite) TestIntegrationStub(c *tc.C) {
 
 func (s *MachineSuite) TestValidateRecoveryEngineStart(c *tc.C) {
 	dataDir := c.MkDir()
-	c.Assert(validateRecoveryEngineStart(dataDir), tc.ErrorIsNil)
+	isRecovery, err := validateRecoveryEngineStart(dataDir, false)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(isRecovery, tc.IsFalse)
 
 	const checksum = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	modelConfig := jujutesting.CustomModelConfig(c, jujutesting.Attrs{
@@ -91,13 +93,19 @@ func (s *MachineSuite) TestValidateRecoveryEngineStart(c *tc.C) {
 	c.Assert(os.MkdirAll(filepath.Dir(paramsPath), 0700), tc.ErrorIsNil)
 	c.Assert(os.WriteFile(paramsPath, paramsData, 0600), tc.ErrorIsNil)
 
-	err = validateRecoveryEngineStart(dataDir)
+	isRecovery, err = validateRecoveryEngineStart(dataDir, false)
 	c.Check(err, tc.ErrorMatches, "recovery import has not completed")
+	c.Check(isRecovery, tc.IsFalse)
 
 	markerPath := filepath.Join(dataDir, internalrecovery.InitialisedFile)
 	c.Assert(os.WriteFile(markerPath, []byte(checksum+"\n"), 0600), tc.ErrorIsNil)
-	err = validateRecoveryEngineStart(dataDir)
+	isRecovery, err = validateRecoveryEngineStart(dataDir, false)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(isRecovery, tc.IsTrue)
+
+	isRecovery, err = validateRecoveryEngineStart(dataDir, true)
 	c.Check(err, tc.ErrorMatches, "recovery finalisation is not available in this build")
+	c.Check(isRecovery, tc.IsFalse)
 }
 
 // rebootDispatchSuite tests the error-dispatch logic in MachineAgent.Run that

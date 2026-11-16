@@ -114,7 +114,7 @@ func (s *recoverySuite) TestRun(c *tc.C) {
 	)
 	newProvisionedCommand := func() cmd.Command {
 		return newRecoveryCommandWithProvisioner(func(
-			_ *cmd.Context, _ jujuclient.ClientStore, _ string, _ *recovery.ArchiveInfo,
+			_ *recoveryCommand, _ *cmd.Context, _ jujuclient.ClientStore, _ string, _ *recovery.ArchiveInfo,
 		) error {
 			return errors.New(terminalError)
 		})
@@ -304,7 +304,7 @@ func (s *recoverySuite) TestRunPassesArchiveInfoToProvisioner(c *tc.C) {
 	terminalErr := errors.New("recovery stopped after allocation")
 	var got *recovery.ArchiveInfo
 	command := newRecoveryCommandWithProvisioner(func(
-		_ *cmd.Context, _ jujuclient.ClientStore, _ string, info *recovery.ArchiveInfo,
+		_ *recoveryCommand, _ *cmd.Context, _ jujuclient.ClientStore, _ string, info *recovery.ArchiveInfo,
 	) error {
 		got = info
 		return terminalErr
@@ -340,7 +340,7 @@ func (s *recoverySuite) TestRunPassesKubernetesArchiveInfoToProvisioner(c *tc.C)
 	terminalErr := errors.New("recovery stopped after allocation")
 	var got *recovery.ArchiveInfo
 	command := newRecoveryCommandWithProvisioner(func(
-		_ *cmd.Context, _ jujuclient.ClientStore, _ string, info *recovery.ArchiveInfo,
+		_ *recoveryCommand, _ *cmd.Context, _ jujuclient.ClientStore, _ string, info *recovery.ArchiveInfo,
 	) error {
 		got = info
 		return terminalErr
@@ -356,6 +356,37 @@ func (s *recoverySuite) TestRunPassesKubernetesArchiveInfoToProvisioner(c *tc.C)
 	c.Check(got.CloudType, tc.Equals, "kubernetes")
 }
 
+func (s *recoverySuite) TestRunRefusesRegisteredController(c *tc.C) {
+	archive := recoveryArchive(c)
+	sum := sha256.Sum256(archive)
+	assertion := "checksum: " + corebackups.ChecksumSHA256(hex.EncodeToString(sum[:])) +
+		"\nchecksum-format: " + corebackups.ChecksumFormatSHA256 + "\n"
+
+	dir := c.MkDir()
+	c.Assert(os.WriteFile(filepath.Join(dir, "backup.tar.gz"), archive, 0o600), tc.ErrorIsNil)
+	c.Assert(os.WriteFile(filepath.Join(dir, "backup.assert"), []byte(assertion), 0o600), tc.ErrorIsNil)
+
+	store := jujuclient.NewMemStore()
+	c.Assert(store.AddController("source-ctrl", jujuclient.ControllerDetails{
+		ControllerUUID: "c0ffee00-1111-2222-3333-444455556666",
+	}), tc.ErrorIsNil)
+	command := &recoveryCommand{provision: func(
+		*recoveryCommand, *cmd.Context, jujuclient.ClientStore, string, *recovery.ArchiveInfo,
+	) error {
+		c.Fatal("provisioner ran for an already registered controller")
+		return nil
+	}}
+	command.CanClearCurrentModel = true
+	command.SetClientStore(store)
+	wrapped := modelcmd.Wrap(command, modelcmd.WrapSkipModelFlags, modelcmd.WrapSkipDefaultModel)
+
+	_, err := cmdtesting.RunCommandInDir(
+		c, wrapped, []string{"backup.tar.gz", "backup.assert"}, dir,
+	)
+	c.Check(err, tc.ErrorMatches,
+		`controller "source-ctrl" is already registered locally; run 'juju unregister source-ctrl' before recovering`)
+}
+
 // TestRecoveryConfigs checks that the replacement controller and
 // controller-model configuration are built from the archived identity,
 // CA material and agent version, with the controller model named after
@@ -368,6 +399,10 @@ func (s *recoverySuite) TestRecoveryConfigs(c *tc.C) {
 		CACert:              coretesting.CACert,
 		AgentVersion:        semversion.MustParse("4.1.0"),
 		CloudType:           "lxd",
+		ControllerConfig: map[string]string{
+			"api-port":  "17071",
+			"unknown-x": "ignored",
+		},
 	}
 	controllerConfig, modelConfig, err := recoveryConfigs(info)
 	c.Assert(err, tc.ErrorIsNil)
@@ -377,6 +412,7 @@ func (s *recoverySuite) TestRecoveryConfigs(c *tc.C) {
 	c.Check(ok, tc.IsTrue)
 	c.Check(caCert, tc.Equals, coretesting.CACert)
 	c.Check(controllerConfig.ControllerName(), tc.Equals, info.ControllerName)
+	c.Check(controllerConfig.APIPort(), tc.Equals, 17071)
 
 	c.Check(modelConfig.Name(), tc.Equals, bootstrap.ControllerModelName)
 	c.Check(modelConfig.Type(), tc.Equals, info.CloudType)
@@ -391,7 +427,7 @@ func (s *recoverySuite) TestRecoveryConfigs(c *tc.C) {
 // cloud access.
 func (s *recoverySuite) TestProvisionRecoveryRequiresSourceBase(c *tc.C) {
 	for _, sourceBase := range []string{"", "not-a-base"} {
-		err := provisionRecovery(cmdtesting.Context(c), nil, "", &recovery.ArchiveInfo{
+		err := provisionRecovery(nil, cmdtesting.Context(c), nil, "", &recovery.ArchiveInfo{
 			CloudType:    "lxd",
 			AgentVersion: version.Current,
 			SourceBase:   sourceBase,
@@ -407,7 +443,7 @@ func (s *recoverySuite) TestProvisionRecoveryRequiresSourceBase(c *tc.C) {
 // provisions from the bootstrap client's host architecture.
 func (s *recoverySuite) TestProvisionRecoveryRequiresSourceArch(c *tc.C) {
 	for _, sourceArch := range []string{"", "not-an-arch"} {
-		err := provisionRecovery(cmdtesting.Context(c), nil, "", &recovery.ArchiveInfo{
+		err := provisionRecovery(nil, cmdtesting.Context(c), nil, "", &recovery.ArchiveInfo{
 			CloudType:    "lxd",
 			AgentVersion: version.Current,
 			SourceBase:   "ubuntu@24.04",
@@ -448,7 +484,7 @@ func (s *recoverySuite) TestAllocationTargetFromArchive(c *tc.C) {
 // Kubernetes archive which does not record the source controller name
 // is rejected before any cloud access.
 func (s *recoverySuite) TestProvisionRecoveryRequiresKubernetesControllerName(c *tc.C) {
-	err := provisionRecovery(cmdtesting.Context(c), nil, "", &recovery.ArchiveInfo{
+	err := provisionRecovery(nil, cmdtesting.Context(c), nil, "", &recovery.ArchiveInfo{
 		CloudType: "kubernetes",
 	})
 	c.Check(err, tc.ErrorMatches, "recovery archive does not record the source controller name")
@@ -460,7 +496,7 @@ func (s *recoverySuite) TestProvisionRecoveryRequiresKubernetesControllerName(c 
 func (s *recoverySuite) TestProvisionRecoveryRequiresMatchingAgentVersion(c *tc.C) {
 	other := version.Current
 	other.Patch++
-	err := provisionRecovery(cmdtesting.Context(c), nil, "", &recovery.ArchiveInfo{
+	err := provisionRecovery(nil, cmdtesting.Context(c), nil, "", &recovery.ArchiveInfo{
 		CloudType:    "lxd",
 		AgentVersion: other,
 		SourceBase:   "ubuntu@24.04",
@@ -473,7 +509,7 @@ func (s *recoverySuite) TestProvisionRecoveryRequiresMatchingAgentVersion(c *tc.
 // archive which does not record the source controller machine is rejected
 // before any cloud access.
 func (s *recoverySuite) TestProvisionRecoveryRequiresIAASMachineName(c *tc.C) {
-	err := provisionRecovery(cmdtesting.Context(c), nil, "", &recovery.ArchiveInfo{
+	err := provisionRecovery(nil, cmdtesting.Context(c), nil, "", &recovery.ArchiveInfo{
 		CloudType:    "lxd",
 		AgentVersion: version.Current,
 		SourceBase:   "ubuntu@24.04",
@@ -506,11 +542,11 @@ func (s *recoverySuite) TestProvisionRecoveryFinalizesKubernetesCloudHostRegion(
 		CloudName:      "myk8s",
 		CloudType:      jujucloud.CloudTypeKubernetes,
 	}
-	err := provisionRecovery(cmdtesting.Context(c), jujuclient.NewMemStore(), "", info)
+	err := provisionRecovery(nil, cmdtesting.Context(c), jujuclient.NewMemStore(), "", info)
 	c.Check(err, tc.ErrorMatches, "recovery cloud does not record a host cloud region.*")
 
 	hostRegion = "microk8s/localhost"
-	err = provisionRecovery(cmdtesting.Context(c), jujuclient.NewMemStore(), "", info)
+	err = provisionRecovery(nil, cmdtesting.Context(c), jujuclient.NewMemStore(), "", info)
 	c.Check(err, tc.ErrorMatches, ".*no credentials.*|.*credentials.*")
 }
 
