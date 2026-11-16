@@ -48,6 +48,7 @@ func (s *validateSuite) TestValidateArchive(c *tc.C) {
 	c.Check(info.HANodes, tc.Equals, int64(3))
 	c.Check(info.CACert, tc.Equals, "source-ca-cert")
 	c.Check(info.CAPrivateKey, tc.Equals, "source-ca-key")
+	c.Check(info.SystemIdentity, tc.Equals, "source-system-identity")
 	c.Check(info.CloudName, tc.Equals, "lxd")
 	c.Check(info.CloudType, tc.Equals, "lxd")
 	c.Check(info.Checksum, tc.Equals, sum)

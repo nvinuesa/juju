@@ -57,6 +57,7 @@ type recoveryK8sBroker interface {
 func provisionRecovery(
 	ctx *cmd.Context,
 	store jujuclient.ClientStore,
+	archivePath string,
 	info *recovery.ArchiveInfo,
 ) error {
 	isK8s := jujucloud.CloudTypeIsCAAS(info.CloudType)
@@ -193,6 +194,9 @@ func provisionRecovery(
 	commonBootstrap.DialOpts.RetryDelay = 5 * time.Second
 	commonBootstrap.DialOpts.AddressesDelay = 5 * time.Second
 	iaasParams.BootstrapParams = commonBootstrap
+	iaasParams.ArchivePath = archivePath
+	iaasParams.ArchiveSHA256 = info.Checksum
+	iaasParams.SystemIdentity = info.SystemIdentity
 	iaasParams.MachineId = info.MachineName
 	iaasParams.AvailableTools = tools.List{&tools.Tools{
 		Version: semversion.Binary{
@@ -209,7 +213,7 @@ func provisionRecovery(
 		return errors.Capture(err)
 	}
 	return errors.Errorf(
-		"controller recovery database import is not available in this build; started replacement agent on instance %s",
+		"controller recovery database import is not available in this build; initialised replacement database on instance %s",
 		started,
 	)
 }

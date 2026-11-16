@@ -42,6 +42,7 @@ import (
 	internalerrors "github.com/juju/juju/internal/errors"
 	internallogger "github.com/juju/juju/internal/logger"
 	pkissh "github.com/juju/juju/internal/pki/ssh"
+	internalrecovery "github.com/juju/juju/internal/recovery"
 	jujussh "github.com/juju/juju/internal/ssh"
 	"github.com/juju/juju/internal/storage"
 	coretools "github.com/juju/juju/internal/tools"
@@ -464,7 +465,89 @@ var FinishBootstrap = func(
 	}
 	defer cleanup()
 
+	if err := uploadRecoveryArchiveIfRequired(ctx, client, addr, instanceConfig, sshOptions); err != nil {
+		return errors.Trace(err)
+	}
+
 	return ConfigureMachine(ctx, client, addr, instanceConfig, sshOptions)
+}
+
+// uploadRecoveryArchiveIfRequired copies the recovery archive to the
+// replacement instance before its cloud-config runs.
+func uploadRecoveryArchiveIfRequired(
+	ctx environs.BootstrapContext,
+	client ssh.Client,
+	host string,
+	instanceConfig *instancecfg.InstanceConfig,
+	sshOptions *ssh.Options,
+) error {
+	if instanceConfig.Bootstrap == nil || !instanceConfig.Bootstrap.RecoveryMode {
+		return nil
+	}
+	if instanceConfig.Bootstrap.RecoveryArchivePath == "" {
+		return nil
+	}
+	return uploadRecoveryArchive(ctx, client, host, instanceConfig, sshOptions)
+}
+
+// uploadRecoveryArchive stages the local archive on the replacement
+// instance, verifies its digest there and only then moves it into place.
+// A partial or corrupted upload can never reach recover-state.
+func uploadRecoveryArchive(
+	ctx environs.BootstrapContext,
+	client ssh.Client,
+	host string,
+	instanceConfig *instancecfg.InstanceConfig,
+	sshOptions *ssh.Options,
+) error {
+	hostName := "ubuntu@" + host
+	runScript := func(script string) (string, error) {
+		cmd := client.Command(hostName, []string{"/bin/bash"}, sshOptions)
+		cmd.Stdin = strings.NewReader(script)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return "", errors.Errorf("%s: %v", strings.TrimSpace(string(output)), err)
+		}
+		return strings.TrimSpace(string(output)), nil
+	}
+
+	stagingDir, err := runScript("mktemp -d /tmp/juju-recovery.XXXXXX")
+	if err != nil {
+		return errors.Annotate(err, "creating recovery staging directory")
+	}
+	defer func() {
+		if _, err := runScript("rm -rf " + utils.ShQuote(stagingDir)); err != nil {
+			ctx.Verbosef("could not remove recovery staging directory %s: %v", stagingDir, err)
+		}
+	}()
+
+	staged := path.Join(stagingDir, "archive.tar.gz")
+	if err := client.Copy(
+		[]string{instanceConfig.Bootstrap.RecoveryArchivePath, hostName + ":" + staged},
+		sshOptions,
+	); err != nil {
+		return errors.Annotate(err, "copying recovery archive")
+	}
+	checksum, err := runScript("sha256sum " + utils.ShQuote(staged) + " | cut -d' ' -f1")
+	if err != nil {
+		return errors.Annotate(err, "checksumming recovery archive")
+	}
+	expected := strings.TrimPrefix(instanceConfig.Bootstrap.RecoveryArchiveSHA256, "sha256-")
+	if !strings.EqualFold(checksum, expected) {
+		return errors.Errorf(
+			"recovery archive checksum %q does not match expected %q", checksum, expected)
+	}
+
+	destination := path.Join(instanceConfig.DataDir, internalrecovery.ArchiveFile)
+	partial := destination + ".partial"
+	if _, err := runScript(fmt.Sprintf(
+		"sudo install -D -m 0600 %s %s && sudo mv -f %s %s",
+		utils.ShQuote(staged), utils.ShQuote(partial), utils.ShQuote(partial), utils.ShQuote(destination),
+	)); err != nil {
+		return errors.Annotate(err, "installing recovery archive")
+	}
+	ctx.Infof("Uploaded recovery archive to %s", host)
+	return nil
 }
 
 func GetCheckNonceCommand(instanceConfig *instancecfg.InstanceConfig) string {

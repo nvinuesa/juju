@@ -110,11 +110,11 @@ func (s *recoverySuite) TestRun(c *tc.C) {
 		archiveName   = "backup.tar.gz"
 		assertionName = "backup.assert"
 		terminalError = "controller recovery database import is not available in this build; " +
-			"started replacement agent on instance test-instance"
+			"initialised replacement database on instance test-instance"
 	)
 	newProvisionedCommand := func() cmd.Command {
 		return newRecoveryCommandWithProvisioner(func(
-			_ *cmd.Context, _ jujuclient.ClientStore, _ *recovery.ArchiveInfo,
+			_ *cmd.Context, _ jujuclient.ClientStore, _ string, _ *recovery.ArchiveInfo,
 		) error {
 			return errors.New(terminalError)
 		})
@@ -304,7 +304,7 @@ func (s *recoverySuite) TestRunPassesArchiveInfoToProvisioner(c *tc.C) {
 	terminalErr := errors.New("recovery stopped after allocation")
 	var got *recovery.ArchiveInfo
 	command := newRecoveryCommandWithProvisioner(func(
-		_ *cmd.Context, _ jujuclient.ClientStore, info *recovery.ArchiveInfo,
+		_ *cmd.Context, _ jujuclient.ClientStore, _ string, info *recovery.ArchiveInfo,
 	) error {
 		got = info
 		return terminalErr
@@ -340,7 +340,7 @@ func (s *recoverySuite) TestRunPassesKubernetesArchiveInfoToProvisioner(c *tc.C)
 	terminalErr := errors.New("recovery stopped after allocation")
 	var got *recovery.ArchiveInfo
 	command := newRecoveryCommandWithProvisioner(func(
-		_ *cmd.Context, _ jujuclient.ClientStore, info *recovery.ArchiveInfo,
+		_ *cmd.Context, _ jujuclient.ClientStore, _ string, info *recovery.ArchiveInfo,
 	) error {
 		got = info
 		return terminalErr
@@ -391,7 +391,7 @@ func (s *recoverySuite) TestRecoveryConfigs(c *tc.C) {
 // cloud access.
 func (s *recoverySuite) TestProvisionRecoveryRequiresSourceBase(c *tc.C) {
 	for _, sourceBase := range []string{"", "not-a-base"} {
-		err := provisionRecovery(cmdtesting.Context(c), nil, &recovery.ArchiveInfo{
+		err := provisionRecovery(cmdtesting.Context(c), nil, "", &recovery.ArchiveInfo{
 			CloudType:    "lxd",
 			AgentVersion: version.Current,
 			SourceBase:   sourceBase,
@@ -407,7 +407,7 @@ func (s *recoverySuite) TestProvisionRecoveryRequiresSourceBase(c *tc.C) {
 // provisions from the bootstrap client's host architecture.
 func (s *recoverySuite) TestProvisionRecoveryRequiresSourceArch(c *tc.C) {
 	for _, sourceArch := range []string{"", "not-an-arch"} {
-		err := provisionRecovery(cmdtesting.Context(c), nil, &recovery.ArchiveInfo{
+		err := provisionRecovery(cmdtesting.Context(c), nil, "", &recovery.ArchiveInfo{
 			CloudType:    "lxd",
 			AgentVersion: version.Current,
 			SourceBase:   "ubuntu@24.04",
@@ -448,7 +448,7 @@ func (s *recoverySuite) TestAllocationTargetFromArchive(c *tc.C) {
 // Kubernetes archive which does not record the source controller name
 // is rejected before any cloud access.
 func (s *recoverySuite) TestProvisionRecoveryRequiresKubernetesControllerName(c *tc.C) {
-	err := provisionRecovery(cmdtesting.Context(c), nil, &recovery.ArchiveInfo{
+	err := provisionRecovery(cmdtesting.Context(c), nil, "", &recovery.ArchiveInfo{
 		CloudType: "kubernetes",
 	})
 	c.Check(err, tc.ErrorMatches, "recovery archive does not record the source controller name")
@@ -460,7 +460,7 @@ func (s *recoverySuite) TestProvisionRecoveryRequiresKubernetesControllerName(c 
 func (s *recoverySuite) TestProvisionRecoveryRequiresMatchingAgentVersion(c *tc.C) {
 	other := version.Current
 	other.Patch++
-	err := provisionRecovery(cmdtesting.Context(c), nil, &recovery.ArchiveInfo{
+	err := provisionRecovery(cmdtesting.Context(c), nil, "", &recovery.ArchiveInfo{
 		CloudType:    "lxd",
 		AgentVersion: other,
 		SourceBase:   "ubuntu@24.04",
@@ -473,7 +473,7 @@ func (s *recoverySuite) TestProvisionRecoveryRequiresMatchingAgentVersion(c *tc.
 // archive which does not record the source controller machine is rejected
 // before any cloud access.
 func (s *recoverySuite) TestProvisionRecoveryRequiresIAASMachineName(c *tc.C) {
-	err := provisionRecovery(cmdtesting.Context(c), nil, &recovery.ArchiveInfo{
+	err := provisionRecovery(cmdtesting.Context(c), nil, "", &recovery.ArchiveInfo{
 		CloudType:    "lxd",
 		AgentVersion: version.Current,
 		SourceBase:   "ubuntu@24.04",
@@ -506,11 +506,11 @@ func (s *recoverySuite) TestProvisionRecoveryFinalizesKubernetesCloudHostRegion(
 		CloudName:      "myk8s",
 		CloudType:      jujucloud.CloudTypeKubernetes,
 	}
-	err := provisionRecovery(cmdtesting.Context(c), jujuclient.NewMemStore(), info)
+	err := provisionRecovery(cmdtesting.Context(c), jujuclient.NewMemStore(), "", info)
 	c.Check(err, tc.ErrorMatches, "recovery cloud does not record a host cloud region.*")
 
 	hostRegion = "microk8s/localhost"
-	err = provisionRecovery(cmdtesting.Context(c), jujuclient.NewMemStore(), info)
+	err = provisionRecovery(cmdtesting.Context(c), jujuclient.NewMemStore(), "", info)
 	c.Check(err, tc.ErrorMatches, ".*no credentials.*|.*credentials.*")
 }
 

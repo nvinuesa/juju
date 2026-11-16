@@ -28,6 +28,17 @@ type IAASRecoveryParams struct {
 	// AvailableTools is the exact archived agent set for machine recovery.
 	// It bypasses packaged-tool discovery and local tool building.
 	AvailableTools coretools.List
+
+	// ArchivePath is the local path of the verified recovery archive.
+	ArchivePath string
+
+	// ArchiveSHA256 is the archive's hex SHA-256 digest, verified again on
+	// the replacement instance.
+	ArchiveSHA256 string
+
+	// SystemIdentity is the archived controller agent's private SSH
+	// identity, preserved on the replacement.
+	SystemIdentity string
 }
 
 // Validate validates the machine recovery parameters, including the shared
@@ -41,6 +52,12 @@ func (p IAASRecoveryParams) Validate() error {
 	}
 	if !names.IsValidMachine(p.MachineId) {
 		return errors.Errorf("recovery machine ID %q %w", p.MachineId, coreerrors.NotValid)
+	}
+	if p.ArchivePath == "" {
+		return errors.Errorf("recovery without an archive path %w", coreerrors.NotValid)
+	}
+	if p.ArchiveSHA256 == "" {
+		return errors.Errorf("recovery without an archive checksum %w", coreerrors.NotValid)
 	}
 	if p.BootstrapBase.Empty() {
 		return errors.Errorf("recovery without a bootstrap base %w", coreerrors.NotValid)
@@ -156,6 +173,9 @@ func RecoverIAAS(
 			instanceConfig.MachineAgentServiceName = jujunames.JujuAgentd + "-" +
 				names.NewMachineTag(args.MachineId).String()
 			instanceConfig.Bootstrap.StateInitializationParams.RecoveryMode = true
+			instanceConfig.Bootstrap.ControllerAgentInfo.SystemIdentity = args.SystemIdentity
+			instanceConfig.Bootstrap.RecoveryArchivePath = args.ArchivePath
+			instanceConfig.Bootstrap.RecoveryArchiveSHA256 = args.ArchiveSHA256
 			err = result.CloudBootstrapFinalizer(ctx, instanceConfig, args.DialOpts)
 		}
 	}

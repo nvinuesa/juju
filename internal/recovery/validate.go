@@ -24,10 +24,11 @@ import (
 // full decode happens agent-side during the load stage.
 type controllerDumpPayload struct {
 	Controller []struct {
-		UUID         string  `yaml:"uuid"`
-		ModelUUID    string  `yaml:"model_uuid"`
-		CACert       *string `yaml:"ca_cert"`
-		CAPrivateKey *string `yaml:"ca_private_key"`
+		UUID           string  `yaml:"uuid"`
+		ModelUUID      string  `yaml:"model_uuid"`
+		CACert         *string `yaml:"ca_cert"`
+		CAPrivateKey   *string `yaml:"ca_private_key"`
+		SystemIdentity *string `yaml:"system_identity"`
 	} `yaml:"controller"`
 	Cloud []struct {
 		UUID        string `yaml:"uuid"`
@@ -172,6 +173,9 @@ func buildArchiveInfo(ctx context.Context, logger corelogger.Logger, meta *coreb
 	}
 	info.CACert = *controller.CACert
 	info.CAPrivateKey = *controller.CAPrivateKey
+	if controller.SystemIdentity != nil {
+		info.SystemIdentity = *controller.SystemIdentity
+	}
 	if controller.ModelUUID != "" &&
 		info.ControllerModelUUID != controller.ModelUUID {
 		return nil, errors.Errorf(

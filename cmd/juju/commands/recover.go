@@ -16,7 +16,7 @@ import (
 
 // recoveryProvisioner allocates a replacement using validated archive metadata.
 // The client store supplies credentials for the target cloud.
-type recoveryProvisioner func(*cmd.Context, jujuclient.ClientStore, *recovery.ArchiveInfo) error
+type recoveryProvisioner func(*cmd.Context, jujuclient.ClientStore, string, *recovery.ArchiveInfo) error
 
 func newRecoveryCommand() cmd.Command {
 	return newRecoveryCommandWithProvisioner(provisionRecovery)
@@ -82,7 +82,7 @@ func (c *recoveryCommand) Run(ctx *cmd.Context) error {
 	if err != nil {
 		return errors.Errorf("invalid recovery archive: %w", err)
 	}
-	return c.provision(ctx, c.ClientStore(), info)
+	return c.provision(ctx, c.ClientStore(), archivePath, info)
 }
 
 // readAssertion opens and parses the backup assertion file. Every open,

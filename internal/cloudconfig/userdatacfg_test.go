@@ -848,6 +848,23 @@ func (s *cloudinitSuite) TestCloudInitConfigureRecoveryBootstrap(c *tc.C) {
 		"Starting Juju machine agent \\(service jujuagentd-machine-0\\)", false)
 }
 
+func (s *cloudinitSuite) TestCloudInitConfigureRecoveryBootstrapWithArchive(c *tc.C) {
+	const checksum = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	envConfig := minimalModelConfig(c)
+	instConfig := makeBootstrapConfig(jammy, 0).maybeSetModelConfig(envConfig)
+	instConfig.Bootstrap.RecoveryMode = true
+	instConfig.Bootstrap.RecoveryArchivePath = "/tmp/archive.tar.gz"
+	instConfig.Bootstrap.RecoveryArchiveSHA256 = checksum
+
+	scripts := s.bootstrapConfigScriptsForConfig(c, instConfig)
+	assertScriptMatch(c, scripts, "jujuagentd recover-state .* --show-log", false)
+	assertScriptMatch(c, scripts,
+		"archive-path: /var/lib/juju/recovery/archive.tar.gz", false)
+	assertScriptMatch(c, scripts, "sha256: "+checksum, false)
+	assertScriptMatch(c, scripts, `machine-name: "0"`, false)
+	assertScriptMatch(c, scripts, "node-config: .*recovery-mode: true", false)
+}
+
 func (s *cloudinitSuite) TestCloudInitConfigureBootstrapLogging(c *tc.C) {
 	scripts := s.bootstrapConfigScripts(c)
 	expected := "jujuagentd bootstrap-state .* --show-log"

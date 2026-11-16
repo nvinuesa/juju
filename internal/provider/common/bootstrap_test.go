@@ -770,6 +770,74 @@ func (s *BootstrapSuite) TestSuccess(c *tc.C) {
 	c.Assert(strings.Split(hostKeyAlgos, ","), tc.SameContents, computedHostKeyAlgos)
 }
 
+func (s *BootstrapSuite) TestUploadRecoveryArchiveAcceptsPrefixedAndMismatchChecksum(c *tc.C) {
+	localArchive := filepath.Join(c.MkDir(), "backup.tar.gz")
+	c.Assert(os.WriteFile(localArchive, []byte("archive-bytes"), 0o600), tc.ErrorIsNil)
+
+	const digest = "a93ed2e75c922864dddbce6857353e4394ec60fd50c6a0cb1f2f131f0a10f449"
+	remoteRoot := c.MkDir()
+
+	testhelpers.PatchExecutable(c, s, "ssh", fmt.Sprintf(`#!/bin/bash --norc
+set -euo pipefail
+script="$(cat)"
+case "$script" in
+	mktemp\ -d*)
+		mktemp -d %q/juju-recovery.XXXXXX
+		;;
+	sha256sum*)
+		echo %q
+		;;
+	sudo\ install*)
+		installed="$(printf '%%s' "$script" | awk '{print $NF}' | tr -d "'")"
+		mkdir -p "$(dirname "$installed")"
+		cp %q "$installed"
+		;;
+	rm\ -rf*)
+		;;
+	*)
+		echo "unexpected script: $script" >&2
+		exit 1
+		;;
+esac
+`, remoteRoot, digest, localArchive))
+	testhelpers.PatchExecutable(c, s, "scp", `#!/bin/bash --norc
+set -euo pipefail
+src="${@: -2:1}"
+dst="${@: -1}"
+dst_path="${dst#*:}"
+cp "$src" "$dst_path"
+`)
+
+	client, err := ssh.NewOpenSSHClient()
+	c.Assert(err, tc.ErrorIsNil)
+	ctx := envtesting.BootstrapTestContext(c)
+	dataDir := filepath.Join(remoteRoot, "var", "lib", "juju")
+
+	icfg := &instancecfg.InstanceConfig{
+		DataDir: dataDir,
+		Bootstrap: &instancecfg.BootstrapConfig{
+			StateInitializationParams: instancecfg.StateInitializationParams{
+				RecoveryMode:          true,
+				RecoveryArchivePath:   localArchive,
+				RecoveryArchiveSHA256: "sha256-" + digest,
+			},
+		},
+	}
+	err = common.UploadRecoveryArchive(ctx, client, "10.134.1.133", icfg, &ssh.Options{})
+	c.Assert(err, tc.ErrorIsNil)
+	installed, err := os.ReadFile(filepath.Join(dataDir, "recovery", "archive.tar.gz"))
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(string(installed), tc.Equals, "archive-bytes")
+
+	badDir := filepath.Join(remoteRoot, "bad")
+	icfg.DataDir = badDir
+	icfg.Bootstrap.RecoveryArchiveSHA256 = "sha256-" + strings.Repeat("0", 64)
+	err = common.UploadRecoveryArchive(ctx, client, "10.134.1.133", icfg, &ssh.Options{})
+	c.Check(err, tc.ErrorMatches, `recovery archive checksum "`+digest+`" does not match expected "0{64}"`)
+	_, statErr := os.Stat(filepath.Join(badDir, "recovery", "archive.tar.gz"))
+	c.Check(os.IsNotExist(statErr), tc.IsTrue)
+}
+
 func (s *BootstrapSuite) TestBootstrapFinalizeCloudInitUserData(c *tc.C) {
 	s.PatchValue(&jujuversion.Current, coretesting.FakeVersionNumber)
 	checkHardware := instance.MustParseHardware("arch=ppc64el mem=2T")

@@ -67,6 +67,9 @@ var (
 	supportedJujuBases = append(coretesting.FakeSupportedJujuBases,
 		corebase.MustParseBaseFromString("ubuntu@18.04"),
 	)
+	recoveryArchivePath    = "/tmp/recovery.tar.gz"
+	recoveryArchiveSHA256  = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	recoverySystemIdentity = "source-system-identity"
 )
 
 type bootstrapSuite struct {
@@ -456,6 +459,9 @@ func validIAASRecoveryParams(archivedVersion semversion.Number) bootstrap.IAASRe
 			AgentVersion:            &archivedVersion,
 		},
 		MachineId:      "7",
+		ArchivePath:    recoveryArchivePath,
+		ArchiveSHA256:  recoveryArchiveSHA256,
+		SystemIdentity: recoverySystemIdentity,
 		AvailableTools: recoveryIAASTools(archivedVersion, arch.AMD64),
 	}
 }
@@ -519,6 +525,9 @@ func (s *bootstrapSuite) TestBootstrapRecoveryIAAS(c *tc.C) {
 		},
 		MachineId:      "7",
 		AvailableTools: agentTools,
+		ArchivePath:    recoveryArchivePath,
+		ArchiveSHA256:  recoveryArchiveSHA256,
+		SystemIdentity: recoverySystemIdentity,
 	})
 	c.Assert(err, tc.ErrorIsNil)
 	c.Check(id, tc.Equals, instance.Id("test-instance"))
@@ -540,6 +549,9 @@ func (s *bootstrapSuite) TestBootstrapRecoveryIAAS(c *tc.C) {
 	c.Check(env.instanceConfig.APIInfo.ModelTag.Id(), tc.Equals, env.cfg.UUID())
 	c.Check(env.instanceConfig.Bootstrap.StateInitializationParams.AgentVersion, tc.Equals, archivedVersion)
 	c.Check(env.instanceConfig.Bootstrap.StateInitializationParams.RecoveryMode, tc.IsTrue)
+	c.Check(env.instanceConfig.Bootstrap.ControllerAgentInfo.SystemIdentity, tc.Equals, recoverySystemIdentity)
+	c.Check(env.instanceConfig.Bootstrap.RecoveryArchivePath, tc.Equals, recoveryArchivePath)
+	c.Check(env.instanceConfig.Bootstrap.RecoveryArchiveSHA256, tc.Equals, recoveryArchiveSHA256)
 }
 
 func (s *bootstrapSuite) TestBootstrapRecoveryIAASResultChecks(c *tc.C) {
@@ -624,6 +636,8 @@ func (s *bootstrapSuite) TestBootstrapRecoveryIAASResultChecks(c *tc.C) {
 			},
 			MachineId:      "7",
 			AvailableTools: agentTools,
+			ArchivePath:    recoveryArchivePath,
+			ArchiveSHA256:  recoveryArchiveSHA256,
 		})
 		c.Check(id, tc.Equals, test.wantID)
 		c.Assert(err, tc.ErrorMatches, test.err)
@@ -868,6 +882,14 @@ func (s *bootstrapSuite) TestBootstrapRecoveryIAASInvalidParams(c *tc.C) {
 		name:   "invalid machine ID",
 		mutate: func(p *bootstrap.IAASRecoveryParams) { p.MachineId = "" },
 		err:    `.*recovery machine ID "" not valid`,
+	}, {
+		name:   "no archive path",
+		mutate: func(p *bootstrap.IAASRecoveryParams) { p.ArchivePath = "" },
+		err:    ".*recovery without an archive path not valid",
+	}, {
+		name:   "no archive checksum",
+		mutate: func(p *bootstrap.IAASRecoveryParams) { p.ArchiveSHA256 = "" },
+		err:    ".*recovery without an archive checksum not valid",
 	}, {
 		name:   "no base",
 		mutate: func(p *bootstrap.IAASRecoveryParams) { p.BootstrapBase = corebase.Base{} },

@@ -30,6 +30,7 @@ import (
 	"github.com/juju/juju/internal/database"
 	"github.com/juju/juju/internal/errors"
 	k8sconstants "github.com/juju/juju/internal/provider/kubernetes/constants"
+	internalrecovery "github.com/juju/juju/internal/recovery"
 	"github.com/juju/juju/internal/testhelpers"
 	jujutesting "github.com/juju/juju/internal/testing"
 )
@@ -54,16 +55,14 @@ func (s *freshControllerSuite) TestDatabaseFailureDoesNotPersistNewPassword(c *t
 	s.assertFreshController(c, false, errors.New("database failed"), false, agent.BootstrapControllerId)
 }
 
-func (s *freshControllerSuite) TestRecoverySkipsDqliteInitialisation(c *tc.C) {
-	s.assertFreshController(c, false, nil, true, agent.BootstrapControllerId)
-}
-
-// TestRecoveryUsesArchivedMachineId checks that recovery from an archive
-// written by a controller machine other than machine 0 reads the agent
-// configuration for the archived logical machine identity, while still
-// skipping BootstrapAgent and Dqlite initialisation.
-func (s *freshControllerSuite) TestRecoveryUsesArchivedMachineId(c *tc.C) {
-	s.assertFreshController(c, false, nil, true, "7")
+// TestRecoveryRequiresParamsMarker checks that a data directory without
+// provisioned recovery parameters never runs the recovery workflow.
+func (s *freshControllerSuite) TestRecoveryRequiresParamsMarker(c *tc.C) {
+	dataDir := c.MkDir()
+	command := NewRecoverCommand()
+	command.AgentConf = agentconf.NewAgentConf(dataDir)
+	err := command.Run(cmdtesting.Context(c))
+	c.Check(err, tc.ErrorMatches, "recover-state requires provisioned recovery parameters")
 }
 
 // TestRecoveryK8sController checks that the Kubernetes recovery workflow
@@ -101,6 +100,13 @@ func (s *freshControllerSuite) assertFreshController(
 	c.Assert(err, tc.ErrorIsNil)
 	err = os.WriteFile(filepath.Join(dataDir, cloudconfig.FileNameBootstrapParams), paramsData, 0600)
 	c.Assert(err, tc.ErrorIsNil)
+	if skipDqlite {
+		// Kubernetes keeps the agent-startup behaviour until it uploads
+		// its archive: an empty provenance marker with no parameters.
+		paramsPath := filepath.Join(dataDir, internalrecovery.ParamsFile)
+		c.Assert(os.MkdirAll(filepath.Dir(paramsPath), 0700), tc.ErrorIsNil)
+		c.Assert(os.WriteFile(paramsPath, nil, 0600), tc.ErrorIsNil)
+	}
 
 	cfg, err := agent.NewStateMachineConfig(agent.AgentConfigParams{
 		Paths: agent.Paths{DataDir: dataDir}, Tag: tag,

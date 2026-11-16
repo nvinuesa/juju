@@ -488,8 +488,22 @@ func (w *userdataConfig) configureBootstrap() error {
 	bootstrapSubcommand := "bootstrap-state"
 	var recoveryArgs []string
 	if w.icfg.Bootstrap.RecoveryMode {
+		paramsContents := ""
+		if w.icfg.Bootstrap.RecoveryArchivePath != "" {
+			paramsData, err := (internalrecovery.Params{
+				ArchivePath:  path.Join(w.icfg.DataDir, internalrecovery.ArchiveFile),
+				SHA256:       w.icfg.Bootstrap.RecoveryArchiveSHA256,
+				AgentVersion: w.icfg.Bootstrap.AgentVersion,
+				MachineName:  w.icfg.MachineId,
+				Node:         w.icfg.Bootstrap.StateInitializationParams,
+			}).Marshal()
+			if err != nil {
+				return errors.Errorf("marshalling recovery params: %w", err)
+			}
+			paramsContents = string(paramsData)
+		}
 		w.conf.AddRunTextFile(
-			path.Join(w.icfg.DataDir, internalrecovery.ParamsFile), "", 0600,
+			path.Join(w.icfg.DataDir, internalrecovery.ParamsFile), paramsContents, 0600,
 		)
 		bootstrapSubcommand = "recover-state"
 		recoveryArgs = []string{"--machine-id", w.icfg.MachineId}
