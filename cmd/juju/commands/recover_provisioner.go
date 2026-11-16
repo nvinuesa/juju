@@ -151,7 +151,7 @@ func provisionRecovery(
 			return errors.Capture(err)
 		}
 		return errors.Errorf(
-			"controller recovery state reconciliation is not available in this build; replayed database dumps in namespace %s",
+			"controller recovery object store unpack is not available in this build; reconciled controller state in namespace %s",
 			k8sBroker.Namespace(),
 		)
 	}
@@ -215,7 +215,7 @@ func provisionRecovery(
 		return errors.Capture(err)
 	}
 	return errors.Errorf(
-		"controller recovery state reconciliation is not available in this build; replayed database dumps on instance %s",
+		"controller recovery object store unpack is not available in this build; reconciled controller state on instance %s",
 		started,
 	)
 }

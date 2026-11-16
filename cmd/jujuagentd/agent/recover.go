@@ -21,6 +21,7 @@ import (
 	"github.com/juju/juju/environs"
 	environscloudspec "github.com/juju/juju/environs/cloudspec"
 	"github.com/juju/juju/internal/errors"
+	"github.com/juju/juju/internal/password"
 	internalrecovery "github.com/juju/juju/internal/recovery"
 )
 
@@ -163,6 +164,17 @@ func (c *RecoverCommand) initialiseRecoveryDatabase(ctx *cmd.Context, params int
 		return errors.Capture(err)
 	}
 
-	logger.Infof(ctx, "recovery database import is not available in this build; replayed archived database dumps")
+	newPassword, err := password.RandomPassword()
+	if err != nil {
+		return errors.Capture(err)
+	}
+	if err := c.ChangeConfig(func(agentConfig agent.ConfigSetter) error {
+		agentConfig.SetPassword(newPassword)
+		return nil
+	}); err != nil {
+		return errors.Errorf("cannot write agent config: %v", err)
+	}
+
+	logger.Infof(ctx, "recovery object store unpack is not available in this build; reconciled controller state")
 	return nil
 }

@@ -109,8 +109,8 @@ func (s *recoverySuite) TestRun(c *tc.C) {
 	const (
 		archiveName   = "backup.tar.gz"
 		assertionName = "backup.assert"
-		terminalError = "controller recovery state reconciliation is not available in this build; " +
-			"replayed database dumps on instance test-instance"
+		terminalError = "controller recovery object store unpack is not available in this build; " +
+			"reconciled controller state on instance test-instance"
 	)
 	newProvisionedCommand := func() cmd.Command {
 		return newRecoveryCommandWithProvisioner(func(

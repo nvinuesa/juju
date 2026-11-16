@@ -26,6 +26,11 @@ type recordingState struct {
 	model          *domainrecovery.ModelDump
 	modelNode      string
 	loadErr        error
+	machinePatch   *domainrecovery.MachinePatch
+	unitMachine    string
+	unitPatch      *domainrecovery.ControllerUnitAddressPatch
+	credential     map[string]string
+	machineName    string
 }
 
 func (st *recordingState) LoadControllerDump(_ context.Context, dump *domainrecovery.ControllerDump, nodeID string) error {
@@ -40,7 +45,30 @@ func (st *recordingState) LoadModelDump(_ context.Context, dump *domainrecovery.
 	return st.loadErr
 }
 
-const controllerYAML = `version: 4.1.0
+func (st *recordingState) GetControllerMachineName(context.Context) (string, error) {
+	return st.machineName, st.loadErr
+}
+
+func (st *recordingState) PatchControllerMachine(_ context.Context, patch domainrecovery.MachinePatch) error {
+	st.machinePatch = &patch
+	return st.loadErr
+}
+
+func (st *recordingState) PatchControllerUnitAddresses(_ context.Context, machineName string, patch domainrecovery.ControllerUnitAddressPatch) error {
+	st.unitMachine = machineName
+	st.unitPatch = &patch
+	return st.loadErr
+}
+
+func (st *recordingState) PatchControllerCredential(_ context.Context, _, authType string, attributes map[string]string) error {
+	st.credential = attributes
+	return st.loadErr
+}
+
+const (
+	controllerModelUUID = "c0ffee00-aaaa-2222-3333-444455556666"
+
+	controllerYAML = `version: 4.1.0
 payload:
   controller:
   - uuid: source
@@ -53,6 +81,7 @@ payload:
     ca_private_key: null
     system_identity: null
 `
+)
 
 func (s *serviceSuite) TestRequiredDependencies(c *tc.C) {
 	_, err := NewService(nil, func(context.Context, string) (State, error) { return &recordingState{}, nil }, "bootstrap-node")
@@ -116,6 +145,63 @@ func (s *serviceSuite) TestControllerLoadPropagatesFailure(c *tc.C) {
 	c.Assert(err, tc.ErrorIsNil)
 	err = svc.LoadControllerDump(c.Context(), []byte(controllerYAML))
 	c.Check(err, tc.ErrorIs, loadErr)
+}
+
+func (s *serviceSuite) TestPatchControllerMachineResolvesArchivedName(c *tc.C) {
+	st := &recordingState{machineName: "1"}
+	svc, err := NewService(st, func(context.Context, string) (State, error) { return st, nil }, "bootstrap-node")
+	c.Assert(err, tc.ErrorIsNil)
+	model := coremodel.UUID(controllerModelUUID)
+
+	name, err := svc.PatchControllerMachine(c.Context(), model, domainrecovery.MachinePatch{
+		InstanceID: "replacement-instance",
+	})
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(name, tc.Equals, "1")
+	c.Assert(st.machinePatch, tc.NotNil)
+	c.Check(st.machinePatch.MachineName, tc.Equals, "1")
+	c.Check(st.machinePatch.InstanceID, tc.Equals, "replacement-instance")
+}
+
+func (s *serviceSuite) TestPatchControllerMachineHonoursPresetName(c *tc.C) {
+	st := &recordingState{machineName: "1"}
+	svc, err := NewService(st, func(context.Context, string) (State, error) { return st, nil }, "bootstrap-node")
+	c.Assert(err, tc.ErrorIsNil)
+
+	name, err := svc.PatchControllerMachine(c.Context(), coremodel.UUID(controllerModelUUID), domainrecovery.MachinePatch{
+		MachineName: "7",
+	})
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(name, tc.Equals, "7")
+	c.Check(st.machinePatch.MachineName, tc.Equals, "7")
+}
+
+func (s *serviceSuite) TestPatchControllerUnitAddressesBuildsPatch(c *tc.C) {
+	st := &recordingState{}
+	svc, err := NewService(st, func(context.Context, string) (State, error) { return st, nil }, "bootstrap-node")
+	c.Assert(err, tc.ErrorIsNil)
+
+	err = svc.PatchControllerUnitAddresses(c.Context(), coremodel.UUID(controllerModelUUID), "0", []string{
+		"10.0.0.5", "controller-0.example",
+	})
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(st.unitMachine, tc.Equals, "0")
+	c.Assert(st.unitPatch, tc.NotNil)
+	c.Assert(st.unitPatch.Addresses, tc.HasLen, 2)
+	c.Check(st.unitPatch.Addresses[0].Value, tc.Equals, "10.0.0.5")
+	c.Check(st.unitPatch.Addresses[1].Value, tc.Equals, "controller-0.example")
+	c.Check(st.unitPatch.DeviceUUID, tc.Not(tc.Equals), "")
+}
+
+func (s *serviceSuite) TestPatchControllerCredential(c *tc.C) {
+	st := &recordingState{}
+	svc, err := NewService(st, func(context.Context, string) (State, error) { return st, nil }, "bootstrap-node")
+	c.Assert(err, tc.ErrorIsNil)
+
+	err = svc.PatchControllerCredential(c.Context(), controllerModelUUID, "access-key",
+		map[string]string{"key": "value"})
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(st.credential, tc.DeepEquals, map[string]string{"key": "value"})
 }
 
 func (s *serviceSuite) TestModelLoadRejectsUnsupportedVersion(c *tc.C) {

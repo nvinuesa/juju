@@ -124,6 +124,36 @@ type ArchiveInfo struct {
 	Size int64
 }
 
+// MachinePatch carries the replacement machine's physical facts applied to
+// the archived controller machine during recovery.
+type MachinePatch struct {
+	// Nonce is the replacement machine's provisioned introduction nonce.
+	Nonce string
+
+	// MachineName is the name of the archived controller machine the
+	// replacement maps onto. It is resolved from the loaded dump by the
+	// recovery stage; the caller need not set it.
+	MachineName string
+
+	// InstanceID is the replacement's actual provider instance ID. It
+	// always overwrites the archived value.
+	InstanceID string
+
+	// DisplayName is the replacement's provider display name. It always
+	// overwrites the archived value; empty is a genuine value on providers
+	// that do not set one.
+	DisplayName string
+
+	// Arch is the replacement's architecture.
+	Arch string
+
+	// MemMB, Cores and RootDiskMB are the replacement's observed hardware.
+	// Zero values leave the archived observations in place.
+	MemMB      uint64
+	Cores      uint64
+	RootDiskMB uint64
+}
+
 // CheckAgentVersion enforces the exact-version recovery gate: an archive
 // is only ever recovered onto the same agent version it was taken from,
 // build number included.
