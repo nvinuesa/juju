@@ -240,6 +240,62 @@ func withDefaultCAASControllerConstraints(cons constraints.Value) constraints.Va
 	return cons
 }
 
+// prepareCAASConstraints merges and defaults the bootstrap constraints for a
+// Kubernetes controller, shared by fresh bootstrap and recovery allocation.
+func prepareCAASConstraints(
+	ctx environs.BootstrapContext,
+	environ environs.BootstrapEnviron,
+	args BootstrapParams,
+) (constraints.Value, error) {
+	constraintsValidator, err := environ.ConstraintsValidator(ctx)
+	if err != nil {
+		return constraints.Value{}, err
+	}
+	bootstrapConstraints, err := constraintsValidator.Merge(
+		args.ModelConstraints, args.BootstrapConstraints,
+	)
+	if err != nil {
+		return constraints.Value{}, errors.Trace(err)
+	}
+	return withDefaultCAASControllerConstraints(bootstrapConstraints), nil
+}
+
+// finishCAASBootstrap builds the controller pod configuration and finalizes
+// the bootstrap configuration. It does not invoke the provider finalizer;
+// callers apply any mode-specific overrides and invoke the finalizer.
+func finishCAASBootstrap(
+	ctx environs.BootstrapContext,
+	environ environs.BootstrapEnviron,
+	args BootstrapParams,
+	result *environs.BootstrapResult,
+	bootstrapConstraints constraints.Value,
+) (*podcfg.ControllerPodConfig, error) {
+	podConfig, err := podcfg.NewBootstrapControllerPodConfig(
+		args.ControllerConfig,
+		args.ControllerName,
+		result.Base.OS,
+		bootstrapConstraints,
+	)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	jujuVersion := jujuversion.Current
+	if args.AgentVersion != nil {
+		jujuVersion = *args.AgentVersion
+	}
+	// set agent version before finalizing bootstrap config
+	if err := setBootstrapAgentVersion(ctx, environ, jujuVersion); err != nil {
+		return nil, errors.Trace(err)
+	}
+	podConfig.JujuVersion = jujuVersion
+	if err := finalizePodBootstrapConfig(ctx, podConfig, args, environ.Config()); err != nil {
+		return nil, errors.Annotate(err, "finalizing bootstrap instance config")
+	}
+	return podConfig, nil
+}
+
+// bootstrapCAAS performs a fresh Kubernetes controller bootstrap.
 func bootstrapCAAS(
 	ctx environs.BootstrapContext,
 	environ environs.BootstrapEnviron,
@@ -256,17 +312,10 @@ func bootstrapCAAS(
 		return errors.NotSupportedf("--bootstrap-series or --bootstrap-base when bootstrapping a k8s controller")
 	}
 
-	constraintsValidator, err := environ.ConstraintsValidator(ctx)
-	if err != nil {
-		return err
-	}
-	bootstrapConstraints, err := constraintsValidator.Merge(
-		args.ModelConstraints, args.BootstrapConstraints,
-	)
+	bootstrapConstraints, err := prepareCAASConstraints(ctx, environ, args)
 	if err != nil {
 		return errors.Trace(err)
 	}
-	bootstrapConstraints = withDefaultCAASControllerConstraints(bootstrapConstraints)
 	bootstrapParams.BootstrapConstraints = bootstrapConstraints
 
 	result, err := environ.Bootstrap(ctx, bootstrapParams)
@@ -274,27 +323,9 @@ func bootstrapCAAS(
 		return errors.Trace(err)
 	}
 
-	podConfig, err := podcfg.NewBootstrapControllerPodConfig(
-		args.ControllerConfig,
-		args.ControllerName,
-		result.Base.OS,
-		bootstrapConstraints,
-	)
+	podConfig, err := finishCAASBootstrap(ctx, environ, args, result, bootstrapConstraints)
 	if err != nil {
 		return errors.Trace(err)
-	}
-
-	jujuVersion := jujuversion.Current
-	if args.AgentVersion != nil {
-		jujuVersion = *args.AgentVersion
-	}
-	// set agent version before finalizing bootstrap config
-	if err := setBootstrapAgentVersion(ctx, environ, jujuVersion); err != nil {
-		return errors.Trace(err)
-	}
-	podConfig.JujuVersion = jujuVersion
-	if err := finalizePodBootstrapConfig(ctx, podConfig, args, environ.Config()); err != nil {
-		return errors.Annotate(err, "finalizing bootstrap instance config")
 	}
 	if err := result.CaasBootstrapFinalizer(ctx, podConfig, args.DialOpts); err != nil {
 		return errors.Trace(err)

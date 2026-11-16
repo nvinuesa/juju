@@ -12,28 +12,22 @@ import (
 	coretools "github.com/juju/juju/internal/tools"
 )
 
-// RecoveryParams holds the parameters for allocating a replacement
-// controller from a recovery archive. It embeds the ordinary bootstrap
-// parameters and adds the recovery-only inputs.
+// RecoveryParams holds the parameters for allocating a replacement controller
+// from a recovery archive. It embeds the ordinary bootstrap parameters and
+// adds the recovery-only inputs. It is always used as a whole: a
+// RecoveryParams value means recovery, so there is no mode flag to check.
 type RecoveryParams struct {
 	BootstrapParams
 
 	// AvailableTools is the exact archived agent set for IAAS recovery.
-	// It bypasses packaged-tool discovery and local tool building.
+	// It bypasses packaged-tool discovery and local tool building, and is
+	// invalid for Kubernetes recovery.
 	AvailableTools coretools.List
 }
 
 // Validate validates the recovery parameters, including the shared bootstrap
 // parameters and the recovery-only combinations.
 func (p RecoveryParams) Validate() error {
-	// TODO(k8s): support recovering a Kubernetes controller by
-	// allocating a replacement controller namespace. Only machine
-	// clouds are recoverable for now; the guard runs before the
-	// embedded validation, whose supported machine bases are
-	// machine-only requirements.
-	if cloud.CloudIsCAAS(p.Cloud) {
-		return errors.Errorf("recovery of a Kubernetes controller %w", coreerrors.NotSupported)
-	}
 	if err := p.BootstrapParams.Validate(); err != nil {
 		return errors.Capture(err)
 	}
@@ -42,6 +36,15 @@ func (p RecoveryParams) Validate() error {
 	}
 	if p.BuildAgent {
 		return errors.Errorf("recovery with agent building enabled %w", coreerrors.NotValid)
+	}
+	if cloud.CloudIsCAAS(p.Cloud) {
+		if len(p.AvailableTools) != 0 {
+			return errors.Errorf("recovery with prebuilt tools for a Kubernetes controller %w", coreerrors.NotValid)
+		}
+		if !p.BootstrapBase.Empty() {
+			return errors.Errorf("recovery with a bootstrap base for a Kubernetes controller %w", coreerrors.NotValid)
+		}
+		return nil
 	}
 	if p.BootstrapBase.Empty() {
 		return errors.Errorf("recovery without a bootstrap base %w", coreerrors.NotValid)
@@ -68,16 +71,18 @@ func (p RecoveryParams) Validate() error {
 	return nil
 }
 
-// Recover allocates a replacement controller instance from a recovery
+// Recover allocates replacement controller resources from a recovery
 // archive and always stops before installing an agent or initialising its
-// database. It shares the allocation stages of Bootstrap, but always
-// performs recovery: the archived agent version and base are preserved. A
-// fresh controller bootstrap is done by Bootstrap.
+// database. Machine controllers get one replacement instance through the
+// allocation stages shared with Bootstrap, preserving the archived agent
+// version and base; Kubernetes controllers get only the replacement
+// controller namespace. A fresh controller bootstrap is done by Bootstrap.
 //
-// Recover returns the replacement instance ID whenever the provider reports
-// a successful allocation, even if a later check fails. In that case the
-// error also names the instance for manual cleanup. If the provider itself
-// fails, Recover returns an empty ID and preserves the provider's error.
+// For machine controllers, Recover returns the replacement instance ID
+// whenever the provider reports a successful allocation, even if a later
+// check fails. In that case the error also names the instance for manual
+// cleanup. If the provider itself fails, Recover returns an empty ID and
+// preserves the provider's error.
 func Recover(
 	ctx environs.BootstrapContext,
 	environ environs.BootstrapEnviron,
@@ -88,7 +93,13 @@ func Recover(
 	}
 
 	bootstrapParams := providerBootstrapParams(args.BootstrapParams)
-	allocated, err := recoverIAAS(ctx, environ, args, bootstrapParams)
+	var allocated instance.Id
+	var err error
+	if cloud.CloudIsCAAS(args.Cloud) {
+		err = recoverCAAS(ctx, environ, args, bootstrapParams)
+	} else {
+		allocated, err = recoverIAAS(ctx, environ, args, bootstrapParams)
+	}
 	if err == nil && IsContextDone(ctx) {
 		err = Cancelled()
 	}
@@ -105,7 +116,11 @@ func Recover(
 		return "", err
 	}
 
-	ctx.Infof("Replacement instance %q now allocated", allocated)
+	if allocated != "" {
+		ctx.Infof("Replacement instance %q now allocated", allocated)
+	} else {
+		ctx.Infof("Replacement controller resources now allocated")
+	}
 	return allocated, nil
 }
 
@@ -149,6 +164,44 @@ func recoverIAAS(
 	return result.InstanceID, nil
 }
 
+// recoverCAAS prepares the replacement Kubernetes controller bootstrap
+// configuration and allocates its namespace. It creates no controller
+// workloads.
+func recoverCAAS(
+	ctx environs.BootstrapContext,
+	environ environs.BootstrapEnviron,
+	args RecoveryParams,
+	bootstrapParams environs.BootstrapParams,
+) error {
+	bootstrapConstraints, err := prepareCAASConstraints(ctx, environ, args.BootstrapParams)
+	if err != nil {
+		return errors.Capture(err)
+	}
+	bootstrapParams.BootstrapConstraints = bootstrapConstraints
+
+	result, err := environ.Bootstrap(ctx, bootstrapParams)
+	if err != nil {
+		return errors.Capture(err)
+	}
+	if err := checkRecoveryBootstrapResult(args, result); err != nil {
+		return errors.Capture(err)
+	}
+
+	podConfig, err := finishCAASBootstrap(ctx, environ, args.BootstrapParams, result, bootstrapConstraints)
+	if err != nil {
+		return errors.Capture(err)
+	}
+	ctx.Verbosef("Prepared replacement controller pod configuration for %q", podConfig.ControllerName)
+
+	resources, ok := environ.(environs.ModelResources)
+	if !ok {
+		return errors.Errorf("Kubernetes recovery allocation for %T %w", environ, coreerrors.NotSupported)
+	}
+	return errors.Capture(resources.CreateModelResources(ctx, environs.CreateParams{
+		ControllerUUID: args.ControllerConfig.ControllerUUID(),
+	}))
+}
+
 // checkRecoveryBootstrapResult verifies that the provider allocated a
 // replacement controller matching the archived base and architecture. The
 // result is non-nil and identifies an allocated instance.
@@ -156,6 +209,12 @@ func checkRecoveryBootstrapResult(
 	args RecoveryParams,
 	result *environs.BootstrapResult,
 ) error {
+	if cloud.CloudIsCAAS(args.Cloud) {
+		if result == nil || result.CaasBootstrapFinalizer == nil {
+			return errors.New("provider returned no Kubernetes controller finaliser")
+		}
+		return nil
+	}
 	if result.Base != args.BootstrapBase {
 		return errors.New("replacement base differs from archived controller")
 	}

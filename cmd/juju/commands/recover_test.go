@@ -19,6 +19,7 @@ import (
 	"github.com/juju/tc"
 
 	"github.com/juju/juju/api/jujuclient"
+	jujucloud "github.com/juju/juju/cloud"
 	"github.com/juju/juju/cmd/cmd"
 	"github.com/juju/juju/cmd/cmd/cmdtesting"
 	"github.com/juju/juju/cmd/modelcmd"
@@ -28,13 +29,22 @@ import (
 	"github.com/juju/juju/core/semversion"
 	"github.com/juju/juju/core/version"
 	"github.com/juju/juju/domain/recovery"
+	"github.com/juju/juju/environs"
 	"github.com/juju/juju/environs/bootstrap"
 	"github.com/juju/juju/internal/errors"
 	coretesting "github.com/juju/juju/internal/testing"
 )
 
 type recoverySuite struct {
-	coretesting.BaseSuite
+	coretesting.FakeJujuXDGDataHomeSuite
+}
+
+func (s *recoverySuite) SetUpTest(c *tc.C) {
+	s.FakeJujuXDGDataHomeSuite.SetUpTest(c)
+}
+
+func (s *recoverySuite) TearDownTest(c *tc.C) {
+	s.FakeJujuXDGDataHomeSuite.TearDownTest(c)
 }
 
 func TestRecoverySuite(t *testing.T) { tc.Run(t, &recoverySuite{}) }
@@ -317,6 +327,36 @@ func (s *recoverySuite) TestRunPassesArchiveInfoToProvisioner(c *tc.C) {
 	c.Check(got.CloudType, tc.Equals, "lxd")
 }
 
+func (s *recoverySuite) TestRunPassesKubernetesArchiveInfoToProvisioner(c *tc.C) {
+	archive := recoveryArchiveForControllerModel(c, "myk8s", "kubernetes", "caas")
+	sum := sha256.Sum256(archive)
+	checksum := corebackups.ChecksumSHA256(hex.EncodeToString(sum[:]))
+	assertion := "checksum: " + checksum +
+		"\nchecksum-format: " + corebackups.ChecksumFormatSHA256 + "\n"
+
+	dir := c.MkDir()
+	c.Assert(os.WriteFile(filepath.Join(dir, "backup.tar.gz"), archive, 0o600), tc.ErrorIsNil)
+	c.Assert(os.WriteFile(filepath.Join(dir, "backup.assert"), []byte(assertion), 0o600), tc.ErrorIsNil)
+
+	terminalErr := errors.New("recovery stopped after allocation")
+	var got *recovery.ArchiveInfo
+	command := newRecoveryCommandWithProvisioner(func(
+		_ *cmd.Context, _ jujuclient.ClientStore, info *recovery.ArchiveInfo,
+	) error {
+		got = info
+		return terminalErr
+	})
+	_, err := cmdtesting.RunCommandInDir(
+		c, command, []string{"backup.tar.gz", "backup.assert"}, dir,
+	)
+	c.Assert(err, tc.ErrorIs, terminalErr)
+	c.Assert(got, tc.NotNil)
+	c.Check(got.ControllerUUID, tc.Equals, "c0ffee00-1111-2222-3333-444455556666")
+	c.Check(got.ControllerName, tc.Equals, "source-ctrl")
+	c.Check(got.CloudName, tc.Equals, "myk8s")
+	c.Check(got.CloudType, tc.Equals, "kubernetes")
+}
+
 // TestRecoveryConfigs checks that the replacement controller and
 // controller-model configuration are built from the archived identity,
 // CA material and agent version, with the controller model named after
@@ -405,6 +445,58 @@ func (s *recoverySuite) TestAllocationTargetFromArchive(c *tc.C) {
 	})
 }
 
+// TestProvisionRecoveryRequiresKubernetesControllerName checks that a
+// Kubernetes archive which does not record the source controller name
+// is rejected before any cloud access.
+func (s *recoverySuite) TestProvisionRecoveryRequiresKubernetesControllerName(c *tc.C) {
+	err := provisionRecovery(cmdtesting.Context(c), nil, &recovery.ArchiveInfo{
+		CloudType: "kubernetes",
+	})
+	c.Check(err, tc.ErrorMatches, "recovery archive does not record the source controller name")
+}
+
+// TestProvisionRecoveryFinalizesKubernetesCloudHostRegion checks that
+// FinalizeCloud runs before the host-cloud-region guard so built-in clouds
+// such as microk8s (whose HostCloudRegion is discovered during finalization)
+// are accepted, while clouds that remain without a host cloud region after
+// finalization are still rejected.
+func (s *recoverySuite) TestProvisionRecoveryFinalizesKubernetesCloudHostRegion(c *tc.C) {
+	c.Assert(jujucloud.WritePersonalCloudMetadata(map[string]jujucloud.Cloud{
+		"myk8s": {
+			Name:    "myk8s",
+			Type:    jujucloud.CloudTypeKubernetes,
+			Regions: []jujucloud.Region{{Name: "localhost"}},
+		},
+	}), tc.ErrorIsNil)
+
+	var hostRegion string
+	s.PatchValue(&lookupRecoveryProvider, func(string) (environs.EnvironProvider, error) {
+		return fakeK8sRecoveryProvider{hostCloudRegion: &hostRegion}, nil
+	})
+
+	info := &recovery.ArchiveInfo{
+		ControllerName: "source-ctrl",
+		CloudName:      "myk8s",
+		CloudType:      jujucloud.CloudTypeKubernetes,
+	}
+	err := provisionRecovery(cmdtesting.Context(c), jujuclient.NewMemStore(), info)
+	c.Check(err, tc.ErrorMatches, "recovery cloud does not record a host cloud region.*")
+
+	hostRegion = "microk8s/localhost"
+	err = provisionRecovery(cmdtesting.Context(c), jujuclient.NewMemStore(), info)
+	c.Check(err, tc.ErrorMatches, ".*no credentials.*|.*credentials.*")
+}
+
+type fakeK8sRecoveryProvider struct {
+	noCredentialsProvider
+	hostCloudRegion *string
+}
+
+func (p fakeK8sRecoveryProvider) FinalizeCloud(_ environs.FinalizeCloudContext, cld jujucloud.Cloud) (jujucloud.Cloud, error) {
+	cld.HostCloudRegion = *p.hostCloudRegion
+	return cld, nil
+}
+
 // hookedOpenFS delegates every filesystem operation, except Open, to
 // the wrapped filesystem, so a test can return a handle that behaves
 // in ways a regular file cannot, such as failing to close.
@@ -433,13 +525,20 @@ func (r *failingCloseReader) Close() error {
 	return r.err
 }
 
-// recoveryArchive renders a minimal valid recovery archive: the
-// provenance metadata, a controller dump recording one controller
-// model on an lxd cloud, that model's database dump, and the
-// data-directory files archive. It is the smallest archive the
-// recover command's validation accepts, so reaching the terminal
-// error proves the whole read and verify path ran.
+// recoveryArchive renders the default minimal LXD recovery archive.
 func recoveryArchive(c *tc.C) []byte {
+	return recoveryArchiveForControllerModel(c, "lxd", "lxd", "iaas")
+}
+
+// recoveryArchiveForControllerModel renders a minimal valid recovery
+// archive: the provenance metadata, a controller dump recording one
+// controller model on the given cloud, that model's database dump, and the
+// data-directory files archive. It is the smallest archive the recover
+// command's validation accepts, so reaching the terminal error proves the
+// whole read and verify path ran.
+func recoveryArchiveForControllerModel(
+	c *tc.C, cloudName, cloudType, modelType string,
+) []byte {
 	const (
 		controllerUUID      = "c0ffee00-1111-2222-3333-444455556666"
 		controllerModelUUID = "c0ffee00-aaaa-2222-3333-444455556666"
@@ -472,22 +571,22 @@ payload:
     ca_cert: source-ca-cert
     ca_private_key: source-ca-key
   cloud:
-  - uuid: cloud-lxd
-    name: lxd
+  - uuid: cloud-source
+    name: ` + cloudName + `
     cloud_type_id: 1
   cloud_type:
   - id: 1
-    type: lxd
+    type: ` + cloudType + `
   model_type:
   - id: 0
-    type: iaas
+    type: ` + modelType + `
   controller_config:
   - key: controller-name
     value: source-ctrl
   model:
   - uuid: ` + controllerModelUUID + `
     name: controller
-    cloud_uuid: cloud-lxd
+    cloud_uuid: cloud-source
     model_type_id: 0
 `
 	files := map[string][]byte{
