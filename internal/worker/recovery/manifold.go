@@ -66,7 +66,8 @@ func Manifold(cfg ManifoldConfig) dependency.Manifold {
 			}
 			operation := func(ctx context.Context) error {
 				if controllerModel.ModelType == model.CAAS {
-					return errors.New("Kubernetes recovery finalisation is not available in this build")
+					return finaliseK8sController(ctx, controller, modelServices, factory,
+						controllerModel.UUID.String(), cfg)
 				}
 				if controllerModel.ModelType != model.IAAS {
 					return errors.New("unsupported recovery model type")

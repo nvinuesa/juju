@@ -16,14 +16,4 @@ juju recover [options] <backup-file> <assertion-file>
 | `-B`, `--no-browser-login` | false | Do not use web browser for authentication |
 
 ## Details
-Controller recovery uses a backup archive and its unsigned SHA-256 assertion
-to restore a controller on a replacement machine or Kubernetes namespace.
-The client must be able to resolve the cloud named in the archive. On a new
-workstation, add the cloud with 'juju add-cloud --client' if it is not
-already available.
-
-This version validates the archive and installs and starts a replacement
-controller agent only. It leaves the machine or namespace for inspection and
-exits with an error reporting its ID or namespace.
-Database import and controller initialisation are not available, and the
-controller is not registered.
+Validate an archive against its unsigned SHA-256 assertion, provision a replacement controller, replay the archived databases and object store, and register the recovered controller. Recovery currently supports single-node LXD and MicroK8s controllers with file-backed object storage. The recovered controller keeps the source controller and model UUIDs and its workloads.

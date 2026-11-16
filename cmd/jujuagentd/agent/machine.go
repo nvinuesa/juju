@@ -658,7 +658,7 @@ func (a *MachineAgent) Run(ctx *cmd.Context) (err error) {
 	return cmdutil.AgentDone(logger, err)
 }
 
-func validateRecoveryEngineStart(dataDir string, isCaasAgent bool) (bool, error) {
+func validateRecoveryEngineStart(dataDir string) (bool, error) {
 	isRecovery, err := internalrecovery.IsRecovery(dataDir)
 	if err != nil {
 		return false, errors.Capture(err)
@@ -679,9 +679,6 @@ func validateRecoveryEngineStart(dataDir string, isCaasAgent bool) (bool, error)
 	if !initialised {
 		return false, errors.New("recovery import has not completed")
 	}
-	if isCaasAgent {
-		return false, errors.New("recovery finalisation is not available in this build")
-	}
 	return true, nil
 }
 
@@ -693,7 +690,7 @@ func (a *MachineAgent) makeEngineCreator(
 ) func(context.Context) (worker.Worker, error) {
 	return func(ctx context.Context) (worker.Worker, error) {
 		agentConfig := a.CurrentConfig()
-		isRecovery, err := validateRecoveryEngineStart(agentConfig.DataDir(), a.isCaasAgent)
+		isRecovery, err := validateRecoveryEngineStart(agentConfig.DataDir())
 		if err != nil {
 			logger.Errorf(ctx, "recovery engine start blocked: %v", err)
 			return nil, errors.Capture(err)

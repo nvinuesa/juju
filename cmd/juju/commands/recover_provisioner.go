@@ -15,6 +15,7 @@ import (
 	"github.com/juju/utils/v4/ssh"
 
 	"github.com/juju/juju/api/jujuclient"
+	"github.com/juju/juju/caas"
 	jujucloud "github.com/juju/juju/cloud"
 	"github.com/juju/juju/cmd/cmd"
 	"github.com/juju/juju/cmd/juju/common"
@@ -25,6 +26,7 @@ import (
 	"github.com/juju/juju/core/constraints"
 	coreerrors "github.com/juju/juju/core/errors"
 	"github.com/juju/juju/core/instance"
+	"github.com/juju/juju/core/network"
 	"github.com/juju/juju/core/semversion"
 	jujuversion "github.com/juju/juju/core/version"
 	"github.com/juju/juju/domain/recovery"
@@ -36,6 +38,7 @@ import (
 	"github.com/juju/juju/environs/sync"
 	"github.com/juju/juju/internal/errors"
 	"github.com/juju/juju/internal/password"
+	k8sconstants "github.com/juju/juju/internal/provider/kubernetes/constants"
 	jujussh "github.com/juju/juju/internal/ssh"
 	"github.com/juju/juju/internal/tools"
 )
@@ -45,12 +48,6 @@ import (
 const recoveryAllocationTimeout = 20 * time.Minute
 
 var lookupRecoveryProvider = environs.Provider
-
-// recoveryK8sBroker is the namespace-bearing surface the recovery
-// provisioner needs from a Kubernetes environ.
-type recoveryK8sBroker interface {
-	Namespace() string
-}
 
 // recoveryConfigs builds the controller and controller-model
 // configuration for a replacement controller from the recovery archive.
@@ -160,15 +157,6 @@ func provisionRecovery(
 	if err != nil {
 		return errors.Capture(err)
 	}
-	var k8sBroker recoveryK8sBroker
-	if isK8s {
-		broker, ok := preparation.Environ.(recoveryK8sBroker)
-		if !ok {
-			return errors.Errorf(
-				"Kubernetes recovery provisioning for %T %w", preparation.Environ, coreerrors.NotSupported)
-		}
-		k8sBroker = broker
-	}
 	if err := preparation.Environ.PrepareForBootstrap(provisionCtx, info.ControllerName); err != nil {
 		return errors.Capture(err)
 	}
@@ -185,82 +173,76 @@ func provisionRecovery(
 		AdminSecret:         adminPassword,
 	}
 
+	commonBootstrap.DialOpts.Timeout = 20 * time.Minute
+
+	var k8sParams bootstrap.K8sRecoveryParams
 	if isK8s {
-		commonBootstrap.DialOpts.Timeout = 20 * time.Minute
 		commonBootstrap.SupportedBootstrapBases = base.ControllerBases()
-		k8sParams := bootstrap.K8sRecoveryParams{
+		k8sParams = bootstrap.K8sRecoveryParams{
 			BootstrapParams: commonBootstrap,
 			ArchivePath:     archivePath,
 			ArchiveSHA256:   info.Checksum,
 		}
-		if err := bootstrap.RecoverK8s(provisionCtx, preparation.Environ, k8sParams); err != nil {
+	} else {
+		keyFiles := ssh.PrivateKeyFiles()
+		if len(keyFiles) == 0 {
+			return errors.New("no Juju SSH keys available for recovery")
+		}
+		sort.Strings(keyFiles)
+		authorizedKeys, err := jujussh.PublicKeysForPrivateKeyFiles(keyFiles)
+		if err != nil {
 			return errors.Capture(err)
 		}
-		return errors.Errorf(
-			"controller recovery finalisation is not available in this build; imported recovery archive in namespace %s",
-			k8sBroker.Namespace(),
+		builtAgent, err := sync.BuildAgentTarball(
+			true, "bootstrap", func(semversion.Number) semversion.Number {
+				return info.AgentVersion
+			},
 		)
+		if err != nil {
+			return errors.Capture(err)
+		}
+		defer func() { _ = os.RemoveAll(builtAgent.Dir) }()
+
+		// A locally built agent only runs on the client platform, so
+		// refuse to install it on a replacement with a different base
+		// or architecture.
+		targetArch := *iaasParams.BootstrapConstraints.Arch
+		if builtAgent.Version.Arch != targetArch ||
+			builtAgent.Version.Release != iaasParams.BootstrapBase.OS {
+			return errors.Errorf(
+				"cannot use agent built for %q using a client running on %q",
+				iaasParams.BootstrapBase, builtAgent.Version,
+			)
+		}
+
+		commonBootstrap.BootstrapConstraints = iaasParams.BootstrapConstraints
+		commonBootstrap.BootstrapBase = iaasParams.BootstrapBase
+		commonBootstrap.SupportedBootstrapBases = iaasParams.SupportedBootstrapBases
+		commonBootstrap.BootstrapSSHAuthorizedKeys = authorizedKeys
+		commonBootstrap.DialOpts.IdentityFiles = keyFiles
+		commonBootstrap.DialOpts.RetryDelay = 5 * time.Second
+		commonBootstrap.DialOpts.AddressesDelay = 5 * time.Second
+		iaasParams.BootstrapParams = commonBootstrap
+		iaasParams.ArchivePath = archivePath
+		iaasParams.ArchiveSHA256 = info.Checksum
+		iaasParams.SystemIdentity = info.SystemIdentity
+		iaasParams.MachineId = info.MachineName
+		iaasParams.AvailableTools = tools.List{&tools.Tools{
+			Version: semversion.Binary{
+				Number:  info.AgentVersion,
+				Release: iaasParams.BootstrapBase.OS,
+				Arch:    targetArch,
+			},
+			URL:    "file://" + filepath.Join(builtAgent.Dir, builtAgent.StorageName),
+			SHA256: builtAgent.Sha256Hash,
+			Size:   builtAgent.Size,
+		}}
 	}
 
-	keyFiles := ssh.PrivateKeyFiles()
-	if len(keyFiles) == 0 {
-		return errors.New("no Juju SSH keys available for recovery")
-	}
-	sort.Strings(keyFiles)
-	authorizedKeys, err := jujussh.PublicKeysForPrivateKeyFiles(keyFiles)
-	if err != nil {
-		return errors.Capture(err)
-	}
-	builtAgent, err := sync.BuildAgentTarball(
-		true, "bootstrap", func(semversion.Number) semversion.Number {
-			return info.AgentVersion
-		},
-	)
-	if err != nil {
-		return errors.Capture(err)
-	}
-	defer func() { _ = os.RemoveAll(builtAgent.Dir) }()
-
-	// A locally built agent only runs on the client platform, so
-	// refuse to install it on a replacement with a different base
-	// or architecture.
-	targetArch := *iaasParams.BootstrapConstraints.Arch
-	if builtAgent.Version.Arch != targetArch ||
-		builtAgent.Version.Release != iaasParams.BootstrapBase.OS {
-		return errors.Errorf(
-			"cannot use agent built for %q using a client running on %q",
-			iaasParams.BootstrapBase, builtAgent.Version,
-		)
-	}
-
-	commonBootstrap.BootstrapConstraints = iaasParams.BootstrapConstraints
-	commonBootstrap.BootstrapBase = iaasParams.BootstrapBase
-	commonBootstrap.SupportedBootstrapBases = iaasParams.SupportedBootstrapBases
-	commonBootstrap.BootstrapSSHAuthorizedKeys = authorizedKeys
-	commonBootstrap.DialOpts.Timeout = 20 * time.Minute
-	commonBootstrap.DialOpts.IdentityFiles = keyFiles
-	commonBootstrap.DialOpts.RetryDelay = 5 * time.Second
-	commonBootstrap.DialOpts.AddressesDelay = 5 * time.Second
-	iaasParams.BootstrapParams = commonBootstrap
-	iaasParams.ArchivePath = archivePath
-	iaasParams.ArchiveSHA256 = info.Checksum
-	iaasParams.SystemIdentity = info.SystemIdentity
-	iaasParams.MachineId = info.MachineName
-	iaasParams.AvailableTools = tools.List{&tools.Tools{
-		Version: semversion.Binary{
-			Number:  info.AgentVersion,
-			Release: iaasParams.BootstrapBase.OS,
-			Arch:    targetArch,
-		},
-		URL:    "file://" + filepath.Join(builtAgent.Dir, builtAgent.StorageName),
-		SHA256: builtAgent.Sha256Hash,
-		Size:   builtAgent.Size,
-	}}
-
-	// Record the controller before starting its agent: the first API
-	// connection needs the archived identity and CA written here. A
-	// failed attempt must not leave that record behind.
 	recovered := false
+	// Record the controller before starting its agent: the first API
+	// connection needs the archived identity and CA written here. A failed
+	// attempt must not leave that record behind.
 	if err := preparation.RegisterController(store, info.ControllerName); err != nil {
 		return errors.Capture(err)
 	}
@@ -273,26 +255,45 @@ func provisionRecovery(
 		}
 	}()
 
-	started, err := bootstrap.RecoverIAAS(provisionCtx, preparation.Environ, iaasParams)
-	if err != nil {
-		return errors.Capture(err)
-	}
-
-	lister, ok := preparation.Environ.(environs.InstanceLister)
-	if !ok {
-		return errors.Errorf("recovery provider %T cannot list instances", preparation.Environ)
-	}
-	found, err := lister.Instances(stdCtx, []instance.Id{started})
-	if err != nil {
-		return errors.Capture(err)
-	}
-	if len(found) != 1 || found[0] == nil {
-		return errors.Errorf(
-			"recovery provisioning returned no usable replacement instance for %q", started)
-	}
-	addresses, err := found[0].Addresses(stdCtx)
-	if err != nil {
-		return errors.Capture(err)
+	var addresses network.ProviderAddresses
+	if isK8s {
+		if err := bootstrap.RecoverK8s(provisionCtx, preparation.Environ, k8sParams); err != nil {
+			return errors.Capture(err)
+		}
+		manager, ok := preparation.Environ.(caas.ServiceManager)
+		if !ok {
+			return errors.Errorf(
+				"recovery provider %T cannot resolve the controller service", preparation.Environ)
+		}
+		service, err := manager.GetService(stdCtx, k8sconstants.JujuControllerStackName, true)
+		if err != nil {
+			return errors.Capture(err)
+		}
+		if service == nil || len(service.Addresses) == 0 {
+			return errors.New("replacement controller service has no API addresses")
+		}
+		addresses = service.Addresses
+	} else {
+		started, err := bootstrap.RecoverIAAS(provisionCtx, preparation.Environ, iaasParams)
+		if err != nil {
+			return errors.Capture(err)
+		}
+		lister, ok := preparation.Environ.(environs.InstanceLister)
+		if !ok {
+			return errors.Errorf("recovery provider %T cannot list instances", preparation.Environ)
+		}
+		found, err := lister.Instances(stdCtx, []instance.Id{started})
+		if err != nil {
+			return errors.Capture(err)
+		}
+		if len(found) != 1 || found[0] == nil {
+			return errors.Errorf(
+				"recovery provisioning returned no usable replacement instance for %q", started)
+		}
+		addresses, err = found[0].Addresses(stdCtx)
+		if err != nil {
+			return errors.Capture(err)
+		}
 	}
 	if err := saveControllerConnection(stdCtx, store, info.ControllerName,
 		preparation.Environ, controllerConfig, info.AgentVersion.String(), addresses); err != nil {
@@ -307,7 +308,7 @@ func provisionRecovery(
 		return errors.Capture(err)
 	}
 	if err := common.WaitForAgentInitialisation(
-		provisionCtx, &command.ModelCommandBase, false, info.ControllerName, common.TryAPI,
+		provisionCtx, &command.ModelCommandBase, isK8s, info.ControllerName, common.TryAPI,
 	); err != nil {
 		return errors.Capture(err)
 	}

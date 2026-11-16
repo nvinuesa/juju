@@ -68,7 +68,7 @@ func (s *MachineSuite) TestIntegrationStub(c *tc.C) {
 
 func (s *MachineSuite) TestValidateRecoveryEngineStart(c *tc.C) {
 	dataDir := c.MkDir()
-	isRecovery, err := validateRecoveryEngineStart(dataDir, false)
+	isRecovery, err := validateRecoveryEngineStart(dataDir)
 	c.Assert(err, tc.ErrorIsNil)
 	c.Check(isRecovery, tc.IsFalse)
 
@@ -93,19 +93,15 @@ func (s *MachineSuite) TestValidateRecoveryEngineStart(c *tc.C) {
 	c.Assert(os.MkdirAll(filepath.Dir(paramsPath), 0700), tc.ErrorIsNil)
 	c.Assert(os.WriteFile(paramsPath, paramsData, 0600), tc.ErrorIsNil)
 
-	isRecovery, err = validateRecoveryEngineStart(dataDir, false)
+	isRecovery, err = validateRecoveryEngineStart(dataDir)
 	c.Check(err, tc.ErrorMatches, "recovery import has not completed")
 	c.Check(isRecovery, tc.IsFalse)
 
 	markerPath := filepath.Join(dataDir, internalrecovery.InitialisedFile)
 	c.Assert(os.WriteFile(markerPath, []byte(checksum+"\n"), 0600), tc.ErrorIsNil)
-	isRecovery, err = validateRecoveryEngineStart(dataDir, false)
+	isRecovery, err = validateRecoveryEngineStart(dataDir)
 	c.Assert(err, tc.ErrorIsNil)
 	c.Check(isRecovery, tc.IsTrue)
-
-	isRecovery, err = validateRecoveryEngineStart(dataDir, true)
-	c.Check(err, tc.ErrorMatches, "recovery finalisation is not available in this build")
-	c.Check(isRecovery, tc.IsFalse)
 }
 
 // rebootDispatchSuite tests the error-dispatch logic in MachineAgent.Run that
