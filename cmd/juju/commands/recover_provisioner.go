@@ -151,7 +151,7 @@ func provisionRecovery(
 			return errors.Capture(err)
 		}
 		return errors.Errorf(
-			"controller recovery database import is not available in this build; initialised replacement database in namespace %s",
+			"controller recovery state reconciliation is not available in this build; replayed database dumps in namespace %s",
 			k8sBroker.Namespace(),
 		)
 	}
@@ -215,7 +215,7 @@ func provisionRecovery(
 		return errors.Capture(err)
 	}
 	return errors.Errorf(
-		"controller recovery database import is not available in this build; initialised replacement database on instance %s",
+		"controller recovery state reconciliation is not available in this build; replayed database dumps on instance %s",
 		started,
 	)
 }

@@ -109,8 +109,8 @@ func (s *recoverySuite) TestRun(c *tc.C) {
 	const (
 		archiveName   = "backup.tar.gz"
 		assertionName = "backup.assert"
-		terminalError = "controller recovery database import is not available in this build; " +
-			"initialised replacement database on instance test-instance"
+		terminalError = "controller recovery state reconciliation is not available in this build; " +
+			"replayed database dumps on instance test-instance"
 	)
 	newProvisionedCommand := func() cmd.Command {
 		return newRecoveryCommandWithProvisioner(func(

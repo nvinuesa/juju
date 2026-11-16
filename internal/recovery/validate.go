@@ -86,7 +86,15 @@ func ValidateArchive(ctx context.Context, logger corelogger.Logger, archivePath,
 // contents; the offline preflight consumes the summary alone via
 // [ValidateArchive]. The caller must Close the contents once consumed.
 func ReadArchive(ctx context.Context, logger corelogger.Logger, archivePath, expectedSHA256 string) (*ArchiveContents, *domainrecovery.ArchiveInfo, error) {
-	contents, checksum, size, err := readArchive(ctx, logger, archivePath, expectedSHA256)
+	return ReadArchiveIn(ctx, logger, archivePath, expectedSHA256, "")
+}
+
+// ReadArchiveIn reads and validates the backup archive, staging model dumps
+// under stagingRoot. Target-side callers pass the replacement data directory
+// so dump staging shares the filesystem that will hold the imported
+// databases instead of relying on the system temporary directory.
+func ReadArchiveIn(ctx context.Context, logger corelogger.Logger, archivePath, expectedSHA256, stagingRoot string) (*ArchiveContents, *domainrecovery.ArchiveInfo, error) {
+	contents, checksum, size, err := readArchive(ctx, logger, archivePath, expectedSHA256, stagingRoot)
 	if err != nil {
 		return nil, nil, errors.Capture(err)
 	}

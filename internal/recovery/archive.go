@@ -94,7 +94,7 @@ type ArchiveContents struct {
 // cannot escape, and rejecting outright would dead-end an archive the
 // operator cannot otherwise fix. When the archive carries a content
 // manifest, it is cross-checked against the entries actually read.
-func readArchive(ctx context.Context, logger corelogger.Logger, archivePath, expectedSHA256 string) (*ArchiveContents, string, int64, error) {
+func readArchive(ctx context.Context, logger corelogger.Logger, archivePath, expectedSHA256, stagingRoot string) (*ArchiveContents, string, int64, error) {
 	f, err := os.Open(archivePath)
 	if err != nil {
 		return nil, "", 0, errors.Errorf("opening archive: %w", err)
@@ -108,7 +108,7 @@ func readArchive(ctx context.Context, logger corelogger.Logger, archivePath, exp
 	}
 	defer func() { _ = gz.Close() }()
 
-	stagingDir, err := os.MkdirTemp("", "juju-recovery-dump-")
+	stagingDir, err := os.MkdirTemp(stagingRoot, "juju-recovery-dump-")
 	if err != nil {
 		return nil, "", 0, errors.Errorf("creating recovery workspace: %w", err)
 	}

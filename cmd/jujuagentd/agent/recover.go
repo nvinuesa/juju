@@ -11,44 +11,28 @@ import (
 
 	"github.com/juju/juju/agent"
 	"github.com/juju/juju/agent/agentbootstrap"
+	"github.com/juju/juju/agent/agentrecovery"
 	agentconfig "github.com/juju/juju/agent/config"
 	"github.com/juju/juju/cloud"
 	jujucmd "github.com/juju/juju/cmd"
 	"github.com/juju/juju/cmd/cmd"
 	"github.com/juju/juju/cmd/internal/agent/agentconf"
-	coredatabase "github.com/juju/juju/core/database"
-	corelogger "github.com/juju/juju/core/logger"
 	jujuversion "github.com/juju/juju/core/version"
-	controllernodeservice "github.com/juju/juju/domain/controllernode/service"
-	controllernodestate "github.com/juju/juju/domain/controllernode/state"
-	"github.com/juju/juju/domain/schema"
 	"github.com/juju/juju/environs"
 	environscloudspec "github.com/juju/juju/environs/cloudspec"
-	"github.com/juju/juju/internal/database"
 	"github.com/juju/juju/internal/errors"
 	internalrecovery "github.com/juju/juju/internal/recovery"
 )
 
-// RecoverDqliteFunc initialises the replacement controller's Dqlite
-// database. It is injectable for tests.
-type RecoverDqliteFunc func(
-	ctx context.Context,
-	mgr database.BootstrapNodeManager,
-	bindAddress string,
-	machineName string,
-	logger corelogger.Logger,
-) error
-
 // RecoverCommand represents a jujuagentd recover-state command. It prepares a
-// replacement controller's local configuration from an archived controller,
-// initialises its Dqlite database, and adds its controller node row. It is
-// invoked instead of bootstrap-state by the recovery setup generated for a
-// replacement instance, and never performs a fresh bootstrap.
+// replacement controller's local configuration from an archived controller
+// and replays its databases. It is invoked instead of bootstrap-state by the
+// recovery setup generated for a replacement instance, and never performs a
+// fresh bootstrap.
 type RecoverCommand struct {
 	cmd.CommandBase
 	agentconf.AgentConf
 	Timeout                   time.Duration
-	RecoverDqlite             RecoverDqliteFunc
 	DqliteBindAddressResolver agentbootstrap.DqliteBindAddressResolverFunc
 }
 
@@ -56,7 +40,6 @@ type RecoverCommand struct {
 func NewRecoverCommand() *RecoverCommand {
 	return &RecoverCommand{
 		AgentConf:                 agentconf.NewAgentConf(""),
-		RecoverDqlite:             recoverDqlite,
 		DqliteBindAddressResolver: agentbootstrap.NewDqliteBindAddressResolver(logger),
 	}
 }
@@ -174,49 +157,12 @@ func (c *RecoverCommand) initialiseRecoveryDatabase(ctx *cmd.Context, params int
 		return errors.Capture(err)
 	}
 
-	agentConfig := c.CurrentConfig()
-	certs, ok := agentConfig.ControllerAgentInfo()
-	if !ok {
-		return errors.New("recovery machine config has no controller agent information")
-	}
-	mgr := database.NewNodeManager(database.NodeManagerConfig{
-		DataDir:              agentConfig.DataDir(),
-		CACert:               agentConfig.CACert(),
-		ControllerCert:       certs.Cert,
-		ControllerPrivateKey: certs.PrivateKey,
-	}, logger, coredatabase.NoopSlowQueryLogger{})
-	if err := c.RecoverDqlite(stdCtx, mgr, bindAddress, params.MachineName, logger); err != nil {
+	if err := agentrecovery.Initialise(
+		stdCtx, c.CurrentConfig(), params, addresses, bindAddress, logger,
+	); err != nil {
 		return errors.Capture(err)
 	}
 
-	logger.Infof(ctx, "recovery database import is not available in this build; stopped after Dqlite initialisation")
+	logger.Infof(ctx, "recovery database import is not available in this build; replayed archived database dumps")
 	return nil
-}
-
-// recoverDqlite opens the replacement controller database and adds its
-// controller node row.
-func recoverDqlite(
-	ctx context.Context,
-	mgr database.BootstrapNodeManager,
-	bindAddress string,
-	machineName string,
-	logger corelogger.Logger,
-) error {
-	return database.WithDqlite(ctx, mgr, bindAddress, logger, func(ctx context.Context, session *database.DqliteSession) error {
-		_, controllerRunner, err := session.OpenDatabaseForImport(
-			ctx, coredatabase.ControllerNS, schema.ControllerDDL(),
-		)
-		if err != nil {
-			return errors.Capture(err)
-		}
-		nodes := controllernodeservice.NewService(
-			controllernodestate.NewState(func(context.Context) (coredatabase.TxnRunner, error) {
-				return controllerRunner, nil
-			}),
-			logger,
-		)
-		return errors.Capture(nodes.AddDqliteNode(
-			ctx, machineName, session.NodeID(), session.BindAddress(),
-		))
-	})
 }
