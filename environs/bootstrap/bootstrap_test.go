@@ -44,6 +44,7 @@ import (
 	"github.com/juju/juju/internal/cloudconfig/instancecfg"
 	"github.com/juju/juju/internal/cloudconfig/podcfg"
 	_ "github.com/juju/juju/internal/provider/dummy"
+	internalrecovery "github.com/juju/juju/internal/recovery"
 	corestorage "github.com/juju/juju/internal/storage"
 	"github.com/juju/juju/internal/testhelpers"
 	coretesting "github.com/juju/juju/internal/testing"
@@ -787,6 +788,8 @@ func (s *bootstrapSuite) TestBootstrapRecoveryK8s(c *tc.C) {
 				HostCloudRegion: "microk8s:localhost",
 			},
 		},
+		ArchivePath:   recoveryArchivePath,
+		ArchiveSHA256: recoveryArchiveSHA256,
 	})
 	c.Assert(err, tc.ErrorIsNil)
 
@@ -806,6 +809,21 @@ func (s *bootstrapSuite) TestBootstrapRecoveryK8s(c *tc.C) {
 	c.Check(env.podConfig.APIInfo.ModelTag.Id(), tc.Equals, env.cfg.UUID())
 	c.Check(env.podConfig.JujuVersion, tc.Equals, archivedVersion)
 	c.Check(env.podConfig.Bootstrap.StateInitializationParams.RecoveryMode, tc.IsTrue)
+	c.Check(env.podConfig.Bootstrap.RecoveryArchivePath, tc.Equals, recoveryArchivePath)
+	c.Check(env.podConfig.Bootstrap.RecoveryArchiveSHA256, tc.Equals, recoveryArchiveSHA256)
+	c.Check(env.podConfig.Bootstrap.RecoveryParams, tc.Contains,
+		"archive-path: /var/lib/juju/recovery/archive.tar.gz")
+	c.Check(env.podConfig.Bootstrap.RecoveryParams, tc.Contains, `machine-name: "0"`)
+	c.Check(env.podConfig.Bootstrap.RecoveryParams, tc.Contains, "recovery-mode: true")
+
+	paramsDir := c.MkDir()
+	c.Assert(os.MkdirAll(filepath.Join(paramsDir, "recovery"), 0o700), tc.ErrorIsNil)
+	c.Assert(os.WriteFile(filepath.Join(paramsDir, internalrecovery.ParamsFile),
+		[]byte(env.podConfig.Bootstrap.RecoveryParams), 0o600), tc.ErrorIsNil)
+	readBack, err := internalrecovery.ReadParams(paramsDir)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(readBack.AgentVersion, tc.Equals, archivedVersion)
+	c.Check(readBack.Node.AgentVersion, tc.Equals, archivedVersion)
 }
 
 func (s *bootstrapSuite) TestBootstrapRecoveryK8sResultChecks(c *tc.C) {
@@ -847,6 +865,8 @@ func (s *bootstrapSuite) TestBootstrapRecoveryK8sResultChecks(c *tc.C) {
 					HostCloudRegion: "microk8s:localhost",
 				},
 			},
+			ArchivePath:   recoveryArchivePath,
+			ArchiveSHA256: recoveryArchiveSHA256,
 		})
 		c.Assert(err, tc.ErrorMatches, test.err)
 		c.Check(env.finalizerCount, tc.Equals, 0)
@@ -938,6 +958,14 @@ func (s *bootstrapSuite) TestBootstrapRecoveryK8sInvalidParams(c *tc.C) {
 		mutate: func(p *bootstrap.K8sRecoveryParams) { p.BuildAgent = true },
 		err:    ".*recovery with agent building enabled not valid",
 	}, {
+		name:   "no archive path",
+		mutate: func(p *bootstrap.K8sRecoveryParams) { p.ArchivePath = "" },
+		err:    ".*recovery without an archive path not valid",
+	}, {
+		name:   "no archive checksum",
+		mutate: func(p *bootstrap.K8sRecoveryParams) { p.ArchiveSHA256 = "" },
+		err:    ".*recovery without an archive checksum not valid",
+	}, {
 		name:   "machine cloud",
 		mutate: func(p *bootstrap.K8sRecoveryParams) { p.Cloud = cloud.Cloud{Name: "lxd", Type: "lxd"} },
 		err:    ".*Kubernetes recovery for a machine cloud not valid",
@@ -964,6 +992,8 @@ func (s *bootstrapSuite) TestBootstrapRecoveryK8sInvalidParams(c *tc.C) {
 					HostCloudRegion: "microk8s:localhost",
 				},
 			},
+			ArchivePath:   recoveryArchivePath,
+			ArchiveSHA256: recoveryArchiveSHA256,
 		}
 		test.mutate(&params)
 		err := bootstrap.RecoverK8s(envtesting.BootstrapTestContext(c), env, params)

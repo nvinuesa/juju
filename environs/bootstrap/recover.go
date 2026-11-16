@@ -4,6 +4,8 @@
 package bootstrap
 
 import (
+	"path"
+
 	"github.com/juju/names/v6"
 
 	"github.com/juju/juju/cloud"
@@ -12,6 +14,7 @@ import (
 	"github.com/juju/juju/environs"
 	"github.com/juju/juju/internal/cloudconfig/instancecfg"
 	"github.com/juju/juju/internal/errors"
+	internalrecovery "github.com/juju/juju/internal/recovery"
 	coretools "github.com/juju/juju/internal/tools"
 	jujunames "github.com/juju/juju/juju/names"
 )
@@ -47,17 +50,17 @@ func (p IAASRecoveryParams) Validate() error {
 	if err := validateCommonRecoveryParams(p.BootstrapParams); err != nil {
 		return err
 	}
-	if cloud.CloudIsCAAS(p.Cloud) {
-		return errors.Errorf("machine recovery for a Kubernetes cloud %w", coreerrors.NotValid)
-	}
-	if !names.IsValidMachine(p.MachineId) {
-		return errors.Errorf("recovery machine ID %q %w", p.MachineId, coreerrors.NotValid)
-	}
 	if p.ArchivePath == "" {
 		return errors.Errorf("recovery without an archive path %w", coreerrors.NotValid)
 	}
 	if p.ArchiveSHA256 == "" {
 		return errors.Errorf("recovery without an archive checksum %w", coreerrors.NotValid)
+	}
+	if cloud.CloudIsCAAS(p.Cloud) {
+		return errors.Errorf("machine recovery for a Kubernetes cloud %w", coreerrors.NotValid)
+	}
+	if !names.IsValidMachine(p.MachineId) {
+		return errors.Errorf("recovery machine ID %q %w", p.MachineId, coreerrors.NotValid)
 	}
 	if p.BootstrapBase.Empty() {
 		return errors.Errorf("recovery without a bootstrap base %w", coreerrors.NotValid)
@@ -88,6 +91,13 @@ func (p IAASRecoveryParams) Validate() error {
 // replacement Kubernetes controller agent from a recovery archive.
 type K8sRecoveryParams struct {
 	BootstrapParams
+
+	// ArchivePath is the local path of the verified recovery archive.
+	ArchivePath string
+
+	// ArchiveSHA256 is the archive's hex SHA-256 digest, verified again on
+	// the replacement pod.
+	ArchiveSHA256 string
 }
 
 // Validate validates the Kubernetes recovery parameters, including the shared
@@ -95,6 +105,12 @@ type K8sRecoveryParams struct {
 func (p K8sRecoveryParams) Validate() error {
 	if err := validateCommonRecoveryParams(p.BootstrapParams); err != nil {
 		return err
+	}
+	if p.ArchivePath == "" {
+		return errors.Errorf("recovery without an archive path %w", coreerrors.NotValid)
+	}
+	if p.ArchiveSHA256 == "" {
+		return errors.Errorf("recovery without an archive checksum %w", coreerrors.NotValid)
 	}
 	if !cloud.CloudIsCAAS(p.Cloud) {
 		return errors.Errorf("Kubernetes recovery for a machine cloud %w", coreerrors.NotValid)
@@ -228,7 +244,21 @@ func RecoverK8s(
 	if err != nil {
 		return errors.Capture(err)
 	}
+	podConfig.Bootstrap.StateInitializationParams.AgentVersion = *args.AgentVersion
 	podConfig.Bootstrap.StateInitializationParams.RecoveryMode = true
+	podConfig.Bootstrap.RecoveryArchivePath = args.ArchivePath
+	podConfig.Bootstrap.RecoveryArchiveSHA256 = args.ArchiveSHA256
+	paramsData, err := (internalrecovery.Params{
+		ArchivePath:  path.Join(podConfig.DataDir, internalrecovery.ArchiveFile),
+		SHA256:       args.ArchiveSHA256,
+		AgentVersion: *args.AgentVersion,
+		MachineName:  "0",
+		Node:         podConfig.Bootstrap.StateInitializationParams,
+	}).Marshal()
+	if err != nil {
+		return errors.Capture(err)
+	}
+	podConfig.Bootstrap.RecoveryParams = string(paramsData)
 
 	if err := result.CaasBootstrapFinalizer(ctx, podConfig, args.DialOpts); err != nil {
 		return errors.Capture(err)

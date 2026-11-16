@@ -4,6 +4,7 @@
 package recovery
 
 import (
+	"bytes"
 	"encoding/hex"
 	"os"
 	"path/filepath"
@@ -61,6 +62,9 @@ func ReadParams(dataDir string) (Params, error) {
 	data, err := os.ReadFile(filepath.Join(dataDir, ParamsFile))
 	if err != nil {
 		return p, errors.Errorf("reading recovery parameters: %w", err)
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return p, errors.New("incomplete recovery parameters")
 	}
 	if err := yaml.Unmarshal(data, &p); err != nil {
 		return p, errors.Capture(err)

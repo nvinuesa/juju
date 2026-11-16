@@ -486,7 +486,6 @@ func (w *userdataConfig) configureBootstrap() error {
 	}
 	w.conf.AddRunTextFile(bootstrapParamsFile, string(bootstrapParams), 0600)
 	bootstrapSubcommand := "bootstrap-state"
-	var recoveryArgs []string
 	if w.icfg.Bootstrap.RecoveryMode {
 		paramsContents := ""
 		if w.icfg.Bootstrap.RecoveryArchivePath != "" {
@@ -506,7 +505,6 @@ func (w *userdataConfig) configureBootstrap() error {
 			path.Join(w.icfg.DataDir, internalrecovery.ParamsFile), paramsContents, 0600,
 		)
 		bootstrapSubcommand = "recover-state"
-		recoveryArgs = []string{"--machine-id", w.icfg.MachineId}
 	}
 
 	loggingOption := "--show-log"
@@ -526,7 +524,6 @@ func (w *userdataConfig) configureBootstrap() error {
 		"--data-dir", shquote(w.icfg.DataDir),
 		loggingOption,
 	}
-	bootstrapAgentArgs = append(bootstrapAgentArgs, recoveryArgs...)
 	w.conf.AddRunCmd(cloudinit.LogProgressCmd("Installing Juju machine agent"))
 	w.conf.AddScripts(strings.Join(bootstrapAgentArgs, " "))
 

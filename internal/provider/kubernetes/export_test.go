@@ -59,6 +59,8 @@ type ControllerStackerForTest interface {
 	BuildContainerSpecForController(*tc.C) *core.PodSpec
 	UploadLocalControllerCharm(context.Context, string) error
 	UploadLocalControllerCharmWithRetry(context.Context, string) error
+	UploadRecoveryArchive(context.Context, string) error
+	UploadRecoveryArchiveWithRetry(context.Context, string) error
 	ControllerExecClient() (k8sexec.Executor, error)
 	SetControllerExecClientFactory(func() (k8sexec.Executor, error))
 }
@@ -111,6 +113,14 @@ func (cs *controllerStack) UploadLocalControllerCharm(ctx context.Context, podNa
 
 func (cs *controllerStack) UploadLocalControllerCharmWithRetry(ctx context.Context, podName string) error {
 	return cs.uploadLocalControllerCharmWithRetry(ctx, podName)
+}
+
+func (cs *controllerStack) UploadRecoveryArchive(ctx context.Context, podName string) error {
+	return cs.uploadRecoveryArchive(ctx, podName)
+}
+
+func (cs *controllerStack) UploadRecoveryArchiveWithRetry(ctx context.Context, podName string) error {
+	return cs.uploadRecoveryArchiveWithRetry(ctx, podName)
 }
 
 func (cs *controllerStack) ControllerExecClient() (k8sexec.Executor, error) {

@@ -58,6 +58,7 @@ import (
 	k8sproxy "github.com/juju/juju/internal/provider/kubernetes/proxy"
 	"github.com/juju/juju/internal/provider/kubernetes/resources"
 	providerutils "github.com/juju/juju/internal/provider/kubernetes/utils"
+	internalrecovery "github.com/juju/juju/internal/recovery"
 	"github.com/juju/juju/internal/service/pebble/plan"
 	"github.com/juju/juju/juju/osenv"
 )
@@ -436,6 +437,96 @@ func (c *controllerStack) uploadLocalControllerCharmWithRetry(ctx context.Contex
 		},
 		NotifyFunc: func(err error, attempt int) {
 			logger.Debugf(ctx, "uploading local controller charm, attempt %d/%d failed: %v", attempt, localControllerCharmUploadRetryAttempts, err)
+		},
+	})
+}
+
+// uploadRecoveryArchive copies the verified recovery archive into the
+// replacement controller pod. The digest is checked inside the pod before
+// the archive is moved into the place recover-state reads.
+func (c *controllerStack) uploadRecoveryArchive(ctx context.Context, podName string) error {
+	sourcePath := c.pcfg.Bootstrap.RecoveryArchivePath
+	if sourcePath == "" {
+		return nil
+	}
+
+	execClient, err := c.controllerExecClientFactory()
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	archivePath := path.Join(c.pcfg.DataDir, internalrecovery.ArchiveFile)
+	uploadPath := archivePath + ".partial"
+	execCommand := func(commands []string) (string, error) {
+		var stdout, stderr bytes.Buffer
+		err := execClient.Exec(ctx, k8sexec.ExecParams{
+			PodName:       podName,
+			ContainerName: apiServerContainerName,
+			Commands:      commands,
+			Stdout:        &stdout,
+			Stderr:        &stderr,
+		}, nil)
+		if err != nil && stderr.Len() > 0 {
+			return "", errors.Annotate(err, strings.TrimSpace(stderr.String()))
+		}
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(stdout.String()), nil
+	}
+	if _, err := execCommand([]string{"mkdir", "-p", path.Dir(archivePath)}); err != nil {
+		return errors.Annotate(err, "creating recovery archive directory")
+	}
+
+	if err := execClient.Copy(ctx, k8sexec.CopyParams{
+		Src: k8sexec.FileResource{
+			Path: sourcePath,
+		},
+		Dest: k8sexec.FileResource{
+			Path:          uploadPath,
+			PodName:       podName,
+			ContainerName: apiServerContainerName,
+		},
+	}, nil); err != nil {
+		return errors.Annotate(err, "copying recovery archive")
+	}
+
+	output, err := execCommand([]string{"sha256sum", uploadPath})
+	if err != nil {
+		return errors.Annotate(err, "checksumming recovery archive")
+	}
+	fields := strings.Fields(output)
+	expectedSHA256 := strings.TrimPrefix(c.pcfg.Bootstrap.RecoveryArchiveSHA256, "sha256-")
+	if len(fields) == 0 || !strings.EqualFold(fields[0], expectedSHA256) {
+		return errors.NotValidf("recovery archive checksum does not match the archive assertion")
+	}
+
+	if _, err := execCommand([]string{"chmod", "0600", uploadPath}); err != nil {
+		return errors.Annotate(err, "setting recovery archive permissions")
+	}
+	if _, err := execCommand([]string{"mv", "-f", uploadPath, archivePath}); err != nil {
+		return errors.Annotate(err, "installing recovery archive")
+	}
+	return nil
+}
+
+func (c *controllerStack) uploadRecoveryArchiveWithRetry(ctx context.Context, podName string) error {
+	if c.pcfg.Bootstrap.RecoveryArchivePath == "" {
+		return nil
+	}
+	return retry.Call(retry.CallArgs{
+		Attempts: localControllerCharmUploadRetryAttempts,
+		Delay:    localControllerCharmUploadRetryDelay,
+		Stop:     ctx.Done(),
+		Clock:    c.broker.clock,
+		Func: func() error {
+			return c.uploadRecoveryArchive(ctx, podName)
+		},
+		IsFatalError: func(err error) bool {
+			return errors.Is(err, errors.NotValid)
+		},
+		NotifyFunc: func(err error, attempt int) {
+			logger.Debugf(ctx, "uploading recovery archive, attempt %d/%d failed: %v", attempt, localControllerCharmUploadRetryAttempts, err)
 		},
 	})
 }
@@ -902,6 +993,9 @@ func (c *controllerStack) ensureControllerConfigmapAgentConf(ctx context.Context
 	cm.Data[constants.ControllerAgentConfigFilename] = string(agentConfigFileContent)
 	cm.Data[constants.ControllerUnitAgentConfigFilename] = string(unitAgentConfigFileContent)
 	cm.Data[constants.ControllerNonceConfigMapKey(0)] = c.nonce
+	if c.pcfg.Bootstrap.RecoveryParams != "" {
+		cm.Data["recovery-params"] = c.pcfg.Bootstrap.RecoveryParams
+	}
 
 	logger.Tracef(context.TODO(), "ensuring agent.conf configmap %q", cm.Name)
 	cleanUp, err := c.broker.ensureConfigMap(ctx, cm)
@@ -1074,6 +1168,9 @@ func (c *controllerStack) createControllerStatefulset(ctx context.Context) error
 		}
 		if err = c.uploadLocalControllerCharmWithRetry(ctx, podName); err != nil {
 			return errors.Annotate(err, "uploading local controller charm")
+		}
+		if err = c.uploadRecoveryArchiveWithRetry(ctx, podName); err != nil {
+			return errors.Annotate(err, "uploading recovery archive")
 		}
 	}
 	return nil
@@ -1326,7 +1423,7 @@ func (c *controllerStack) controllerContainers(setupCmd, machineCmd, controllerI
 			TimeoutSeconds:      apiServerStartupProbeTimeout,
 			PeriodSeconds:       apiServerStartupProbePeriod,
 			SuccessThreshold:    apiServerStartupProbeSuccess,
-			FailureThreshold:    apiServerStartupProbeFailure,
+			FailureThreshold:    c.startupProbeFailureThreshold(),
 		},
 		LivenessProbe: &core.Probe{
 			ProbeHandler:        pebble.LivenessHandler(pebble.ApiServerHealthCheckPort),
@@ -1520,7 +1617,13 @@ func (c *controllerStack) buildContainerSpecForController() (*core.PodSpec, erro
 		agentconstants.AgentConfigFilename,
 	)
 	if c.pcfg.Bootstrap.RecoveryMode {
-		setupCmd = `mkdir -p "$JUJU_DATA_DIR/recovery" && : > "$JUJU_DATA_DIR/recovery/params"; ` + setupCmd
+		setupCmd = fmt.Sprintf(
+			`controller_id="${HOSTNAME##*-}"; if [ "${controller_id}" = "0" ]; then if ! test -e "$JUJU_DATA_DIR/%s"; then until test -e "$JUJU_DATA_DIR/%s"; do sleep 1; done; %s || exit 1; fi; else until test -e "$JUJU_DATA_DIR/agents/controller-${controller_id}/%s"; do sleep 1; done; fi`,
+			internalrecovery.StartedFile,
+			internalrecovery.ArchiveFile,
+			bootstrapStateCmd,
+			agentconstants.AgentConfigFilename,
+		)
 	}
 
 	machineCmd := fmt.Sprintf(
@@ -1628,6 +1731,11 @@ if [ "${controller_id}" = "0" ]; then
         cp "%s/%s" "${controller_template}"
         chmod 600 "${controller_template}"
     fi
+    if [ -e "%s/recovery-params" ]; then
+        mkdir -p "%s/recovery"
+        cp "%s/recovery-params" "%s/recovery/params"
+        chmod 600 "%s/recovery/params"
+    fi
 fi
 seed_nonce="%s-${controller_id}"
 if [ -e "${seed_nonce}" ]; then
@@ -1645,6 +1753,11 @@ fi
 			constants.TemplateFileNameAgentConf,
 			controllerConfigSeedDir,
 			constants.ControllerAgentConfigFilename,
+			controllerConfigSeedDir,
+			c.pcfg.DataDir,
+			controllerConfigSeedDir,
+			c.pcfg.DataDir,
+			c.pcfg.DataDir,
 			controllerConfigSeedDir+"/"+constants.ControllerNonceFilename,
 			constants.ControllerNonceFilePath,
 		)},
@@ -1702,4 +1815,15 @@ fi
 		spec.Containers[i] = ct
 	}
 	return spec, nil
+}
+
+// startupProbeFailureThreshold allows recovery to import the archive before
+// Pebble starts, followed by the normal grace period for API startup.
+func (c *controllerStack) startupProbeFailureThreshold() int32 {
+	if c.pcfg.Bootstrap == nil || !c.pcfg.Bootstrap.RecoveryMode {
+		return apiServerStartupProbeFailure
+	}
+	period := time.Duration(apiServerStartupProbePeriod) * time.Second
+	recoveryAttempts := (c.pcfg.Bootstrap.Timeout + period - 1) / period
+	return apiServerStartupProbeFailure + int32(recoveryAttempts)
 }

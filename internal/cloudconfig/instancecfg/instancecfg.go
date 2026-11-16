@@ -417,6 +417,11 @@ type StateInitializationParams struct {
 	// archive, verified again on the replacement instance. It is transient
 	// and never serialised.
 	RecoveryArchiveSHA256 string
+
+	// RecoveryParams is the marshalled recovery parameters delivered to a
+	// Kubernetes replacement pod through its controller config map. It is
+	// transient and never serialised.
+	RecoveryParams string
 }
 
 type stateInitializationParamsInternal struct {

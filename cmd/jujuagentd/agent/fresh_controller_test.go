@@ -30,7 +30,6 @@ import (
 	"github.com/juju/juju/internal/database"
 	"github.com/juju/juju/internal/errors"
 	k8sconstants "github.com/juju/juju/internal/provider/kubernetes/constants"
-	internalrecovery "github.com/juju/juju/internal/recovery"
 	"github.com/juju/juju/internal/testhelpers"
 	jujutesting "github.com/juju/juju/internal/testing"
 )
@@ -44,15 +43,15 @@ func TestFreshControllerSuite(t *testing.T) {
 }
 
 func (s *freshControllerSuite) TestFreshIAASController(c *tc.C) {
-	s.assertFreshController(c, false, nil, false, agent.BootstrapControllerId)
+	s.assertFreshController(c, false, nil)
 }
 
 func (s *freshControllerSuite) TestFreshK8sController(c *tc.C) {
-	s.assertFreshController(c, true, nil, false, agent.BootstrapControllerId)
+	s.assertFreshController(c, true, nil)
 }
 
 func (s *freshControllerSuite) TestDatabaseFailureDoesNotPersistNewPassword(c *tc.C) {
-	s.assertFreshController(c, false, errors.New("database failed"), false, agent.BootstrapControllerId)
+	s.assertFreshController(c, false, errors.New("database failed"))
 }
 
 // TestRecoveryRequiresParamsMarker checks that a data directory without
@@ -70,16 +69,23 @@ func (s *freshControllerSuite) TestRecoveryRequiresParamsMarker(c *tc.C) {
 // configuration, while still skipping BootstrapAgent and Dqlite
 // initialisation.
 func (s *freshControllerSuite) TestRecoveryK8sController(c *tc.C) {
-	s.assertFreshController(c, true, nil, true, agent.BootstrapControllerId)
+	dataDir := c.MkDir()
+	command := NewRecoverCommand()
+	command.AgentConf = agentconf.NewAgentConf(dataDir)
+	paramsPath := filepath.Join(dataDir, "recovery", "params")
+	c.Assert(os.MkdirAll(filepath.Dir(paramsPath), 0700), tc.ErrorIsNil)
+	c.Assert(os.WriteFile(paramsPath, nil, 0600), tc.ErrorIsNil)
+	err := command.Run(cmdtesting.Context(c))
+	c.Check(err, tc.ErrorMatches, "incomplete recovery parameters")
 }
 
 func (s *freshControllerSuite) assertFreshController(
-	c *tc.C, isK8s bool, databaseErr error, skipDqlite bool, machineId string,
+	c *tc.C, isK8s bool, databaseErr error,
 ) {
 	dataDir := c.MkDir()
 	modelUUID := tc.Must0(c, coremodel.NewUUID)
 	cloudType := "dummy"
-	tag := names.Tag(names.NewMachineTag(machineId))
+	tag := names.Tag(names.NewMachineTag(agent.BootstrapControllerId))
 	if isK8s {
 		cloudType = cloud.CloudTypeKubernetes
 		tag = names.NewControllerAgentTag(agent.BootstrapControllerId)
@@ -89,7 +95,6 @@ func (s *freshControllerSuite) assertFreshController(
 		"agent-version": jujuversion.Current.String(),
 	})
 	params := instancecfg.StateInitializationParams{
-		RecoveryMode:          skipDqlite,
 		ControllerConfig:      jujutesting.FakeControllerConfig(),
 		ControllerModelConfig: modelConfig,
 		ControllerCloud: cloud.Cloud{
@@ -100,13 +105,6 @@ func (s *freshControllerSuite) assertFreshController(
 	c.Assert(err, tc.ErrorIsNil)
 	err = os.WriteFile(filepath.Join(dataDir, cloudconfig.FileNameBootstrapParams), paramsData, 0600)
 	c.Assert(err, tc.ErrorIsNil)
-	if skipDqlite {
-		// Kubernetes keeps the agent-startup behaviour until it uploads
-		// its archive: an empty provenance marker with no parameters.
-		paramsPath := filepath.Join(dataDir, internalrecovery.ParamsFile)
-		c.Assert(os.MkdirAll(filepath.Dir(paramsPath), 0700), tc.ErrorIsNil)
-		c.Assert(os.WriteFile(paramsPath, nil, 0600), tc.ErrorIsNil)
-	}
 
 	cfg, err := agent.NewStateMachineConfig(agent.AgentConfigParams{
 		Paths: agent.Paths{DataDir: dataDir}, Tag: tag,
@@ -157,65 +155,52 @@ func (s *freshControllerSuite) assertFreshController(
 
 	bootstrapAgentCalled := false
 	databaseCalled := false
-	if skipDqlite {
-		command := NewRecoverCommand()
-		command.AgentConf = agentconf.NewAgentConf(dataDir)
-		command.MachineId = machineId
-		err = command.Run(cmdtesting.Context(c))
-		c.Assert(err, tc.ErrorIsNil)
-	} else {
-		command := NewBootstrapCommand()
-		command.AgentConf = agentconf.NewAgentConf(dataDir)
-		const bindAddress = "192.168.1.10"
-		command.DqliteBindAddressResolver = func(
-			_ context.Context, gotAddresses network.ProviderAddresses,
-		) (string, error) {
-			c.Check(gotAddresses, tc.DeepEquals, addresses)
-			return bindAddress, nil
-		}
-		command.BootstrapAgent = func(args agentbootstrap.AgentBootstrapArgs) (*agentbootstrap.AgentBootstrap, error) {
-			bootstrapAgentCalled = true
-			c.Check(args.StateInitialisationParams.SSHServerHostKey, tc.Not(tc.Equals), "")
-			c.Check(args.BootstrapMachineAddresses, tc.DeepEquals, addresses)
-			return agentbootstrap.NewAgentBootstrap(args)
-		}
-		command.DqliteInitialiser = func(_ context.Context, _ database.BootstrapNodeManager, gotBindAddress string, gotModelUUID coremodel.UUID, _ corelogger.Logger, _ ...database.BootstrapOpt) error {
-			databaseCalled = true
-			c.Check(gotBindAddress, tc.Equals, bindAddress)
-			c.Check(gotModelUUID, tc.Equals, modelUUID)
-			// Identity is persisted before database work; the new password is not.
-			identity, err := os.ReadFile(cfg.SystemIdentityPath())
-			c.Assert(err, tc.ErrorIsNil)
-			c.Check(string(identity), tc.Equals, expectedIdentity)
-			stored, err := agent.ReadConfig(agent.ConfigPath(dataDir, tag))
-			c.Assert(err, tc.ErrorIsNil)
-			info, ok := stored.ControllerAgentInfo()
-			c.Assert(ok, tc.IsTrue)
-			c.Check(info.SystemIdentity, tc.Equals, expectedIdentity)
-			apiInfo, ok := stored.APIInfo()
-			c.Assert(ok, tc.IsTrue)
-			c.Check(apiInfo.Password, tc.Equals, "agent-before")
-			return databaseErr
-		}
-		err = command.Run(cmdtesting.Context(c))
-		if databaseErr == nil {
-			c.Assert(err, tc.ErrorIsNil)
-		} else {
-			c.Check(err, tc.ErrorIs, databaseErr)
-		}
+	command := NewBootstrapCommand()
+	command.AgentConf = agentconf.NewAgentConf(dataDir)
+	const bindAddress = "192.168.1.10"
+	command.DqliteBindAddressResolver = func(
+		_ context.Context, gotAddresses network.ProviderAddresses,
+	) (string, error) {
+		c.Check(gotAddresses, tc.DeepEquals, addresses)
+		return bindAddress, nil
 	}
-	c.Check(databaseCalled, tc.Equals, !skipDqlite)
-	c.Check(bootstrapAgentCalled, tc.Equals, !skipDqlite)
-	if skipDqlite {
+	command.BootstrapAgent = func(args agentbootstrap.AgentBootstrapArgs) (*agentbootstrap.AgentBootstrap, error) {
+		bootstrapAgentCalled = true
+		c.Check(args.StateInitialisationParams.SSHServerHostKey, tc.Not(tc.Equals), "")
+		c.Check(args.BootstrapMachineAddresses, tc.DeepEquals, addresses)
+		return agentbootstrap.NewAgentBootstrap(args)
+	}
+	command.DqliteInitialiser = func(_ context.Context, _ database.BootstrapNodeManager, gotBindAddress string, gotModelUUID coremodel.UUID, _ corelogger.Logger, _ ...database.BootstrapOpt) error {
+		databaseCalled = true
+		c.Check(gotBindAddress, tc.Equals, bindAddress)
+		c.Check(gotModelUUID, tc.Equals, modelUUID)
+		// Identity is persisted before database work; the new password is not.
 		identity, err := os.ReadFile(cfg.SystemIdentityPath())
 		c.Assert(err, tc.ErrorIsNil)
 		c.Check(string(identity), tc.Equals, expectedIdentity)
+		stored, err := agent.ReadConfig(agent.ConfigPath(dataDir, tag))
+		c.Assert(err, tc.ErrorIsNil)
+		info, ok := stored.ControllerAgentInfo()
+		c.Assert(ok, tc.IsTrue)
+		c.Check(info.SystemIdentity, tc.Equals, expectedIdentity)
+		apiInfo, ok := stored.APIInfo()
+		c.Assert(ok, tc.IsTrue)
+		c.Check(apiInfo.Password, tc.Equals, "agent-before")
+		return databaseErr
 	}
+	err = command.Run(cmdtesting.Context(c))
+	if databaseErr == nil {
+		c.Assert(err, tc.ErrorIsNil)
+	} else {
+		c.Check(err, tc.ErrorIs, databaseErr)
+	}
+	c.Check(databaseCalled, tc.IsTrue)
+	c.Check(bootstrapAgentCalled, tc.IsTrue)
 	stored, err := agent.ReadConfig(agent.ConfigPath(dataDir, tag))
 	c.Assert(err, tc.ErrorIsNil)
 	apiInfo, ok := stored.APIInfo()
 	c.Assert(ok, tc.IsTrue)
-	if databaseErr == nil && !skipDqlite {
+	if databaseErr == nil {
 		c.Check(apiInfo.Password, tc.Not(tc.Equals), "agent-before")
 		c.Check(apiInfo.Password, tc.Not(tc.Equals), "")
 	} else {

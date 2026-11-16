@@ -4,12 +4,7 @@
 package agent
 
 import (
-	"bytes"
 	"context"
-	"fmt"
-	"os"
-	"path"
-	"path/filepath"
 	"time"
 
 	"github.com/juju/gnuflag"
@@ -29,8 +24,6 @@ import (
 	"github.com/juju/juju/domain/schema"
 	"github.com/juju/juju/environs"
 	environscloudspec "github.com/juju/juju/environs/cloudspec"
-	"github.com/juju/juju/internal/cloudconfig"
-	"github.com/juju/juju/internal/cloudconfig/instancecfg"
 	"github.com/juju/juju/internal/database"
 	"github.com/juju/juju/internal/errors"
 	internalrecovery "github.com/juju/juju/internal/recovery"
@@ -55,7 +48,6 @@ type RecoverCommand struct {
 	cmd.CommandBase
 	agentconf.AgentConf
 	Timeout                   time.Duration
-	MachineId                 string
 	RecoverDqlite             RecoverDqliteFunc
 	DqliteBindAddressResolver agentbootstrap.DqliteBindAddressResolverFunc
 }
@@ -64,7 +56,6 @@ type RecoverCommand struct {
 func NewRecoverCommand() *RecoverCommand {
 	return &RecoverCommand{
 		AgentConf:                 agentconf.NewAgentConf(""),
-		MachineId:                 agent.BootstrapControllerId,
 		RecoverDqlite:             recoverDqlite,
 		DqliteBindAddressResolver: agentbootstrap.NewDqliteBindAddressResolver(logger),
 	}
@@ -82,8 +73,6 @@ func (c *RecoverCommand) Info() *cmd.Info {
 func (c *RecoverCommand) SetFlags(f *gnuflag.FlagSet) {
 	c.AgentConf.AddFlags(f)
 	f.DurationVar(&c.Timeout, "timeout", time.Duration(0), "set the recovery timeout")
-	f.StringVar(&c.MachineId, "machine-id", agent.BootstrapControllerId,
-		"the archived logical machine identity whose agent configuration to read")
 }
 
 // Init initialises the command for running.
@@ -103,80 +92,11 @@ func (c *RecoverCommand) Run(ctx *cmd.Context) error {
 	if !isRecovery {
 		return errors.New("recover-state requires provisioned recovery parameters")
 	}
-
-	bootstrapParamsData, err := os.ReadFile(path.Join(c.DataDir(), cloudconfig.FileNameBootstrapParams))
-	if err != nil {
-		return errors.Errorf("reading bootstrap params file: %w", err)
-	}
-	var node instancecfg.StateInitializationParams
-	if err := node.Unmarshal(bootstrapParamsData); err != nil {
-		return errors.Capture(err)
-	}
-	isK8s := node.ControllerCloud.Type == cloud.CloudTypeKubernetes
-
-	paramsData, err := os.ReadFile(filepath.Join(c.DataDir(), internalrecovery.ParamsFile))
-	if err != nil {
-		return errors.Errorf("reading recovery parameters: %w", err)
-	}
-	if len(bytes.TrimSpace(paramsData)) == 0 {
-		if isK8s {
-			// Kubernetes delivers its archive later; until then it keeps
-			// the agent-startup behaviour.
-			return errors.Capture(c.initialiseRecoveryController(ctx, node))
-		}
-		return errors.New("recovery parameters are empty")
-	}
 	params, err := internalrecovery.ReadParams(c.DataDir())
 	if err != nil {
 		return errors.Capture(err)
 	}
 	return errors.Capture(c.initialiseRecoveryDatabase(ctx, params))
-}
-
-// initialiseRecoveryController prepares a replacement controller's local
-// configuration from the archived identity and stops before Dqlite
-// initialisation and state import. Unlike a fresh bootstrap it does not
-// contact the provider, look for newer agent binaries, or resolve bootstrap
-// addresses: the replacement runs the exact archived agent version and keeps
-// the archived logical machine identity, so surviving agents keep trusting
-// the replacement controller.
-func (c *RecoverCommand) initialiseRecoveryController(ctx *cmd.Context, args instancecfg.StateInitializationParams) error {
-	isK8s := args.ControllerCloud.Type == cloud.CloudTypeKubernetes
-	if isK8s {
-		if err := ensureConfigFilesForK8s(c.DataDir()); err != nil {
-			return errors.Capture(err)
-		}
-	}
-
-	// The replacement agent configuration is written for the archived logical
-	// machine, which need not be the bootstrap controller machine.
-	if err := agentconfig.ReadAgentConfig(c, c.MachineId); err != nil {
-		return errors.Errorf("cannot read config: %w", err)
-	}
-	agentConfig := c.CurrentConfig()
-	info, ok := agentConfig.ControllerAgentInfo()
-	if !ok {
-		return fmt.Errorf("bootstrap machine config has no state serving info")
-	}
-	if err := ensureKeys(isK8s, &args, &info); err != nil {
-		return errors.Capture(err)
-	}
-	if err := c.ChangeConfig(func(agentConfig agent.ConfigSetter) error {
-		agentConfig.SetControllerAgentInfo(info)
-		return nil
-	}); err != nil {
-		return fmt.Errorf("cannot write agent config: %v", err)
-	}
-
-	agentConfig = c.CurrentConfig()
-
-	// Create system-identity file
-	if err := agent.WriteSystemIdentityFile(agentConfig); err != nil {
-		return errors.Capture(err)
-	}
-
-	logger.Infof(ctx, "recovery database import is not available in this build")
-	return nil
 }
 
 // initialiseRecoveryDatabase validates the uploaded archive and initialises

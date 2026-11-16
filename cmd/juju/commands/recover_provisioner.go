@@ -144,12 +144,14 @@ func provisionRecovery(
 		commonBootstrap.SupportedBootstrapBases = base.ControllerBases()
 		k8sParams := bootstrap.K8sRecoveryParams{
 			BootstrapParams: commonBootstrap,
+			ArchivePath:     archivePath,
+			ArchiveSHA256:   info.Checksum,
 		}
 		if err := bootstrap.RecoverK8s(provisionCtx, preparation.Environ, k8sParams); err != nil {
 			return errors.Capture(err)
 		}
 		return errors.Errorf(
-			"controller recovery database import is not available in this build; started replacement agent in namespace %s",
+			"controller recovery database import is not available in this build; initialised replacement database in namespace %s",
 			k8sBroker.Namespace(),
 		)
 	}

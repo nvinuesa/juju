@@ -6,7 +6,6 @@ package kubernetes_test
 import (
 	"context"
 	"io"
-	"strings"
 	"testing"
 	"time"
 
@@ -353,13 +352,12 @@ func (s *bootstrapSuite) TestControllerSpecRecoveryMode(c *tc.C) {
 	startup := apiServer.Args[1]
 	c.Check(startup, tc.Contains, "$JUJU_TOOLS_DIR/jujuagentd recover-state")
 	c.Check(startup, tc.Not(tc.Contains), "jujuagentd bootstrap-state")
-	bootstrapIndex := strings.Index(startup, "recover-state")
-	modeIndex := strings.Index(startup,
-		`: > "$JUJU_DATA_DIR/recovery/params"`)
-	c.Assert(bootstrapIndex >= 0, tc.IsTrue)
-	c.Assert(modeIndex >= 0, tc.IsTrue)
-	c.Check(modeIndex < bootstrapIndex, tc.IsTrue)
-	c.Check(startup, tc.Contains, `mkdir -p "$JUJU_DATA_DIR/recovery"`)
+	c.Check(startup, tc.Contains,
+		`until test -e "$JUJU_DATA_DIR/recovery/archive.tar.gz"; do sleep 1; done`)
+	c.Check(startup, tc.Contains, `test -e "$JUJU_DATA_DIR/recovery/initialisation-started"`)
+	c.Check(startup, tc.Not(tc.Contains), "recovery/params")
+	c.Assert(apiServer.StartupProbe, tc.NotNil)
+	c.Check(apiServer.StartupProbe.FailureThreshold, tc.Equals, int32(400))
 
 	paramsData, err := s.pcfg.Bootstrap.StateInitializationParams.Marshal()
 	c.Assert(err, tc.ErrorIsNil)
@@ -597,6 +595,50 @@ func (s *bootstrapSuite) TestUploadLocalControllerCharmWithRetryDoesNotRetryNotV
 	err := stack.UploadLocalControllerCharmWithRetry(c.Context(), s.pcfg.GetPodName())
 	c.Assert(err, tc.ErrorIs, coreerrors.NotValid)
 	c.Check(attempts, tc.Equals, 1)
+}
+
+func (s *bootstrapSuite) TestUploadRecoveryArchiveVerifiesPrefixedDigestAndAbortsMismatch(c *tc.C) {
+	newK8sClientFunc, newK8sRestClientFunc := s.setupK8sRestClient(c, s.pcfg.ControllerName)
+	var bootstrapWatchers []k8swatcher.KubernetesNotifyWatcher
+	s.setupBroker(c, newK8sClientFunc, newK8sRestClientFunc, &bootstrapWatchers)
+
+	const digest = "a93ed2e75c922864dddbce6857353e4394ec60fd50c6a0cb1f2f131f0a10f449"
+	s.pcfg.Bootstrap.RecoveryArchivePath = "/tmp/backup.tar.gz"
+	s.pcfg.Bootstrap.RecoveryArchiveSHA256 = "sha256-" + digest
+
+	stack := s.controllerStackerGetter()
+	execClient := &localControllerCharmExec{
+		stdoutByCmd: map[string]string{
+			"sha256sum": digest + "  /var/lib/juju/recovery/archive.tar.gz.partial\n",
+		},
+	}
+	stack.SetControllerExecClientFactory(func() (k8sexec.Executor, error) {
+		return execClient, nil
+	})
+
+	err := stack.UploadRecoveryArchive(c.Context(), s.pcfg.GetPodName())
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(execClient.execCommands, tc.DeepEquals, [][]string{
+		{"mkdir", "-p", "/var/lib/juju/recovery"},
+		{"sha256sum", "/var/lib/juju/recovery/archive.tar.gz.partial"},
+		{"chmod", "0600", "/var/lib/juju/recovery/archive.tar.gz.partial"},
+		{"mv", "-f", "/var/lib/juju/recovery/archive.tar.gz.partial", "/var/lib/juju/recovery/archive.tar.gz"},
+	})
+
+	badExec := &localControllerCharmExec{
+		stdoutByCmd: map[string]string{
+			"sha256sum": "0000000000000000000000000000000000000000000000000000000000000000  /var/lib/juju/recovery/archive.tar.gz.partial\n",
+		},
+	}
+	stack.SetControllerExecClientFactory(func() (k8sexec.Executor, error) {
+		return badExec, nil
+	})
+	err = stack.UploadRecoveryArchiveWithRetry(c.Context(), s.pcfg.GetPodName())
+	c.Check(err, tc.ErrorIs, coreerrors.NotValid)
+	c.Check(badExec.execCommands, tc.DeepEquals, [][]string{
+		{"mkdir", "-p", "/var/lib/juju/recovery"},
+		{"sha256sum", "/var/lib/juju/recovery/archive.tar.gz.partial"},
+	})
 }
 
 func (s *bootstrapSuite) TestBootstrap(c *tc.C) {
@@ -1173,6 +1215,11 @@ if [ "${controller_id}" = "0" ]; then
         cp "/var/lib/juju-controller-bootstrap/controller-agent.conf" "${controller_template}"
         chmod 600 "${controller_template}"
     fi
+    if [ -e "/var/lib/juju-controller-bootstrap/recovery-params" ]; then
+        mkdir -p "/var/lib/juju/recovery"
+        cp "/var/lib/juju-controller-bootstrap/recovery-params" "/var/lib/juju/recovery/params"
+        chmod 600 "/var/lib/juju/recovery/params"
+    fi
 fi
 seed_nonce="/var/lib/juju-controller-bootstrap/controller-nonce-${controller_id}"
 if [ -e "${seed_nonce}" ]; then
@@ -1523,10 +1570,11 @@ func (s *bootstrapSuite) TestBootstrapFailedTimeout(c *tc.C) {
 }
 
 type localControllerCharmExec struct {
-	execErrAt int
-	execErr   error
-	stderr    string
-	copyErr   error
+	execErrAt   int
+	execErr     error
+	stderr      string
+	copyErr     error
+	stdoutByCmd map[string]string
 
 	execCommands [][]string
 	copyParams   []k8sexec.CopyParams
@@ -1538,6 +1586,11 @@ func (e *localControllerCharmExec) Status(context.Context, k8sexec.StatusParams)
 
 func (e *localControllerCharmExec) Exec(_ context.Context, params k8sexec.ExecParams, _ <-chan struct{}) error {
 	e.execCommands = append(e.execCommands, params.Commands)
+	if len(params.Commands) > 0 && params.Stdout != nil {
+		if out, ok := e.stdoutByCmd[params.Commands[0]]; ok {
+			_, _ = io.WriteString(params.Stdout, out)
+		}
+	}
 	if e.execErrAt != len(e.execCommands) {
 		return nil
 	}

@@ -841,7 +841,7 @@ func (s *cloudinitSuite) TestCloudInitConfigureRecoveryBootstrap(c *tc.C) {
 	scripts := s.bootstrapConfigScriptsForConfig(c, instConfig)
 	params := getStateInitializationParams(c, scripts)
 	c.Check(params.RecoveryMode, tc.IsTrue)
-	assertScriptMatch(c, scripts, "jujuagentd recover-state .* --show-log", false)
+	assertScriptMatch(c, scripts, "jujuagentd recover-state --timeout .* --data-dir .* --show-log$", false)
 	assertScriptMatch(c, scripts,
 		"echo '' > '/var/lib/juju/recovery/params'", false)
 	assertScriptMatch(c, scripts,
@@ -857,7 +857,7 @@ func (s *cloudinitSuite) TestCloudInitConfigureRecoveryBootstrapWithArchive(c *t
 	instConfig.Bootstrap.RecoveryArchiveSHA256 = checksum
 
 	scripts := s.bootstrapConfigScriptsForConfig(c, instConfig)
-	assertScriptMatch(c, scripts, "jujuagentd recover-state .* --show-log", false)
+	assertScriptMatch(c, scripts, "jujuagentd recover-state --timeout .* --data-dir .* --show-log$", false)
 	assertScriptMatch(c, scripts,
 		"archive-path: /var/lib/juju/recovery/archive.tar.gz", false)
 	assertScriptMatch(c, scripts, "sha256: "+checksum, false)
