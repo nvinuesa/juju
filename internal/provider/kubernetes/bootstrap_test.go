@@ -355,6 +355,7 @@ func (s *bootstrapSuite) TestControllerSpecRecoveryMode(c *tc.C) {
 	c.Check(startup, tc.Contains,
 		`until test -e "$JUJU_DATA_DIR/recovery/archive.tar.gz"; do sleep 1; done`)
 	c.Check(startup, tc.Contains, `test -e "$JUJU_DATA_DIR/recovery/initialisation-started"`)
+	c.Check(startup, tc.Contains, `test -e "$JUJU_DATA_DIR/recovery/initialisation-complete"`)
 	c.Check(startup, tc.Not(tc.Contains), "recovery/params")
 	c.Assert(apiServer.StartupProbe, tc.NotNil)
 	c.Check(apiServer.StartupProbe.FailureThreshold, tc.Equals, int32(400))

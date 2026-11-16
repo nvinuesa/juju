@@ -10,8 +10,11 @@ import (
 
 	"github.com/juju/tc"
 
+	jujuversion "github.com/juju/juju/core/version"
+	"github.com/juju/juju/internal/cloudconfig/instancecfg"
 	internalerrors "github.com/juju/juju/internal/errors"
 	internalrecovery "github.com/juju/juju/internal/recovery"
+	jujutesting "github.com/juju/juju/internal/testing"
 	internalworker "github.com/juju/juju/internal/worker"
 )
 
@@ -67,11 +70,34 @@ func (s *MachineSuite) TestValidateRecoveryEngineStart(c *tc.C) {
 	dataDir := c.MkDir()
 	c.Assert(validateRecoveryEngineStart(dataDir), tc.ErrorIsNil)
 
+	const checksum = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	modelConfig := jujutesting.CustomModelConfig(c, jujutesting.Attrs{
+		"name": "controller",
+		"uuid": "c0ffee00-aaaa-2222-3333-444455556666",
+		"type": "lxd",
+	})
+	paramsData, err := (internalrecovery.Params{
+		ArchivePath:  "/var/lib/juju/recovery/archive.tar.gz",
+		SHA256:       checksum,
+		AgentVersion: jujuversion.Current,
+		MachineName:  "0",
+		Node: instancecfg.StateInitializationParams{
+			AgentVersion:          jujuversion.Current,
+			ControllerModelConfig: modelConfig,
+		},
+	}).Marshal()
+	c.Assert(err, tc.ErrorIsNil)
 	paramsPath := filepath.Join(dataDir, internalrecovery.ParamsFile)
-	c.Assert(os.MkdirAll(filepath.Dir(paramsPath), 0o700), tc.ErrorIsNil)
-	c.Assert(os.WriteFile(paramsPath, nil, 0o600), tc.ErrorIsNil)
-	err := validateRecoveryEngineStart(dataDir)
+	c.Assert(os.MkdirAll(filepath.Dir(paramsPath), 0700), tc.ErrorIsNil)
+	c.Assert(os.WriteFile(paramsPath, paramsData, 0600), tc.ErrorIsNil)
+
+	err = validateRecoveryEngineStart(dataDir)
 	c.Check(err, tc.ErrorMatches, "recovery import has not completed")
+
+	markerPath := filepath.Join(dataDir, internalrecovery.InitialisedFile)
+	c.Assert(os.WriteFile(markerPath, []byte(checksum+"\n"), 0600), tc.ErrorIsNil)
+	err = validateRecoveryEngineStart(dataDir)
+	c.Check(err, tc.ErrorMatches, "recovery finalisation is not available in this build")
 }
 
 // rebootDispatchSuite tests the error-dispatch logic in MachineAgent.Run that

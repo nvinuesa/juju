@@ -1618,7 +1618,8 @@ func (c *controllerStack) buildContainerSpecForController() (*core.PodSpec, erro
 	)
 	if c.pcfg.Bootstrap.RecoveryMode {
 		setupCmd = fmt.Sprintf(
-			`controller_id="${HOSTNAME##*-}"; if [ "${controller_id}" = "0" ]; then if ! test -e "$JUJU_DATA_DIR/%s"; then until test -e "$JUJU_DATA_DIR/%s"; do sleep 1; done; %s || exit 1; fi; else until test -e "$JUJU_DATA_DIR/agents/controller-${controller_id}/%s"; do sleep 1; done; fi`,
+			`controller_id="${HOSTNAME##*-}"; if [ "${controller_id}" = "0" ]; then if test -e "$JUJU_DATA_DIR/%s"; then :; elif ! test -e "$JUJU_DATA_DIR/%s"; then until test -e "$JUJU_DATA_DIR/%s"; do sleep 1; done; %s || exit 1; fi; else until test -e "$JUJU_DATA_DIR/agents/controller-${controller_id}/%s"; do sleep 1; done; fi`,
+			internalrecovery.InitialisedFile,
 			internalrecovery.StartedFile,
 			internalrecovery.ArchiveFile,
 			bootstrapStateCmd,

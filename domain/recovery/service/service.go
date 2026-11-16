@@ -7,6 +7,7 @@ import (
 	"context"
 	"sync"
 
+	coredatabase "github.com/juju/juju/core/database"
 	coremodel "github.com/juju/juju/core/model"
 	domainrecovery "github.com/juju/juju/domain/recovery"
 	"github.com/juju/juju/internal/errors"
@@ -34,6 +35,10 @@ type State interface {
 	// PatchControllerCredential rebinds archived authentication to the
 	// replacement's.
 	PatchControllerCredential(context.Context, string, string, map[string]string) error
+
+	// GetObjectMetadataPaths describes the files required by persisted
+	// metadata.
+	GetObjectMetadataPaths(context.Context) ([]domainrecovery.ObjectMetadataPath, error)
 }
 
 // Service coordinates persistence during exclusive recovery bootstrap. The
@@ -100,6 +105,35 @@ func (s *Service) PatchControllerUnitAddresses(ctx context.Context, model coremo
 // authentication, retaining its archived identity.
 func (s *Service) PatchControllerCredential(ctx context.Context, modelUUID, authType string, attributes map[string]string) error {
 	return errors.Capture(s.controller.PatchControllerCredential(ctx, modelUUID, authType, attributes))
+}
+
+// GetObjectInventory retrieves the required files after all dumps are loaded.
+func (s *Service) GetObjectInventory(ctx context.Context, models []coremodel.UUID) ([]domainrecovery.ObjectInventory, error) {
+	controller, err := objectInventory(ctx, coredatabase.ControllerNS, s.controller)
+	if err != nil {
+		return nil, errors.Capture(err)
+	}
+	result := []domainrecovery.ObjectInventory{controller}
+	for _, model := range models {
+		st, err := s.modelState(ctx, model)
+		if err != nil {
+			return nil, errors.Capture(err)
+		}
+		inventory, err := objectInventory(ctx, model.String(), st)
+		if err != nil {
+			return nil, errors.Errorf("model %q object inventory: %w", model, err)
+		}
+		result = append(result, inventory)
+	}
+	return result, nil
+}
+
+func objectInventory(ctx context.Context, namespace string, st State) (domainrecovery.ObjectInventory, error) {
+	paths, err := st.GetObjectMetadataPaths(ctx)
+	if err != nil {
+		return domainrecovery.ObjectInventory{}, errors.Capture(err)
+	}
+	return domainrecovery.ObjectInventory{Namespace: namespace, Paths: paths}, nil
 }
 
 func (s *Service) modelState(ctx context.Context, model coremodel.UUID) (State, error) {

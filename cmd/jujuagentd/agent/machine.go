@@ -663,10 +663,23 @@ func validateRecoveryEngineStart(dataDir string) error {
 	if err != nil {
 		return errors.Capture(err)
 	}
-	if isRecovery {
+	if !isRecovery {
+		return nil
+	}
+	params, err := internalrecovery.ReadParams(dataDir)
+	if err != nil {
+		return errors.Capture(err)
+	}
+	initialised, err := internalrecovery.HasMarker(
+		dataDir, internalrecovery.InitialisedFile, params.SHA256,
+	)
+	if err != nil {
+		return errors.Capture(err)
+	}
+	if !initialised {
 		return errors.New("recovery import has not completed")
 	}
-	return nil
+	return errors.New("recovery finalisation is not available in this build")
 }
 
 func (a *MachineAgent) makeEngineCreator(

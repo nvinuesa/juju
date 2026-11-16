@@ -80,6 +80,15 @@ func (c *RecoverCommand) Run(ctx *cmd.Context) error {
 	if err != nil {
 		return errors.Capture(err)
 	}
+	if done, err := internalrecovery.HasMarker(
+		c.DataDir(), internalrecovery.InitialisedFile, params.SHA256,
+	); err != nil {
+		return errors.Capture(err)
+	} else if done {
+		// Kubernetes restarts the pod after the import; the marker makes
+		// the command idempotent.
+		return nil
+	}
 	return errors.Capture(c.initialiseRecoveryDatabase(ctx, params))
 }
 
@@ -174,7 +183,12 @@ func (c *RecoverCommand) initialiseRecoveryDatabase(ctx *cmd.Context, params int
 	}); err != nil {
 		return errors.Errorf("cannot write agent config: %v", err)
 	}
+	if err := internalrecovery.WriteMarker(
+		c.DataDir(), internalrecovery.InitialisedFile, params.SHA256,
+	); err != nil {
+		return errors.Capture(err)
+	}
 
-	logger.Infof(ctx, "recovery object store unpack is not available in this build; reconciled controller state")
+	logger.Infof(ctx, "recovery finalisation is not available in this build")
 	return nil
 }

@@ -284,8 +284,26 @@ func validFiles() map[string][]byte {
 		"juju-backup/dump/models/" + testControllerModelUUID + ".yaml": []byte("payload: {}\n"),
 		"juju-backup/dump/models/" + testModelAUUID + ".yaml":          []byte("payload: {}\n"),
 		"juju-backup/dump/models/" + testModelBUUID + ".yaml":          []byte("payload: {}\n"),
-		"juju-backup/root.tar": []byte("blobs"),
+		"juju-backup/root.tar": emptyObjectStoreTar(),
 	}
+}
+
+// emptyObjectStoreTar builds a valid data-directory files archive whose
+// object store root is present but empty.
+func emptyObjectStoreTar() []byte {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	if err := tw.WriteHeader(&tar.Header{
+		Name:     "var/lib/juju/objectstore/",
+		Typeflag: tar.TypeDir,
+		Mode:     0o700,
+	}); err != nil {
+		panic(err)
+	}
+	if err := tw.Close(); err != nil {
+		panic(err)
+	}
+	return buf.Bytes()
 }
 
 // withManifest adds a correct content manifest for the given archive

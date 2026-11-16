@@ -9,6 +9,7 @@ import (
 
 	"github.com/juju/tc"
 
+	coredatabase "github.com/juju/juju/core/database"
 	coremodel "github.com/juju/juju/core/model"
 	domainrecovery "github.com/juju/juju/domain/recovery"
 	"github.com/juju/juju/internal/errors"
@@ -31,6 +32,7 @@ type recordingState struct {
 	unitPatch      *domainrecovery.ControllerUnitAddressPatch
 	credential     map[string]string
 	machineName    string
+	objectPaths    []domainrecovery.ObjectMetadataPath
 }
 
 func (st *recordingState) LoadControllerDump(_ context.Context, dump *domainrecovery.ControllerDump, nodeID string) error {
@@ -63,6 +65,10 @@ func (st *recordingState) PatchControllerUnitAddresses(_ context.Context, machin
 func (st *recordingState) PatchControllerCredential(_ context.Context, _, authType string, attributes map[string]string) error {
 	st.credential = attributes
 	return st.loadErr
+}
+
+func (st *recordingState) GetObjectMetadataPaths(context.Context) ([]domainrecovery.ObjectMetadataPath, error) {
+	return st.objectPaths, st.loadErr
 }
 
 const (
@@ -202,6 +208,20 @@ func (s *serviceSuite) TestPatchControllerCredential(c *tc.C) {
 		map[string]string{"key": "value"})
 	c.Assert(err, tc.ErrorIsNil)
 	c.Check(st.credential, tc.DeepEquals, map[string]string{"key": "value"})
+}
+
+func (s *serviceSuite) TestObjectInventoryCoversControllerAndModels(c *tc.C) {
+	paths := []domainrecovery.ObjectMetadataPath{{Path: "charm.ash", SHA384: "hash"}}
+	st := &recordingState{objectPaths: paths}
+	svc, err := NewService(st, func(context.Context, string) (State, error) { return st, nil }, "bootstrap-node")
+	c.Assert(err, tc.ErrorIsNil)
+
+	inventories, err := svc.GetObjectInventory(c.Context(), []coremodel.UUID{controllerModelUUID})
+	c.Assert(err, tc.ErrorIsNil)
+	c.Assert(inventories, tc.HasLen, 2)
+	c.Check(inventories[0].Namespace, tc.Equals, coredatabase.ControllerNS)
+	c.Check(inventories[1].Namespace, tc.Equals, controllerModelUUID)
+	c.Check(inventories[1].Paths, tc.DeepEquals, paths)
 }
 
 func (s *serviceSuite) TestModelLoadRejectsUnsupportedVersion(c *tc.C) {

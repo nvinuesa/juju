@@ -38,6 +38,10 @@ type RecoveryService interface {
 	PatchControllerUnitAddresses(context.Context, coremodel.UUID, string, []string) error
 
 	PatchControllerCredential(context.Context, string, string, map[string]string) error
+
+	// GetObjectInventory retrieves the required files after all dumps are
+	// loaded.
+	GetObjectInventory(context.Context, []coremodel.UUID) ([]domainrecovery.ObjectInventory, error)
 }
 
 // CredentialPatch carries the replacement authentication for an archived
@@ -144,6 +148,7 @@ func Load(ctx context.Context, params LoadParams) (err error) {
 	}
 	sort.Strings(modelUUIDs)
 
+	models := make([]coremodel.UUID, 0, len(modelUUIDs))
 	for _, modelUUID := range modelUUIDs {
 		if err := ctx.Err(); err != nil {
 			return errors.Capture(err)
@@ -152,11 +157,30 @@ func Load(ctx context.Context, params LoadParams) (err error) {
 		if err != nil {
 			return errors.Errorf("reading dump for model %q: %w", modelUUID, err)
 		}
-		if err := params.Service.LoadModelDump(ctx, coremodel.UUID(modelUUID), data); err != nil {
+		model := coremodel.UUID(modelUUID)
+		if err := params.Service.LoadModelDump(ctx, model, data); err != nil {
 			return errors.Capture(err)
 		}
+		models = append(models, model)
 		params.Logger.Tracef(ctx, "loaded database for model %s", modelUUID)
 	}
+
+	// Unpack the archived object blobs straight into the replacement's
+	// object store, then verify completeness against the loaded
+	// databases: object metadata lives in the model databases too, so the
+	// check can only run now.
+	installed, err := UnpackObjectStore(ctx, params.ArchivePath, params.DataDir)
+	if err != nil {
+		return errors.Capture(err)
+	}
+	inventories, err := params.Service.GetObjectInventory(ctx, models)
+	if err != nil {
+		return errors.Capture(err)
+	}
+	if err := CheckObjectStore(ctx, inventories, params.DataDir); err != nil {
+		return errors.Capture(err)
+	}
+	params.Logger.Infof(ctx, "installed %d object store blobs", installed)
 
 	// patchTarget is the archived machine the replacement maps onto: the
 	// live controller machine resolved from the loaded dump, never an

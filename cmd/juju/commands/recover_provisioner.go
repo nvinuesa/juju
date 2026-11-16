@@ -151,7 +151,7 @@ func provisionRecovery(
 			return errors.Capture(err)
 		}
 		return errors.Errorf(
-			"controller recovery object store unpack is not available in this build; reconciled controller state in namespace %s",
+			"controller recovery finalisation is not available in this build; imported recovery archive in namespace %s",
 			k8sBroker.Namespace(),
 		)
 	}
@@ -215,7 +215,7 @@ func provisionRecovery(
 		return errors.Capture(err)
 	}
 	return errors.Errorf(
-		"controller recovery object store unpack is not available in this build; reconciled controller state on instance %s",
+		"controller recovery finalisation is not available in this build; imported recovery archive on instance %s",
 		started,
 	)
 }

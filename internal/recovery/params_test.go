@@ -135,6 +135,23 @@ func (s *paramsSuite) TestHasMarker(c *tc.C) {
 	c.Check(err, tc.ErrorMatches, "recovery marker belongs to another archive")
 }
 
+func (s *paramsSuite) TestWriteMarker(c *tc.C) {
+	dataDir := c.MkDir()
+	checksum := s.validParams(c).SHA256
+
+	c.Assert(recovery.WriteMarker(dataDir, recovery.InitialisedFile, checksum), tc.ErrorIsNil)
+	contents, err := os.ReadFile(filepath.Join(dataDir, recovery.InitialisedFile))
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(string(contents), tc.Equals, checksum+"\n")
+
+	found, err := recovery.HasMarker(dataDir, recovery.InitialisedFile, checksum)
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(found, tc.IsTrue)
+
+	// Writing again replaces the file without error.
+	c.Assert(recovery.WriteMarker(dataDir, recovery.InitialisedFile, checksum), tc.ErrorIsNil)
+}
+
 func (s *paramsSuite) TestBeginInitialisationIsExclusive(c *tc.C) {
 	dataDir := c.MkDir()
 	checksum := s.validParams(c).SHA256

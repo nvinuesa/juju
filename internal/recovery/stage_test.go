@@ -28,16 +28,17 @@ func TestStageSuite(t *stdtesting.T) {
 }
 
 type recordingRecoveryService struct {
-	controllerDump []byte
-	modelDumps     map[string][]byte
-	order          []string
-	controllerErr  error
-	modelErr       error
-	machinePatch   *domainrecovery.MachinePatch
-	machineName    string
-	unitMachine    string
-	unitAddresses  []string
-	credential     *recovery.CredentialPatch
+	controllerDump  []byte
+	modelDumps      map[string][]byte
+	order           []string
+	controllerErr   error
+	modelErr        error
+	machinePatch    *domainrecovery.MachinePatch
+	machineName     string
+	unitMachine     string
+	unitAddresses   []string
+	credential      *recovery.CredentialPatch
+	inventoryModels []coremodel.UUID
 }
 
 func (s *recordingRecoveryService) LoadControllerDump(_ context.Context, data []byte) error {
@@ -77,6 +78,12 @@ func (s *recordingRecoveryService) PatchControllerCredential(_ context.Context, 
 	return nil
 }
 
+func (s *recordingRecoveryService) GetObjectInventory(_ context.Context, models []coremodel.UUID) ([]domainrecovery.ObjectInventory, error) {
+	s.order = append(s.order, "inventory")
+	s.inventoryModels = models
+	return []domainrecovery.ObjectInventory{{Namespace: "controller"}}, nil
+}
+
 func (s *stageSuite) TestLoadReplaysControllerAndSortedModels(c *tc.C) {
 	path, sum := writeArchive(c, validFiles())
 	svc := &recordingRecoveryService{}
@@ -93,7 +100,10 @@ func (s *stageSuite) TestLoadReplaysControllerAndSortedModels(c *tc.C) {
 	c.Assert(err, tc.ErrorIsNil)
 	c.Check(svc.controllerDump, tc.Not(tc.HasLen), 0)
 	c.Check(svc.order, tc.DeepEquals, []string{
-		"controller", testControllerModelUUID, testModelAUUID, testModelBUUID,
+		"controller", testControllerModelUUID, testModelAUUID, testModelBUUID, "inventory",
+	})
+	c.Check(svc.inventoryModels, tc.DeepEquals, []coremodel.UUID{
+		testControllerModelUUID, testModelAUUID, testModelBUUID,
 	})
 	c.Check(svc.modelDumps[testControllerModelUUID], tc.Not(tc.HasLen), 0)
 	c.Check(svc.modelDumps[testModelAUUID], tc.Not(tc.HasLen), 0)

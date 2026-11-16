@@ -31,6 +31,10 @@ const (
 	// StartedFile records that database initialisation was claimed. It is
 	// retained on failure so an interrupted import is never replayed.
 	StartedFile = "recovery/initialisation-started"
+
+	// InitialisedFile records that the archive was fully imported and its
+	// object store verified.
+	InitialisedFile = "recovery/initialisation-complete"
 )
 
 // Params holds the recovery inputs delivered with the replacement instance.
@@ -140,6 +144,39 @@ func BeginInitialisation(dataDir, checksum string) error {
 		return errors.Capture(err)
 	}
 	if err := f.Sync(); err != nil {
+		return errors.Capture(err)
+	}
+	dir, err := os.Open(filepath.Dir(filename))
+	if err != nil {
+		return errors.Capture(err)
+	}
+	defer dir.Close()
+	return errors.Capture(dir.Sync())
+}
+
+// WriteMarker atomically persists completion before consumers can proceed.
+func WriteMarker(dataDir, name, checksum string) error {
+	filename := filepath.Join(dataDir, name)
+	if err := os.MkdirAll(filepath.Dir(filename), 0700); err != nil {
+		return errors.Capture(err)
+	}
+	f, err := os.CreateTemp(filepath.Dir(filename), ".marker-")
+	if err != nil {
+		return errors.Capture(err)
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.WriteString(checksum + "\n"); err != nil {
+		f.Close()
+		return errors.Capture(err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return errors.Capture(err)
+	}
+	if err := f.Close(); err != nil {
+		return errors.Capture(err)
+	}
+	if err := os.Rename(f.Name(), filename); err != nil {
 		return errors.Capture(err)
 	}
 	dir, err := os.Open(filepath.Dir(filename))
