@@ -793,6 +793,131 @@ func (s *bootstrapSuite) TestBootstrapRecoveryIAASInvalidParams(c *tc.C) {
 	}
 }
 
+func (s *bootstrapSuite) TestBootstrapRecoveryCAAS(c *tc.C) {
+	env := &recoveryCAASEnviron{
+		bootstrapEnviron: newEnviron("foo", useDefaultKeys, nil),
+		result: &environs.BootstrapResult{
+			Arch: arch.AMD64,
+			Base: corebase.MustParseBaseFromString("ubuntu@24.04"),
+			CaasBootstrapFinalizer: func(
+				environs.BootstrapContext, *podcfg.ControllerPodConfig, environs.BootstrapDialOpts,
+			) error {
+				return nil
+			},
+		},
+	}
+	controllerConfig := coretesting.FakeControllerConfig()
+	archivedVersion := coretesting.FakeVersionNumber
+	err := bootstrap.RecoverK8s(envtesting.BootstrapTestContext(c), env, bootstrap.K8sRecoveryParams{
+		BootstrapParams: recoveryCAASParams(controllerConfig, &archivedVersion),
+	})
+	c.Assert(err, tc.ErrorIsNil)
+
+	// The ordinary CAAS constraint merge and default memory apply.
+	c.Assert(env.args.BootstrapConstraints.Arch, tc.NotNil)
+	c.Check(*env.args.BootstrapConstraints.Arch, tc.Equals, arch.AMD64)
+	c.Assert(env.args.BootstrapConstraints.Mem, tc.NotNil)
+	c.Check(*env.args.BootstrapConstraints.Mem, tc.Equals, uint64(1536))
+
+	// Only the controller namespace is created, once, for the archived
+	// controller; no controller workloads are bootstrapped.
+	c.Check(env.createParams, tc.DeepEquals, []environs.CreateParams{{
+		ControllerUUID: controllerConfig.ControllerUUID(),
+	}})
+	c.Check(env.bootstrapCount, tc.Equals, 1)
+}
+
+func (s *bootstrapSuite) TestBootstrapRecoveryCAASCreateError(c *tc.C) {
+	createErr := errors.New("namespace create failed")
+	env := &recoveryCAASEnviron{
+		bootstrapEnviron: newEnviron("foo", useDefaultKeys, nil),
+		createErr:        createErr,
+		result: &environs.BootstrapResult{
+			Arch: arch.AMD64,
+			Base: corebase.MustParseBaseFromString("ubuntu@24.04"),
+			CaasBootstrapFinalizer: func(
+				environs.BootstrapContext, *podcfg.ControllerPodConfig, environs.BootstrapDialOpts,
+			) error {
+				return nil
+			},
+		},
+	}
+	archivedVersion := coretesting.FakeVersionNumber
+	err := bootstrap.RecoverK8s(envtesting.BootstrapTestContext(c), env, bootstrap.K8sRecoveryParams{
+		BootstrapParams: recoveryCAASParams(coretesting.FakeControllerConfig(), &archivedVersion),
+	})
+	c.Check(err, tc.ErrorIs, createErr)
+	c.Check(env.createParams, tc.HasLen, 1)
+	c.Check(env.bootstrapCount, tc.Equals, 1)
+}
+
+func (s *bootstrapSuite) TestBootstrapRecoveryCAASUnsupportedEnviron(c *tc.C) {
+	env := &recoveryCAASEnvironNoResources{
+		bootstrapEnviron: newEnviron("foo", useDefaultKeys, nil),
+		result: &environs.BootstrapResult{
+			Arch: arch.AMD64,
+			Base: corebase.MustParseBaseFromString("ubuntu@24.04"),
+			CaasBootstrapFinalizer: func(
+				environs.BootstrapContext, *podcfg.ControllerPodConfig, environs.BootstrapDialOpts,
+			) error {
+				return nil
+			},
+		},
+	}
+	archivedVersion := coretesting.FakeVersionNumber
+	err := bootstrap.RecoverK8s(envtesting.BootstrapTestContext(c), env, bootstrap.K8sRecoveryParams{
+		BootstrapParams: recoveryCAASParams(coretesting.FakeControllerConfig(), &archivedVersion),
+	})
+	c.Check(err, tc.ErrorIs, errors.NotSupported)
+	c.Check(env.bootstrapCount, tc.Equals, 1)
+}
+
+func (s *bootstrapSuite) TestBootstrapRecoveryCAASInvalidParams(c *tc.C) {
+	archivedVersion := coretesting.FakeVersionNumber
+	tests := []struct {
+		name   string
+		mutate func(*bootstrap.K8sRecoveryParams)
+		err    string
+	}{{
+		name:   "bootstrap base",
+		mutate: func(p *bootstrap.K8sRecoveryParams) { p.BootstrapBase = jammyBootstrapBase },
+		err:    ".*recovery with a bootstrap base for a Kubernetes controller not valid",
+	}}
+	for i, test := range tests {
+		c.Logf("test %d: %s", i, test.name)
+		env := &recoveryCAASEnviron{
+			bootstrapEnviron: newEnviron("foo", useDefaultKeys, nil),
+		}
+		params := bootstrap.K8sRecoveryParams{
+			BootstrapParams: recoveryCAASParams(coretesting.FakeControllerConfig(), &archivedVersion),
+		}
+		test.mutate(&params)
+		err := bootstrap.RecoverK8s(envtesting.BootstrapTestContext(c), env, params)
+		c.Check(err, tc.ErrorMatches, test.err)
+		c.Check(env.createParams, tc.HasLen, 0)
+	}
+}
+
+// recoveryCAASParams returns valid bootstrap parameters for Kubernetes
+// recovery tests.
+func recoveryCAASParams(
+	controllerConfig controller.Config, archivedVersion *semversion.Number,
+) bootstrap.BootstrapParams {
+	return bootstrap.BootstrapParams{
+		AdminSecret:             "fake-moon-landing",
+		CAPrivateKey:            coretesting.CAKey,
+		ControllerConfig:        controllerConfig,
+		SupportedBootstrapBases: corebase.ControllerBases(),
+		BootstrapConstraints:    constraints.MustParse("arch=amd64"),
+		AgentVersion:            archivedVersion,
+		Cloud: cloud.Cloud{
+			Name:            "recovery-k8s",
+			Type:            "kubernetes",
+			HostCloudRegion: "microk8s:localhost",
+		},
+	}
+}
+
 func (s *bootstrapSuite) TestBootstrapImage(c *tc.C) {
 	s.PatchValue(&arch.HostArch, func() string { return arch.AMD64 })
 
@@ -2084,6 +2209,53 @@ type recoveryBootstrapEnvironWithRegion struct {
 
 func (e recoveryBootstrapEnvironWithRegion) Region() (simplestreams.CloudSpec, error) {
 	return e.region, nil
+}
+
+// recoveryCAASEnviron extends bootstrapEnviron with the model resource
+// creation used by Kubernetes recovery, recording each request.
+type recoveryCAASEnviron struct {
+	*bootstrapEnviron
+
+	result       *environs.BootstrapResult
+	createParams []environs.CreateParams
+	createErr    error
+}
+
+func (e *recoveryCAASEnviron) Bootstrap(
+	_ environs.BootstrapContext,
+	args environs.BootstrapParams,
+) (*environs.BootstrapResult, error) {
+	e.bootstrapCount++
+	e.args = args
+	return e.result, nil
+}
+
+func (e *recoveryCAASEnviron) ValidateProviderForNewModel(context.Context) error {
+	return nil
+}
+
+func (e *recoveryCAASEnviron) CreateModelResources(
+	_ context.Context, args environs.CreateParams,
+) error {
+	e.createParams = append(e.createParams, args)
+	return e.createErr
+}
+
+// recoveryCAASEnvironNoResources returns a CAAS bootstrap result but does
+// not implement environs.ModelResources.
+type recoveryCAASEnvironNoResources struct {
+	*bootstrapEnviron
+
+	result *environs.BootstrapResult
+}
+
+func (e *recoveryCAASEnvironNoResources) Bootstrap(
+	_ environs.BootstrapContext,
+	args environs.BootstrapParams,
+) (*environs.BootstrapResult, error) {
+	e.bootstrapCount++
+	e.args = args
+	return e.result, nil
 }
 
 type bootstrapEnvironWithRegion struct {
