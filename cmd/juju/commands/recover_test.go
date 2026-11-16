@@ -109,9 +109,8 @@ func (s *recoverySuite) TestRun(c *tc.C) {
 	const (
 		archiveName   = "backup.tar.gz"
 		assertionName = "backup.assert"
-		// TODO(recovery): expect success once the controller is finalised.
-		terminalError = "controller recovery initialisation is not available in this build; " +
-			"provisioned replacement instance test-instance"
+		terminalError = "controller recovery database import is not available in this build; " +
+			"started replacement agent on instance test-instance"
 	)
 	newProvisionedCommand := func() cmd.Command {
 		return newRecoveryCommandWithProvisioner(func(
@@ -453,6 +452,34 @@ func (s *recoverySuite) TestProvisionRecoveryRequiresKubernetesControllerName(c 
 		CloudType: "kubernetes",
 	})
 	c.Check(err, tc.ErrorMatches, "recovery archive does not record the source controller name")
+}
+
+// TestProvisionRecoveryRequiresMatchingAgentVersion checks that a machine
+// archive written by another agent version is rejected before any cloud
+// access, since the replacement runs a locally built agent.
+func (s *recoverySuite) TestProvisionRecoveryRequiresMatchingAgentVersion(c *tc.C) {
+	other := version.Current
+	other.Patch++
+	err := provisionRecovery(cmdtesting.Context(c), nil, &recovery.ArchiveInfo{
+		CloudType:    "lxd",
+		AgentVersion: other,
+		SourceBase:   "ubuntu@24.04",
+		MachineName:  "0",
+	})
+	c.Check(err, tc.ErrorMatches, "archive was created by agent version .* recovery requires the exact same version")
+}
+
+// TestProvisionRecoveryRequiresIAASMachineName checks that a machine
+// archive which does not record the source controller machine is rejected
+// before any cloud access.
+func (s *recoverySuite) TestProvisionRecoveryRequiresIAASMachineName(c *tc.C) {
+	err := provisionRecovery(cmdtesting.Context(c), nil, &recovery.ArchiveInfo{
+		CloudType:    "lxd",
+		AgentVersion: version.Current,
+		SourceBase:   "ubuntu@24.04",
+		SourceArch:   "amd64",
+	})
+	c.Check(err, tc.ErrorMatches, "archive does not record a usable controller machine")
 }
 
 // TestProvisionRecoveryFinalizesKubernetesCloudHostRegion checks that

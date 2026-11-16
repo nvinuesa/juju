@@ -645,6 +645,95 @@ func prepareProviderBootstrap(
 	return nil
 }
 
+// finishIAASBootstrap builds the instance configuration for the started
+// instance: matching tools, finalising credentials and finalizing the
+// bootstrap configuration. It does not invoke the provider finalizer; callers
+// apply any mode-specific overrides and invoke the finalizer themselves.
+func finishIAASBootstrap(
+	ctx environs.BootstrapContext,
+	environ environs.BootstrapEnviron,
+	args BootstrapParams,
+	bootstrapParams environs.BootstrapParams,
+	result *environs.BootstrapResult,
+	customImageMetadata []*imagemetadata.ImageMetadata,
+) (*instancecfg.InstanceConfig, error) {
+	publicKey, err := userPublicSigningKey()
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	instanceConfig, err := instancecfg.NewBootstrapInstanceConfig(
+		args.ControllerConfig,
+		bootstrapParams.BootstrapConstraints,
+		args.ModelConstraints,
+		result.Base,
+		publicKey,
+		args.ExtraAgentValuesForTesting,
+	)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	// Set SSHServerHostKey if provided by the user.
+	instanceConfig.Bootstrap.StateInitializationParams.SSHServerHostKey = args.SSHServerHostKey
+
+	matchingTools, err := bootstrapParams.AvailableTools.Match(coretools.Filter{
+		Arch:   result.Arch,
+		OSType: result.Base.OS,
+	})
+	if err != nil {
+		return nil, errors.Annotatef(err, "expected tools for %q", result.Base.OS)
+	}
+	selectedToolsList, err := getBootstrapToolsVersion(ctx, matchingTools)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	// We set agent-version to the newest version, so the agent will immediately upgrade itself.
+	// Note that this only is relevant if a specific agent version has not been requested, since
+	// in that case the specific version will be the only version available.
+	newestToolVersion, _ := matchingTools.Newest()
+	// set agent version before finalizing bootstrap config
+	if err := setBootstrapAgentVersion(ctx, environ, newestToolVersion); err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	ctx.Infof("Installing Juju agent on bootstrap instance")
+	if err := instanceConfig.SetTools(selectedToolsList); err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	if err := instanceConfig.SetControllerCharm(args.ControllerCharmPath); err != nil {
+		return nil, errors.Trace(err)
+	}
+	instanceConfig.Bootstrap.ControllerCharmChannel = args.ControllerCharmChannel
+
+	var environVersion int
+	if e, ok := environ.(environs.Environ); ok {
+		environVersion = e.Provider().Version()
+	}
+
+	if finalizer, ok := environ.(environs.BootstrapCredentialsFinaliser); ok {
+		cred, err := finalizer.FinaliseBootstrapCredential(
+			ctx,
+			bootstrapParams,
+			args.CloudCredential)
+
+		if err != nil {
+			return nil, errors.Annotate(err, "finalizing bootstrap credential")
+		}
+
+		args.CloudCredential = cred
+	}
+
+	// Make sure we have the most recent environ config as the specified
+	// tools version has been updated there.
+	if err := finalizeInstanceBootstrapConfig(
+		ctx, instanceConfig, args, environ.Config(), environVersion, customImageMetadata,
+	); err != nil {
+		return nil, errors.Annotate(err, "finalizing bootstrap instance config")
+	}
+	return instanceConfig, nil
+}
+
 // bootstrapIAAS performs a fresh IAAS controller bootstrap.
 func bootstrapIAAS(
 	ctx environs.BootstrapContext,
@@ -671,85 +760,14 @@ func bootstrapIAAS(
 	}
 
 	ctx.Verbosef("Starting new instance for initial controller")
-
 	result, err := environ.Bootstrap(ctx, bootstrapParams)
 	if err != nil {
 		return errors.Trace(err)
 	}
 
-	publicKey, err := userPublicSigningKey()
+	instanceConfig, err := finishIAASBootstrap(ctx, environ, args, bootstrapParams, result, prep.customImageMetadata)
 	if err != nil {
 		return errors.Trace(err)
-	}
-	instanceConfig, err := instancecfg.NewBootstrapInstanceConfig(
-		args.ControllerConfig,
-		bootstrapParams.BootstrapConstraints,
-		args.ModelConstraints,
-		result.Base,
-		publicKey,
-		args.ExtraAgentValuesForTesting,
-	)
-	if err != nil {
-		return errors.Trace(err)
-	}
-
-	// Set SSHServerHostKey if provided by the user.
-	instanceConfig.Bootstrap.StateInitializationParams.SSHServerHostKey = args.SSHServerHostKey
-
-	matchingTools, err := bootstrapParams.AvailableTools.Match(coretools.Filter{
-		Arch:   result.Arch,
-		OSType: result.Base.OS,
-	})
-	if err != nil {
-		return errors.Annotatef(err, "expected tools for %q", result.Base.OS)
-	}
-	selectedToolsList, err := getBootstrapToolsVersion(ctx, matchingTools)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	// We set agent-version to the newest version, so the agent will immediately upgrade itself.
-	// Note that this only is relevant if a specific agent version has not been requested, since
-	// in that case the specific version will be the only version available.
-	newestToolVersion, _ := matchingTools.Newest()
-	// set agent version before finalizing bootstrap config
-	if err := setBootstrapAgentVersion(ctx, environ, newestToolVersion); err != nil {
-		return errors.Trace(err)
-	}
-
-	ctx.Infof("Installing Juju agent on bootstrap instance")
-	if err := instanceConfig.SetTools(selectedToolsList); err != nil {
-		return errors.Trace(err)
-	}
-
-	if err := instanceConfig.SetControllerCharm(args.ControllerCharmPath); err != nil {
-		return errors.Trace(err)
-	}
-	instanceConfig.Bootstrap.ControllerCharmChannel = args.ControllerCharmChannel
-
-	var environVersion int
-	if e, ok := environ.(environs.Environ); ok {
-		environVersion = e.Provider().Version()
-	}
-
-	if finalizer, ok := environ.(environs.BootstrapCredentialsFinaliser); ok {
-		cred, err := finalizer.FinaliseBootstrapCredential(
-			ctx,
-			bootstrapParams,
-			args.CloudCredential)
-
-		if err != nil {
-			return errors.Annotate(err, "finalizing bootstrap credential")
-		}
-
-		args.CloudCredential = cred
-	}
-
-	// Make sure we have the most recent environ config as the specified
-	// tools version has been updated there.
-	if err := finalizeInstanceBootstrapConfig(
-		ctx, instanceConfig, args, environ.Config(), environVersion, prep.customImageMetadata,
-	); err != nil {
-		return errors.Annotate(err, "finalizing bootstrap instance config")
 	}
 	if err := result.CloudBootstrapFinalizer(ctx, instanceConfig, args.DialOpts); err != nil {
 		return errors.Trace(err)

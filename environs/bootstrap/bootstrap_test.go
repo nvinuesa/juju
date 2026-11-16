@@ -20,7 +20,6 @@ import (
 	"github.com/juju/juju/api"
 	"github.com/juju/juju/cloud"
 	"github.com/juju/juju/cmd/cmd/cmdtesting"
-	"github.com/juju/juju/controller"
 	"github.com/juju/juju/core/arch"
 	corebase "github.com/juju/juju/core/base"
 	"github.com/juju/juju/core/constraints"
@@ -427,6 +426,7 @@ func (s *bootstrapSuite) assertFinalizePodBootstrapConfig(c *tc.C, serviceType, 
 	c.Assert(podConfig.Bootstrap.ControllerExternalName, tc.Equals, externalName)
 	c.Assert(podConfig.Bootstrap.ControllerExternalIPs, tc.DeepEquals, externalIps)
 	c.Assert(podConfig.AgentEnvironment, tc.DeepEquals, map[string]string{"foo": "bar"})
+	c.Assert(podConfig.Bootstrap.StateInitializationParams.RecoveryMode, tc.IsFalse)
 }
 
 // recoveryIAASTools returns the exact archived agent tools used by the
@@ -455,6 +455,7 @@ func validIAASRecoveryParams(archivedVersion semversion.Number) bootstrap.IAASRe
 			BootstrapConstraints:    constraints.MustParse("arch=amd64"),
 			AgentVersion:            &archivedVersion,
 		},
+		MachineId:      "7",
 		AvailableTools: recoveryIAASTools(archivedVersion, arch.AMD64),
 	}
 }
@@ -482,9 +483,12 @@ func (s *bootstrapSuite) TestBootstrapRecoveryIAAS(c *tc.C) {
 		Arch:       arch.AMD64,
 		Base:       jammyBootstrapBase,
 		CloudBootstrapFinalizer: func(
-			environs.BootstrapContext, *instancecfg.InstanceConfig, environs.BootstrapDialOpts,
+			_ environs.BootstrapContext,
+			icfg *instancecfg.InstanceConfig,
+			_ environs.BootstrapDialOpts,
 		) error {
 			env.finalizerCount++
+			env.instanceConfig = icfg
 			return nil
 		},
 	}
@@ -513,6 +517,7 @@ func (s *bootstrapSuite) TestBootstrapRecoveryIAAS(c *tc.C) {
 				return nil, errors.New("agent build attempted")
 			},
 		},
+		MachineId:      "7",
 		AvailableTools: agentTools,
 	})
 	c.Assert(err, tc.ErrorIsNil)
@@ -520,17 +525,21 @@ func (s *bootstrapSuite) TestBootstrapRecoveryIAAS(c *tc.C) {
 
 	// The provider received the exact archived tools and the pinned
 	// base and architecture.
-	c.Check(env.bootstrapCount, tc.Equals, 1)
 	c.Check(env.args.AvailableTools, tc.DeepEquals, agentTools)
 	c.Check(env.args.BootstrapBase, tc.Equals, jammyBootstrapBase)
 	c.Assert(env.args.BootstrapConstraints.Arch, tc.NotNil)
 	c.Check(*env.args.BootstrapConstraints.Arch, tc.Equals, arch.AMD64)
-	agentVersion, ok := env.cfg.AgentVersion()
-	c.Assert(ok, tc.IsTrue)
-	c.Check(agentVersion, tc.Equals, archivedVersion)
 
-	// Allocation stops before the agent is installed.
-	c.Check(env.finalizerCount, tc.Equals, 0)
+	// The finalizer received the configuration for the archived
+	// machine, stopping before Dqlite initialisation.
+	c.Check(env.finalizerCount, tc.Equals, 1)
+	c.Assert(env.instanceConfig, tc.NotNil)
+	c.Check(env.instanceConfig.MachineId, tc.Equals, "7")
+	c.Check(env.instanceConfig.MachineAgentServiceName, tc.Equals, "jujuagentd-machine-7")
+	c.Check(env.instanceConfig.APIInfo.CACert, tc.Equals, coretesting.CACert)
+	c.Check(env.instanceConfig.APIInfo.ModelTag.Id(), tc.Equals, env.cfg.UUID())
+	c.Check(env.instanceConfig.Bootstrap.StateInitializationParams.AgentVersion, tc.Equals, archivedVersion)
+	c.Check(env.instanceConfig.Bootstrap.StateInitializationParams.RecoveryMode, tc.IsTrue)
 }
 
 func (s *bootstrapSuite) TestBootstrapRecoveryIAASResultChecks(c *tc.C) {
@@ -541,10 +550,11 @@ func (s *bootstrapSuite) TestBootstrapRecoveryIAASResultChecks(c *tc.C) {
 	agentTools := recoveryIAASTools(archivedVersion, arch.AMD64)
 
 	tests := []struct {
-		name   string
-		result *environs.BootstrapResult
-		wantID instance.Id
-		err    string
+		name           string
+		result         *environs.BootstrapResult
+		attachFinalize bool
+		wantID         instance.Id
+		err            string
 	}{{
 		name: "no replacement instance reported",
 		result: &environs.BootstrapResult{
@@ -557,14 +567,24 @@ func (s *bootstrapSuite) TestBootstrapRecoveryIAASResultChecks(c *tc.C) {
 		result: nil,
 		err:    "provider returned no replacement instance details",
 	}, {
+		name: "no machine controller finaliser",
+		result: &environs.BootstrapResult{
+			InstanceID: "test-instance",
+			Arch:       arch.AMD64,
+			Base:       jammyBootstrapBase,
+		},
+		wantID: "test-instance",
+		err:    `replacement instance "test-instance" may require manual removal: provider returned no machine controller finaliser`,
+	}, {
 		name: "wrong base",
 		result: &environs.BootstrapResult{
 			InstanceID: "test-instance",
 			Arch:       arch.AMD64,
 			Base:       focalBootstrapBase,
 		},
-		wantID: "test-instance",
-		err:    `replacement instance "test-instance" may require manual removal: replacement base differs from archived controller`,
+		attachFinalize: true,
+		wantID:         "test-instance",
+		err:            `replacement instance "test-instance" may require manual removal: replacement base differs from archived controller`,
 	}, {
 		name: "wrong arch",
 		result: &environs.BootstrapResult{
@@ -572,8 +592,9 @@ func (s *bootstrapSuite) TestBootstrapRecoveryIAASResultChecks(c *tc.C) {
 			Arch:       arch.ARM64,
 			Base:       jammyBootstrapBase,
 		},
-		wantID: "test-instance",
-		err:    `replacement instance "test-instance" may require manual removal: replacement architecture differs from archived agent`,
+		attachFinalize: true,
+		wantID:         "test-instance",
+		err:            `replacement instance "test-instance" may require manual removal: replacement architecture differs from archived agent`,
 	}}
 
 	for i, test := range tests {
@@ -581,6 +602,15 @@ func (s *bootstrapSuite) TestBootstrapRecoveryIAASResultChecks(c *tc.C) {
 		env := &recoveryBootstrapEnviron{
 			bootstrapEnviron: newEnviron("foo", useDefaultKeys, nil),
 			result:           test.result,
+		}
+		var finalizerCount int
+		if test.attachFinalize {
+			test.result.CloudBootstrapFinalizer = func(
+				environs.BootstrapContext, *instancecfg.InstanceConfig, environs.BootstrapDialOpts,
+			) error {
+				finalizerCount++
+				return nil
+			}
 		}
 		id, err := bootstrap.RecoverIAAS(envtesting.BootstrapTestContext(c), env, bootstrap.IAASRecoveryParams{
 			BootstrapParams: bootstrap.BootstrapParams{
@@ -592,10 +622,12 @@ func (s *bootstrapSuite) TestBootstrapRecoveryIAASResultChecks(c *tc.C) {
 				BootstrapConstraints:    constraints.MustParse("arch=amd64"),
 				AgentVersion:            &archivedVersion,
 			},
+			MachineId:      "7",
 			AvailableTools: agentTools,
 		})
 		c.Check(id, tc.Equals, test.wantID)
-		c.Check(err, tc.ErrorMatches, test.err)
+		c.Assert(err, tc.ErrorMatches, test.err)
+		c.Check(finalizerCount, tc.Equals, 0)
 	}
 }
 
@@ -653,6 +685,11 @@ func (s *bootstrapSuite) TestBootstrapRecoveryIAASCancelled(c *tc.C) {
 			InstanceID: "test-instance",
 			Arch:       arch.AMD64,
 			Base:       jammyBootstrapBase,
+			CloudBootstrapFinalizer: func(
+				environs.BootstrapContext, *instancecfg.InstanceConfig, environs.BootstrapDialOpts,
+			) error {
+				return nil
+			},
 		},
 		// Cancel while the provider is returning the allocated
 		// instance, so the cancellation is observed after a valid
@@ -700,6 +737,108 @@ func (s *bootstrapSuite) TestBootstrapRecoveryIAASPreAllocationFailure(c *tc.C) 
 	}
 }
 
+func (s *bootstrapSuite) TestBootstrapRecoveryK8s(c *tc.C) {
+	s.PatchValue(&arch.HostArch, func() string {
+		return arch.AMD64
+	})
+	env := &recoveryK8sEnviron{
+		bootstrapEnviron: newEnviron("foo", useDefaultKeys, nil),
+	}
+	env.result = &environs.BootstrapResult{
+		Arch: arch.AMD64,
+		Base: corebase.MustParseBaseFromString("ubuntu@24.04"),
+		CaasBootstrapFinalizer: func(
+			_ environs.BootstrapContext,
+			pcfg *podcfg.ControllerPodConfig,
+			_ environs.BootstrapDialOpts,
+		) error {
+			env.finalizerCount++
+			env.podConfig = pcfg
+			return nil
+		},
+	}
+
+	archivedVersion := coretesting.FakeVersionNumber
+	err := bootstrap.RecoverK8s(envtesting.BootstrapTestContext(c), env, bootstrap.K8sRecoveryParams{
+		BootstrapParams: bootstrap.BootstrapParams{
+			AdminSecret:             "fake-moon-landing",
+			CAPrivateKey:            coretesting.CAKey,
+			ControllerConfig:        coretesting.FakeControllerConfig(),
+			SupportedBootstrapBases: corebase.ControllerBases(),
+			BootstrapConstraints:    constraints.MustParse("arch=amd64"),
+			AgentVersion:            &archivedVersion,
+			Cloud: cloud.Cloud{
+				Name:            "recovery-k8s",
+				Type:            "kubernetes",
+				HostCloudRegion: "microk8s:localhost",
+			},
+		},
+	})
+	c.Assert(err, tc.ErrorIsNil)
+
+	// The ordinary Kubernetes constraint merge and default memory apply.
+	c.Assert(env.args.BootstrapConstraints.Arch, tc.NotNil)
+	c.Check(*env.args.BootstrapConstraints.Arch, tc.Equals, arch.AMD64)
+	c.Assert(env.args.BootstrapConstraints.Mem, tc.NotNil)
+	c.Check(*env.args.BootstrapConstraints.Mem, tc.Equals, uint64(1536))
+
+	// The finalizer received the ordinary pod config built from the
+	// returned base, for the archived identity, stopping before
+	// Dqlite initialisation.
+	c.Check(env.finalizerCount, tc.Equals, 1)
+	c.Assert(env.podConfig, tc.NotNil)
+	c.Check(env.podConfig.DataDir, tc.Equals, "/var/lib/juju")
+	c.Check(env.podConfig.APIInfo.CACert, tc.Equals, coretesting.CACert)
+	c.Check(env.podConfig.APIInfo.ModelTag.Id(), tc.Equals, env.cfg.UUID())
+	c.Check(env.podConfig.JujuVersion, tc.Equals, archivedVersion)
+	c.Check(env.podConfig.Bootstrap.StateInitializationParams.RecoveryMode, tc.IsTrue)
+}
+
+func (s *bootstrapSuite) TestBootstrapRecoveryK8sResultChecks(c *tc.C) {
+	archivedVersion := coretesting.FakeVersionNumber
+	tests := []struct {
+		name   string
+		result *environs.BootstrapResult
+		err    string
+	}{{
+		name:   "nil bootstrap result",
+		result: nil,
+		err:    "provider returned no Kubernetes controller finaliser",
+	}, {
+		name: "no Kubernetes controller finaliser",
+		result: &environs.BootstrapResult{
+			Arch: arch.AMD64,
+			Base: corebase.MustParseBaseFromString("ubuntu@24.04"),
+		},
+		err: "provider returned no Kubernetes controller finaliser",
+	}}
+
+	for i, test := range tests {
+		c.Logf("test %d: %s", i, test.name)
+		env := &recoveryK8sEnviron{
+			bootstrapEnviron: newEnviron("foo", useDefaultKeys, nil),
+			result:           test.result,
+		}
+		err := bootstrap.RecoverK8s(envtesting.BootstrapTestContext(c), env, bootstrap.K8sRecoveryParams{
+			BootstrapParams: bootstrap.BootstrapParams{
+				AdminSecret:             "fake-moon-landing",
+				CAPrivateKey:            coretesting.CAKey,
+				ControllerConfig:        coretesting.FakeControllerConfig(),
+				SupportedBootstrapBases: corebase.ControllerBases(),
+				BootstrapConstraints:    constraints.MustParse("arch=amd64"),
+				AgentVersion:            &archivedVersion,
+				Cloud: cloud.Cloud{
+					Name:            "recovery-k8s",
+					Type:            "kubernetes",
+					HostCloudRegion: "microk8s:localhost",
+				},
+			},
+		})
+		c.Assert(err, tc.ErrorMatches, test.err)
+		c.Check(env.finalizerCount, tc.Equals, 0)
+	}
+}
+
 func (s *bootstrapSuite) TestBootstrapRecoveryIAASInvalidParams(c *tc.C) {
 	archivedVersion := coretesting.FakeVersionNumber
 	otherVersion := archivedVersion
@@ -725,6 +864,10 @@ func (s *bootstrapSuite) TestBootstrapRecoveryIAASInvalidParams(c *tc.C) {
 			p.Cloud = cloud.Cloud{Name: "recovery-k8s", Type: "kubernetes"}
 		},
 		err: ".*machine recovery for a Kubernetes cloud not valid",
+	}, {
+		name:   "invalid machine ID",
+		mutate: func(p *bootstrap.IAASRecoveryParams) { p.MachineId = "" },
+		err:    `.*recovery machine ID "" not valid`,
 	}, {
 		name:   "no base",
 		mutate: func(p *bootstrap.IAASRecoveryParams) { p.BootstrapBase = corebase.Base{} },
@@ -758,85 +901,6 @@ func (s *bootstrapSuite) TestBootstrapRecoveryIAASInvalidParams(c *tc.C) {
 	}
 }
 
-func (s *bootstrapSuite) TestBootstrapRecoveryK8s(c *tc.C) {
-	env := &recoveryK8sEnviron{
-		bootstrapEnviron: newEnviron("foo", useDefaultKeys, nil),
-		result: &environs.BootstrapResult{
-			Arch: arch.AMD64,
-			Base: corebase.MustParseBaseFromString("ubuntu@24.04"),
-			CaasBootstrapFinalizer: func(
-				environs.BootstrapContext, *podcfg.ControllerPodConfig, environs.BootstrapDialOpts,
-			) error {
-				return nil
-			},
-		},
-	}
-	controllerConfig := coretesting.FakeControllerConfig()
-	archivedVersion := coretesting.FakeVersionNumber
-	err := bootstrap.RecoverK8s(envtesting.BootstrapTestContext(c), env, bootstrap.K8sRecoveryParams{
-		BootstrapParams: recoveryK8sParams(controllerConfig, &archivedVersion),
-	})
-	c.Assert(err, tc.ErrorIsNil)
-
-	// The ordinary Kubernetes constraint merge and default memory apply.
-	c.Assert(env.args.BootstrapConstraints.Arch, tc.NotNil)
-	c.Check(*env.args.BootstrapConstraints.Arch, tc.Equals, arch.AMD64)
-	c.Assert(env.args.BootstrapConstraints.Mem, tc.NotNil)
-	c.Check(*env.args.BootstrapConstraints.Mem, tc.Equals, uint64(1536))
-
-	// Only the controller namespace is created, once, for the archived
-	// controller; no controller workloads are bootstrapped.
-	c.Check(env.createParams, tc.DeepEquals, []environs.CreateParams{{
-		ControllerUUID: controllerConfig.ControllerUUID(),
-	}})
-	c.Check(env.bootstrapCount, tc.Equals, 1)
-}
-
-func (s *bootstrapSuite) TestBootstrapRecoveryK8sCreateError(c *tc.C) {
-	createErr := errors.New("namespace create failed")
-	env := &recoveryK8sEnviron{
-		bootstrapEnviron: newEnviron("foo", useDefaultKeys, nil),
-		createErr:        createErr,
-		result: &environs.BootstrapResult{
-			Arch: arch.AMD64,
-			Base: corebase.MustParseBaseFromString("ubuntu@24.04"),
-			CaasBootstrapFinalizer: func(
-				environs.BootstrapContext, *podcfg.ControllerPodConfig, environs.BootstrapDialOpts,
-			) error {
-				return nil
-			},
-		},
-	}
-	archivedVersion := coretesting.FakeVersionNumber
-	err := bootstrap.RecoverK8s(envtesting.BootstrapTestContext(c), env, bootstrap.K8sRecoveryParams{
-		BootstrapParams: recoveryK8sParams(coretesting.FakeControllerConfig(), &archivedVersion),
-	})
-	c.Check(err, tc.ErrorIs, createErr)
-	c.Check(env.createParams, tc.HasLen, 1)
-	c.Check(env.bootstrapCount, tc.Equals, 1)
-}
-
-func (s *bootstrapSuite) TestBootstrapRecoveryK8sUnsupportedEnviron(c *tc.C) {
-	env := &recoveryK8sEnvironNoResources{
-		bootstrapEnviron: newEnviron("foo", useDefaultKeys, nil),
-		result: &environs.BootstrapResult{
-			Arch: arch.AMD64,
-			Base: corebase.MustParseBaseFromString("ubuntu@24.04"),
-			CaasBootstrapFinalizer: func(
-				environs.BootstrapContext, *podcfg.ControllerPodConfig, environs.BootstrapDialOpts,
-			) error {
-				return nil
-			},
-		},
-	}
-	archivedVersion := coretesting.FakeVersionNumber
-	err := bootstrap.RecoverK8s(envtesting.BootstrapTestContext(c), env, bootstrap.K8sRecoveryParams{
-		BootstrapParams: recoveryK8sParams(coretesting.FakeControllerConfig(), &archivedVersion),
-	})
-	c.Check(err, tc.ErrorIs, errors.NotSupported)
-	c.Check(env.bootstrapCount, tc.Equals, 1)
-}
-
 func (s *bootstrapSuite) TestBootstrapRecoveryK8sInvalidParams(c *tc.C) {
 	archivedVersion := coretesting.FakeVersionNumber
 	tests := []struct {
@@ -862,36 +926,27 @@ func (s *bootstrapSuite) TestBootstrapRecoveryK8sInvalidParams(c *tc.C) {
 	}}
 	for i, test := range tests {
 		c.Logf("test %d: %s", i, test.name)
-		env := &recoveryK8sEnviron{
+		env := &recoveryBootstrapEnviron{
 			bootstrapEnviron: newEnviron("foo", useDefaultKeys, nil),
 		}
 		params := bootstrap.K8sRecoveryParams{
-			BootstrapParams: recoveryK8sParams(coretesting.FakeControllerConfig(), &archivedVersion),
+			BootstrapParams: bootstrap.BootstrapParams{
+				AdminSecret:             "fake-moon-landing",
+				CAPrivateKey:            coretesting.CAKey,
+				ControllerConfig:        coretesting.FakeControllerConfig(),
+				SupportedBootstrapBases: corebase.ControllerBases(),
+				AgentVersion:            &archivedVersion,
+				Cloud: cloud.Cloud{
+					Name:            "recovery-k8s",
+					Type:            "kubernetes",
+					HostCloudRegion: "microk8s:localhost",
+				},
+			},
 		}
 		test.mutate(&params)
 		err := bootstrap.RecoverK8s(envtesting.BootstrapTestContext(c), env, params)
 		c.Check(err, tc.ErrorMatches, test.err)
-		c.Check(env.createParams, tc.HasLen, 0)
-	}
-}
-
-// recoveryK8sParams returns valid bootstrap parameters for Kubernetes
-// recovery tests.
-func recoveryK8sParams(
-	controllerConfig controller.Config, archivedVersion *semversion.Number,
-) bootstrap.BootstrapParams {
-	return bootstrap.BootstrapParams{
-		AdminSecret:             "fake-moon-landing",
-		CAPrivateKey:            coretesting.CAKey,
-		ControllerConfig:        controllerConfig,
-		SupportedBootstrapBases: corebase.ControllerBases(),
-		BootstrapConstraints:    constraints.MustParse("arch=amd64"),
-		AgentVersion:            archivedVersion,
-		Cloud: cloud.Cloud{
-			Name:            "recovery-k8s",
-			Type:            "kubernetes",
-			HostCloudRegion: "microk8s:localhost",
-		},
+		c.Check(env.bootstrapCount, tc.Equals, 0)
 	}
 }
 
@@ -2134,46 +2189,17 @@ func (e *recoveryBootstrapEnviron) Bootstrap(
 	return e.result, nil
 }
 
-// recoveryK8sEnviron extends bootstrapEnviron with the model resource
-// creation used by Kubernetes recovery, recording each request.
+// recoveryK8sEnviron extends bootstrapEnviron for Kubernetes recovery
+// tests, returning a configurable Kubernetes bootstrap result.
 type recoveryK8sEnviron struct {
 	*bootstrapEnviron
 
-	result       *environs.BootstrapResult
-	createParams []environs.CreateParams
-	createErr    error
+	result    *environs.BootstrapResult
+	podConfig *podcfg.ControllerPodConfig
 }
 
 func (e *recoveryK8sEnviron) Bootstrap(
-	_ environs.BootstrapContext,
-	args environs.BootstrapParams,
-) (*environs.BootstrapResult, error) {
-	e.bootstrapCount++
-	e.args = args
-	return e.result, nil
-}
-
-func (e *recoveryK8sEnviron) ValidateProviderForNewModel(context.Context) error {
-	return nil
-}
-
-func (e *recoveryK8sEnviron) CreateModelResources(
-	_ context.Context, args environs.CreateParams,
-) error {
-	e.createParams = append(e.createParams, args)
-	return e.createErr
-}
-
-// recoveryK8sEnvironNoResources returns a Kubernetes bootstrap result but does
-// not implement environs.ModelResources.
-type recoveryK8sEnvironNoResources struct {
-	*bootstrapEnviron
-
-	result *environs.BootstrapResult
-}
-
-func (e *recoveryK8sEnvironNoResources) Bootstrap(
-	_ environs.BootstrapContext,
+	ctx environs.BootstrapContext,
 	args environs.BootstrapParams,
 ) (*environs.BootstrapResult, error) {
 	e.bootstrapCount++

@@ -1486,9 +1486,14 @@ func (c *controllerStack) buildContainerSpecForController() (*core.PodSpec, erro
 	// controller ID from the pod ordinal and reserve bootstrap-state for
 	// controller-0. Later replicas have their agent config seeded by the charm
 	// init container before this container starts.
+	bootstrapSubcommand := "bootstrap-state"
+	if c.pcfg.Bootstrap.RecoveryMode {
+		bootstrapSubcommand = "recover-state"
+	}
 	bootstrapStateCmd := fmt.Sprintf(
-		"%s bootstrap-state --data-dir $JUJU_DATA_DIR %s --timeout %s",
+		"%s %s --data-dir $JUJU_DATA_DIR %s --timeout %s",
 		path.Join("$JUJU_TOOLS_DIR", "jujuagentd"),
+		bootstrapSubcommand,
 		loggingOption,
 		c.timeout.String(),
 	)
@@ -1514,6 +1519,9 @@ func (c *controllerStack) buildContainerSpecForController() (*core.PodSpec, erro
 		bootstrapSetup,
 		agentconstants.AgentConfigFilename,
 	)
+	if c.pcfg.Bootstrap.RecoveryMode {
+		setupCmd = `mkdir -p "$JUJU_DATA_DIR/recovery" && : > "$JUJU_DATA_DIR/recovery/params"; ` + setupCmd
+	}
 
 	machineCmd := fmt.Sprintf(
 		`/bin/sh -c 'controller_id="${HOSTNAME##*-}"; exec %s machine --data-dir "$JUJU_DATA_DIR" --controller-id "${controller_id}" --log-to-stderr %s'`,

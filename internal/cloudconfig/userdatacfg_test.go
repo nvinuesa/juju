@@ -764,10 +764,16 @@ test-key:
   - test line one
 `[1:]
 
-func (*cloudinitSuite) bootstrapConfigScripts(c *tc.C) []string {
-	loggo.GetLogger("").SetLogLevel(loggo.INFO)
+func (s *cloudinitSuite) bootstrapConfigScripts(c *tc.C) []string {
 	envConfig := minimalModelConfig(c)
 	instConfig := makeBootstrapConfig(jammy, 0).maybeSetModelConfig(envConfig)
+	return s.bootstrapConfigScriptsForConfig(c, instConfig)
+}
+
+func (*cloudinitSuite) bootstrapConfigScriptsForConfig(
+	c *tc.C, instConfig *testInstanceConfig,
+) []string {
+	loggo.GetLogger("").SetLogLevel(loggo.INFO)
 	rendered := instConfig.render()
 	cloudcfg, err := cloudinit.New(rendered.Base.OS)
 	c.Assert(err, tc.ErrorIsNil)
@@ -825,6 +831,21 @@ postruncmd:
 	c.Assert(err, tc.ErrorIsNil)
 	err = udata.Configure()
 	c.Assert(err, tc.ErrorMatches, `invalid postruncmd: .* got list containing float64`)
+}
+
+func (s *cloudinitSuite) TestCloudInitConfigureRecoveryBootstrap(c *tc.C) {
+	envConfig := minimalModelConfig(c)
+	instConfig := makeBootstrapConfig(jammy, 0).maybeSetModelConfig(envConfig)
+	instConfig.Bootstrap.RecoveryMode = true
+
+	scripts := s.bootstrapConfigScriptsForConfig(c, instConfig)
+	params := getStateInitializationParams(c, scripts)
+	c.Check(params.RecoveryMode, tc.IsTrue)
+	assertScriptMatch(c, scripts, "jujuagentd recover-state .* --show-log", false)
+	assertScriptMatch(c, scripts,
+		"echo '' > '/var/lib/juju/recovery/params'", false)
+	assertScriptMatch(c, scripts,
+		"Starting Juju machine agent \\(service jujuagentd-machine-0\\)", false)
 }
 
 func (s *cloudinitSuite) TestCloudInitConfigureBootstrapLogging(c *tc.C) {

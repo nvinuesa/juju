@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/juju/clock"
-	"github.com/juju/errors"
 	"github.com/juju/gnuflag"
 	"github.com/juju/loggo/v3"
 	"github.com/juju/lumberjack/v2"
@@ -47,6 +46,7 @@ import (
 	"github.com/juju/juju/cmd/jujuagentd/reboot"
 	cmdutil "github.com/juju/juju/cmd/jujuagentd/util"
 	"github.com/juju/juju/controller"
+	coreerrors "github.com/juju/juju/core/errors"
 	"github.com/juju/juju/core/life"
 	corelogger "github.com/juju/juju/core/logger"
 	"github.com/juju/juju/core/machinelock"
@@ -58,10 +58,12 @@ import (
 	"github.com/juju/juju/environs"
 	"github.com/juju/juju/internal/container/broker"
 	internaldependency "github.com/juju/juju/internal/dependency"
+	"github.com/juju/juju/internal/errors"
 	"github.com/juju/juju/internal/flightrecorder"
 	internallogger "github.com/juju/juju/internal/logger"
 	"github.com/juju/juju/internal/pki"
 	k8sconstants "github.com/juju/juju/internal/provider/kubernetes/constants"
+	internalrecovery "github.com/juju/juju/internal/recovery"
 	"github.com/juju/juju/internal/service"
 	"github.com/juju/juju/internal/storage/looputil"
 	internalupgrade "github.com/juju/juju/internal/upgrade"
@@ -131,7 +133,7 @@ func (p machineControllerStartupValueProvider) LocalValues() (apiserver.LocalVal
 	cfg := p.agent.CurrentConfig()
 	logSinkConfig, err := logSinkConfigFromAgentConfig(cfg)
 	if err != nil {
-		return apiserver.LocalValues{}, errors.Annotate(err, "getting log sink config")
+		return apiserver.LocalValues{}, errors.Errorf("getting log sink config: %w", err)
 	}
 	return apiserver.LocalValues{
 		DataDir:       cfg.DataDir(),
@@ -160,7 +162,7 @@ func (p machineControllerStartupValueProvider) ObjectStoreRootDir() (string, err
 func (p machineControllerStartupValueProvider) APIInfo() (*api.Info, error) {
 	info, ok := p.agent.CurrentConfig().APIInfo()
 	if !ok {
-		return nil, errors.NotFoundf("API info")
+		return nil, errors.Errorf("API info %w", coreerrors.NotFound)
 	}
 	return info, nil
 }
@@ -187,7 +189,7 @@ func (p machineModelStartupValueProvider) CACert() (string, error) {
 func (p machineModelStartupValueProvider) ControllerAgentInfo() (controller.ControllerAgentInfo, error) {
 	info, ok := p.agent.CurrentConfig().ControllerAgentInfo()
 	if !ok {
-		return controller.ControllerAgentInfo{}, errors.NotFoundf("controller agent info")
+		return controller.ControllerAgentInfo{}, errors.Errorf("controller agent info %w", coreerrors.NotFound)
 	}
 	return info, nil
 }
@@ -334,7 +336,7 @@ func (a *machineAgentCommand) Init(args []string) error {
 func (a *machineAgentCommand) Run(c *cmd.Context) error {
 	machineAgent, err := a.machineAgentFactory(a.agentTag, a.isCaas)
 	if err != nil {
-		return errors.Trace(err)
+		return errors.Capture(err)
 	}
 	return machineAgent.Run(c)
 }
@@ -373,7 +375,7 @@ func MachineAgentFactoryFn(
 			Logger:        internalworker.WrapLogger(logger),
 		})
 		if err != nil {
-			return nil, errors.Trace(err)
+			return nil, errors.Capture(err)
 		}
 		return NewMachineAgent(
 			agentTag,
@@ -403,7 +405,7 @@ func NewMachineAgent(
 ) (*MachineAgent, error) {
 	prometheusRegistry, err := addons.NewPrometheusRegistry()
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.Capture(err)
 	}
 	a := &MachineAgent{
 		agentTag:                    agentTag,
@@ -517,7 +519,7 @@ func upgradeCertificateDNSNames(config agent.ConfigSetter) error {
 	authority, err := pki.NewDefaultAuthorityPemCAKey([]byte(config.CACert()),
 		[]byte(si.CAPrivateKey))
 	if err != nil {
-		return errors.Annotate(err, "building authority from ca pem")
+		return errors.Errorf("building authority from ca pem: %w", err)
 	}
 
 	// Validate the current certificate and private key pair, and then
@@ -532,13 +534,13 @@ func upgradeCertificateDNSNames(config agent.ConfigSetter) error {
 			AddDNSNames(controller.DefaultDNSNames...).
 			Commit()
 		if err != nil {
-			return errors.Annotate(err, "generating new default controller certificate")
+			return errors.Errorf("generating new default controller certificate: %w", err)
 		}
 	}
 
 	cert, privateKey, err := leaf.ToPemParts()
 	if err != nil {
-		return errors.Annotate(err, "transforming controller certificate to pem format")
+		return errors.Errorf("transforming controller certificate to pem format: %w", err)
 	}
 
 	si.Cert, si.PrivateKey = string(cert), string(privateKey)
@@ -562,14 +564,14 @@ func (a *MachineAgent) Run(ctx *cmd.Context) (err error) {
 	// active backend (LogSink or Loki).
 	bufferedLogger, err := logsender.EnsureBufferedLogWriterOnDefaultContext(1048576)
 	if err != nil {
-		return errors.Annotate(err, "unable to install buffered log writer")
+		return errors.Errorf("unable to install buffered log writer: %w", err)
 	}
 	defer func() { _ = logsender.UninstallBufferedLogWriter() }()
 
 	// Prime the log sink and create the writer.
 	logSink, err := PrimeLogSink(a.CurrentConfig())
 	if err != nil {
-		return errors.Trace(err)
+		return errors.Capture(err)
 	}
 	defer logSink.Close()
 
@@ -583,7 +585,7 @@ func (a *MachineAgent) Run(ctx *cmd.Context) (err error) {
 
 	// Add the legacy log sink writer to the default logger context.
 	if err := loggo.DefaultContext().AddWriter("logsink", legacyLogSinkWriter); err != nil {
-		return errors.Trace(err)
+		return errors.Capture(err)
 	}
 
 	if err := introspection.WriteProfileFunctions(introspection.ProfileDir); err != nil {
@@ -596,13 +598,13 @@ func (a *MachineAgent) Run(ctx *cmd.Context) (err error) {
 	// This needs to be done before any possible restart of the mongo service.
 	// See bug http://pad.lv/1434680
 	if err := a.AgentConfigWriter.ChangeConfig(upgradeCertificateDNSNames); err != nil {
-		return errors.Annotate(err, "error upgrading server certificate")
+		return errors.Errorf("error upgrading server certificate: %w", err)
 	}
 
 	// Moved from NewMachineAgent here because the agent config could not be
 	// ready yet there.
 	if err := a.registerPrometheusCollectors(); err != nil {
-		return errors.Trace(err)
+		return errors.Capture(err)
 	}
 
 	agentConfig := a.CurrentConfig()
@@ -616,7 +618,7 @@ func (a *MachineAgent) Run(ctx *cmd.Context) (err error) {
 	// There will only be an error if the required configuration
 	// values are not passed in.
 	if err != nil {
-		return errors.Trace(err)
+		return errors.Capture(err)
 	}
 	a.machineLock = machineLock
 
@@ -656,6 +658,17 @@ func (a *MachineAgent) Run(ctx *cmd.Context) (err error) {
 	return cmdutil.AgentDone(logger, err)
 }
 
+func validateRecoveryEngineStart(dataDir string) error {
+	isRecovery, err := internalrecovery.IsRecovery(dataDir)
+	if err != nil {
+		return errors.Capture(err)
+	}
+	if isRecovery {
+		return errors.New("recovery import has not completed")
+	}
+	return nil
+}
+
 func (a *MachineAgent) makeEngineCreator(
 	agentName string, previousAgentVersion semversion.Number,
 	bufferedLogger *logsender.BufferedLogWriter,
@@ -664,6 +677,10 @@ func (a *MachineAgent) makeEngineCreator(
 ) func(context.Context) (worker.Worker, error) {
 	return func(ctx context.Context) (worker.Worker, error) {
 		agentConfig := a.CurrentConfig()
+		if err := validateRecoveryEngineStart(agentConfig.DataDir()); err != nil {
+			logger.Errorf(ctx, "recovery import has not completed")
+			return nil, errors.Capture(err)
+		}
 		engineConfigFunc := agentengine.DependencyEngineConfig
 		metrics := agentengine.NewMetrics()
 		controllerMetricsSink := metrics.ForModel(agentConfig.Model())
@@ -806,14 +823,14 @@ func (a *MachineAgent) executeRebootOrShutdown(action params.RebootAction) error
 	// block until all units/containers are ready, and reboot/shutdown
 	finalize, err := reboot.NewRebootWaiter(a.CurrentConfig())
 	if err != nil {
-		return errors.Trace(err)
+		return errors.Capture(err)
 	}
 
 	logger.Infof(context.TODO(), "Reboot: Executing reboot")
 	err = finalize.ExecuteReboot(action)
 	if err != nil {
 		logger.Infof(context.TODO(), "Reboot: Error executing reboot: %v", err)
-		return errors.Trace(err)
+		return errors.Capture(err)
 	}
 	// We return ErrRebootMachine so the agent will simply exit without error
 	// pending reboot/shutdown.
@@ -823,7 +840,7 @@ func (a *MachineAgent) executeRebootOrShutdown(action params.RebootAction) error
 func (a *MachineAgent) ChangeConfig(mutate agent.ConfigMutator) error {
 	err := a.AgentConfigWriter.ChangeConfig(mutate)
 	a.configChangedVal.Set(true)
-	return errors.Trace(err)
+	return errors.Capture(err)
 }
 
 var (
@@ -865,7 +882,7 @@ func (a *MachineAgent) validateMigration(ctx context.Context, apiCaller base.API
 		facade := apimachiner.NewClient(apiCaller)
 		_, err = facade.Machine(ctx, a.agentTag.(names.MachineTag))
 	}
-	return errors.Trace(err)
+	return errors.Capture(err)
 }
 
 // startModelWorkers starts the set of workers that run for every model
@@ -882,7 +899,7 @@ func (a *MachineAgent) startModelWorkers(cfg modelworkermanager.NewModelConfig) 
 	config.Filter = model.IgnoreErrRemoved
 	engine, err := dependency.NewEngine(config)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.Capture(err)
 	}
 
 	manifoldsCfg := model.ManifoldsConfig{
@@ -929,7 +946,7 @@ func (a *MachineAgent) startModelWorkers(cfg modelworkermanager.NewModelConfig) 
 		if err := worker.Stop(engine); err != nil {
 			logger.Errorf(context.TODO(), "while stopping engine with bad manifolds: %v", err)
 		}
-		return nil, errors.Trace(err)
+		return nil, errors.Capture(err)
 	}
 
 	return &modelWorker{
@@ -987,14 +1004,14 @@ func (a *MachineAgent) createJujudSymlinks(dataDir string) error {
 		// For IAAS, this is done in systemd for for caas we need to do it here.
 		caasJujud := filepath.Join(tools.ToolsDir(dataDir, ""), jujunames.JujuAgentd)
 		if err := a.createSymlink(caasJujud, jujud); err != nil {
-			return errors.Annotatef(err, "failed to create %s symlink", jujud)
+			return errors.Errorf("failed to create %s symlink: %w", jujud, err)
 		}
 		symlinks = caasJujudSymlinks
 	}
 	for _, link := range symlinks {
 		err := a.createSymlink(jujud, link)
 		if err != nil {
-			return errors.Annotatef(err, "failed to create %s symlink", link)
+			return errors.Errorf("failed to create %s symlink: %w", link, err)
 		}
 	}
 	return nil
@@ -1016,7 +1033,7 @@ func (a *MachineAgent) createSymlink(target, link string) error {
 			return nil
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return errors.Annotatef(err, "cannot check if %q is a symlink", fullLink)
+		return errors.Errorf("cannot check if %q is a symlink: %w", fullLink, err)
 	}
 
 	currentTarget, err := symlink.Read(fullLink)
@@ -1053,10 +1070,10 @@ func (a *MachineAgent) machineStartup(ctx context.Context, apiConn api.Connectio
 	// information which can change between reboots.
 	hostname, err := getHostname()
 	if err != nil {
-		return errors.Annotate(err, "getting machine hostname")
+		return errors.Errorf("getting machine hostname: %w", err)
 	}
 	if err := a.recordAgentStartInformation(ctx, apiConn, hostname); err != nil {
-		return errors.Annotate(err, "recording agent start information")
+		return errors.Errorf("recording agent start information: %w", err)
 	}
 
 	return nil
@@ -1075,15 +1092,15 @@ func (a *MachineAgent) machine(ctx context.Context, apiConn api.Connection) (*ap
 
 func (a *MachineAgent) recordAgentStartInformation(ctx context.Context, apiConn api.Connection, hostname string) error {
 	m, err := a.machine(ctx, apiConn)
-	if errors.Is(err, errors.NotFound) || err == nil && m.Life() == life.Dead {
+	if errors.Is(err, coreerrors.NotFound) || err == nil && m.Life() == life.Dead {
 		return internalworker.ErrTerminateAgent
 	}
 	if err != nil {
-		return errors.Annotatef(err, "cannot load machine %s from state", a.CurrentConfig().Tag())
+		return errors.Errorf("cannot load machine %s from state: %w", a.CurrentConfig().Tag(), err)
 	}
 
 	if err := m.RecordAgentStartInformation(ctx, hostname); err != nil {
-		return errors.Annotate(err, "cannot record agent start information")
+		return errors.Errorf("cannot record agent start information: %w", err)
 	}
 	return nil
 }
@@ -1097,14 +1114,14 @@ func logSinkConfigFromAgentConfig(cfg agent.Config) (coreapiserver.LogSinkConfig
 	if v := cfg.Value(agent.LogSinkRateLimitBurst); v != "" {
 		burst, err := strconv.ParseInt(v, 10, 64)
 		if err != nil {
-			return result, errors.Annotatef(err, "parsing %s", agent.LogSinkRateLimitBurst)
+			return result, errors.Errorf("parsing %s: %w", agent.LogSinkRateLimitBurst, err)
 		}
 		result.RateLimitBurst = burst
 	}
 	if v := cfg.Value(agent.LogSinkRateLimitRefill); v != "" {
 		refill, err := time.ParseDuration(v)
 		if err != nil {
-			return result, errors.Annotatef(err, "parsing %s", agent.LogSinkRateLimitRefill)
+			return result, errors.Errorf("parsing %s: %w", agent.LogSinkRateLimitRefill, err)
 		}
 		result.RateLimitRefill = refill
 	}

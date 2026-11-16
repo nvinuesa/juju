@@ -17,7 +17,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/juju/errors"
 	"github.com/juju/names/v6"
 	"github.com/juju/proxy"
 	"github.com/juju/utils/v4/shell"
@@ -30,6 +29,7 @@ import (
 	"github.com/juju/juju/controller"
 	corebase "github.com/juju/juju/core/base"
 	"github.com/juju/juju/core/constraints"
+	coreerrors "github.com/juju/juju/core/errors"
 	"github.com/juju/juju/core/instance"
 	"github.com/juju/juju/core/model"
 	"github.com/juju/juju/core/paths"
@@ -38,6 +38,7 @@ import (
 	"github.com/juju/juju/environs/config"
 	"github.com/juju/juju/environs/imagemetadata"
 	"github.com/juju/juju/environs/tags"
+	"github.com/juju/juju/internal/errors"
 	internallogger "github.com/juju/juju/internal/logger"
 	"github.com/juju/juju/internal/service"
 	"github.com/juju/juju/internal/service/common"
@@ -399,6 +400,13 @@ type StateInitializationParams struct {
 
 	// SSHServerHostKey holds the host key to be used within the embedded SSH server for Juju.
 	SSHServerHostKey string
+
+	// RecoveryMode marks this instance as a recovery allocation: a
+	// replacement controller restored from an archive. The setup generated
+	// for it runs recover-state and writes the recovery mode file instead of
+	// performing a fresh bootstrap, so Dqlite initialisation and state import
+	// are stopped before they begin.
+	RecoveryMode bool
 }
 
 type stateInitializationParamsInternal struct {
@@ -424,17 +432,18 @@ type stateInitializationParamsInternal struct {
 	ControllerCharmPath                     string                            `yaml:"controller-charm-path,omitempty"`
 	ControllerCharmChannel                  charm.Channel                     `yaml:"controller-charm-channel,omitempty"`
 	SSHServerHostKey                        string                            `yaml:"ssh-server-host-key,omitempty"`
+	RecoveryMode                            bool                              `yaml:"recovery-mode,omitempty"`
 }
 
 // Marshal marshals StateInitializationParams to an opaque byte array.
 func (p *StateInitializationParams) Marshal() ([]byte, error) {
 	customImageMetadataJSON, err := json.Marshal(p.CustomImageMetadata)
 	if err != nil {
-		return nil, errors.Annotate(err, "marshalling custom image metadata")
+		return nil, errors.Errorf("marshalling custom image metadata: %w", err)
 	}
 	controllerCloud, err := cloud.MarshalCloud(p.ControllerCloud)
 	if err != nil {
-		return nil, errors.Annotate(err, "marshalling cloud definition")
+		return nil, errors.Errorf("marshalling cloud definition: %w", err)
 	}
 	internal := stateInitializationParamsInternal{
 		AgentVersion:                            p.AgentVersion.String(),
@@ -459,6 +468,7 @@ func (p *StateInitializationParams) Marshal() ([]byte, error) {
 		ControllerCharmPath:                     p.ControllerCharmPath,
 		ControllerCharmChannel:                  p.ControllerCharmChannel,
 		SSHServerHostKey:                        p.SSHServerHostKey,
+		RecoveryMode:                            p.RecoveryMode,
 	}
 	return yaml.Marshal(&internal)
 }
@@ -468,19 +478,19 @@ func (p *StateInitializationParams) Marshal() ([]byte, error) {
 func (p *StateInitializationParams) Unmarshal(data []byte) error {
 	var internal stateInitializationParamsInternal
 	if err := yaml.Unmarshal(data, &internal); err != nil {
-		return errors.Annotate(err, "unmarshalling state initialization params")
+		return errors.Errorf("unmarshalling state initialization params: %w", err)
 	}
 	var imageMetadata []*imagemetadata.ImageMetadata
 	if err := json.Unmarshal([]byte(internal.CustomImageMetadataJSON), &imageMetadata); err != nil {
-		return errors.Trace(err)
+		return errors.Capture(err)
 	}
 	cfg, err := config.New(config.NoDefaults, internal.ControllerModelConfig)
 	if err != nil {
-		return errors.Trace(err)
+		return errors.Capture(err)
 	}
 	controllerCloud, err := cloud.UnmarshalCloud([]byte(internal.ControllerCloud))
 	if err != nil {
-		return errors.Trace(err)
+		return errors.Capture(err)
 	}
 	agentVersion, err := semversion.Parse(internal.AgentVersion)
 	if err != nil {
@@ -509,6 +519,7 @@ func (p *StateInitializationParams) Unmarshal(data []byte) error {
 		ControllerCharmPath:                     internal.ControllerCharmPath,
 		ControllerCharmChannel:                  internal.ControllerCharmChannel,
 		SSHServerHostKey:                        internal.SSHServerHostKey,
+		RecoveryMode:                            internal.RecoveryMode,
 	}
 	return nil
 }
@@ -534,7 +545,7 @@ func (cfg *InstanceConfig) InitService(renderer shell.Renderer) (service.Service
 
 	name := cfg.MachineAgentServiceName
 	svc, err := newService(name, conf)
-	return svc, errors.Trace(err)
+	return svc, errors.Capture(err)
 }
 
 var newService = func(name string, conf common.Conf) (service.Service, error) {
@@ -593,10 +604,10 @@ func (cfg *InstanceConfig) AgentConfig(
 	if cfg.TracingTailSamplingThreshold != nil && *cfg.TracingTailSamplingThreshold != "" {
 		d, err := time.ParseDuration(*cfg.TracingTailSamplingThreshold)
 		if err != nil {
-			return nil, errors.Annotatef(err, "parsing open telemetry tail sampling threshold %q", *cfg.TracingTailSamplingThreshold)
+			return nil, errors.Errorf("parsing open telemetry tail sampling threshold %q: %w", *cfg.TracingTailSamplingThreshold, err)
 		}
 		if d < 0 {
-			return nil, errors.NotValidf("open telemetry tail sampling threshold %q", *cfg.TracingTailSamplingThreshold)
+			return nil, errors.Errorf("open telemetry tail sampling threshold %q %w", *cfg.TracingTailSamplingThreshold, coreerrors.NotValid)
 		}
 		configParams.OpenTelemetryTailSamplingThreshold = d
 	}
@@ -726,7 +737,7 @@ func (cfg *InstanceConfig) SetControllerCharm(controllerCharmPath string) error 
 
 	_, err := os.Stat(controllerCharmPath)
 	if err != nil {
-		return errors.Annotatef(err, "unable set local controller charm (at %s)", controllerCharmPath)
+		return errors.Errorf("unable set local controller charm (at %s): %w", controllerCharmPath, err)
 	}
 
 	cfg.Bootstrap.ControllerCharm = controllerCharmPath
@@ -736,7 +747,11 @@ func (cfg *InstanceConfig) SetControllerCharm(controllerCharmPath string) error 
 
 // VerifyConfig verifies that the InstanceConfig is valid.
 func (cfg *InstanceConfig) VerifyConfig() (err error) {
-	defer errors.DeferredAnnotatef(&err, "invalid machine configuration")
+	defer func() {
+		if err != nil {
+			err = errors.Errorf("invalid machine configuration: %w", err)
+		}
+	}()
 	if !names.IsValidMachine(cfg.MachineId) {
 		return errors.New("invalid machine id")
 	}
@@ -777,7 +792,7 @@ func (cfg *InstanceConfig) VerifyConfig() (err error) {
 	}
 	if cfg.Bootstrap != nil {
 		if err := cfg.verifyBootstrapConfig(); err != nil {
-			return errors.Trace(err)
+			return errors.Capture(err)
 		}
 	} else {
 		if cfg.APIInfo.Tag != names.NewMachineTag(cfg.MachineId) {
@@ -791,12 +806,16 @@ func (cfg *InstanceConfig) VerifyConfig() (err error) {
 }
 
 func (cfg *InstanceConfig) verifyBootstrapConfig() (err error) {
-	defer errors.DeferredAnnotatef(&err, "invalid bootstrap configuration")
+	defer func() {
+		if err != nil {
+			err = errors.Errorf("invalid bootstrap configuration: %w", err)
+		}
+	}()
 	if cfg.ControllerConfig == nil {
 		return errors.New("bootstrap config supplied without controller config")
 	}
 	if err := cfg.Bootstrap.VerifyConfig(); err != nil {
-		return errors.Trace(err)
+		return errors.Capture(err)
 	}
 	if cfg.APIInfo.Tag != nil {
 		return errors.New("entity tag must be nil when bootstrapping")
@@ -1005,7 +1024,11 @@ func FinishInstanceConfig(
 	icfg *InstanceConfig,
 	cfg *config.Config,
 ) (err error) {
-	defer errors.DeferredAnnotatef(&err, "cannot complete machine configuration")
+	defer func() {
+		if err != nil {
+			err = errors.Errorf("cannot complete machine configuration: %w", err)
+		}
+	}()
 	if err := PopulateInstanceConfig(
 		icfg,
 		cfg.Type(),
@@ -1016,7 +1039,7 @@ func FinishInstanceConfig(
 		cfg.CloudInitUserData(),
 		nil,
 	); err != nil {
-		return errors.Trace(err)
+		return errors.Capture(err)
 	}
 	if icfg.IsController() {
 		// Add NUMACTL preference. Needed to work for both bootstrap and high availability

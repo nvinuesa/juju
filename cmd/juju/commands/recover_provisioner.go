@@ -7,7 +7,12 @@ import (
 	"context"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"sort"
 	"time"
+
+	"github.com/juju/names/v6"
+	"github.com/juju/utils/v4/ssh"
 
 	"github.com/juju/juju/api/jujuclient"
 	jujucloud "github.com/juju/juju/cloud"
@@ -20,14 +25,17 @@ import (
 	"github.com/juju/juju/core/constraints"
 	coreerrors "github.com/juju/juju/core/errors"
 	"github.com/juju/juju/core/semversion"
+	jujuversion "github.com/juju/juju/core/version"
 	"github.com/juju/juju/domain/recovery"
 	"github.com/juju/juju/environs"
 	"github.com/juju/juju/environs/bootstrap"
 	"github.com/juju/juju/environs/cloudspec"
 	environscmd "github.com/juju/juju/environs/cmd"
 	"github.com/juju/juju/environs/config"
+	"github.com/juju/juju/environs/sync"
 	"github.com/juju/juju/internal/errors"
 	"github.com/juju/juju/internal/password"
+	jujussh "github.com/juju/juju/internal/ssh"
 	"github.com/juju/juju/internal/tools"
 )
 
@@ -43,11 +51,9 @@ type recoveryK8sBroker interface {
 	Namespace() string
 }
 
-// provisionRecovery allocates replacement controller resources from the
-// recovery archive, through the ordinary bootstrap allocation pipeline, and
-// deliberately stops before installing an agent or initialising its
-// database: a replacement machine for machine clouds, or the replacement
-// controller namespace for Kubernetes clouds.
+// provisionRecovery installs and starts a replacement controller agent
+// from the recovery archive, through the ordinary bootstrap allocation
+// pipeline, and deliberately stops before initialising its database.
 func provisionRecovery(
 	ctx *cmd.Context,
 	store jujuclient.ClientStore,
@@ -61,10 +67,16 @@ func provisionRecovery(
 			return errors.New("recovery archive does not record the source controller name")
 		}
 	} else {
+		if err := info.CheckAgentVersion(jujuversion.Current); err != nil {
+			return errors.Capture(err)
+		}
 		var err error
 		iaasParams, err = recoveryParamsFromArchive(info)
 		if err != nil {
 			return errors.Capture(err)
+		}
+		if !names.IsValidMachine(info.MachineName) {
+			return errors.New("archive does not record a usable controller machine")
 		}
 	}
 
@@ -136,22 +148,68 @@ func provisionRecovery(
 			return errors.Capture(err)
 		}
 		return errors.Errorf(
-			"controller recovery initialisation is not available in this build; provisioned replacement namespace %s",
+			"controller recovery database import is not available in this build; started replacement agent in namespace %s",
 			k8sBroker.Namespace(),
+		)
+	}
+
+	keyFiles := ssh.PrivateKeyFiles()
+	if len(keyFiles) == 0 {
+		return errors.New("no Juju SSH keys available for recovery")
+	}
+	sort.Strings(keyFiles)
+	authorizedKeys, err := jujussh.PublicKeysForPrivateKeyFiles(keyFiles)
+	if err != nil {
+		return errors.Capture(err)
+	}
+	builtAgent, err := sync.BuildAgentTarball(
+		true, "bootstrap", func(semversion.Number) semversion.Number {
+			return info.AgentVersion
+		},
+	)
+	if err != nil {
+		return errors.Capture(err)
+	}
+	defer func() { _ = os.RemoveAll(builtAgent.Dir) }()
+
+	// A locally built agent only runs on the client platform, so
+	// refuse to install it on a replacement with a different base
+	// or architecture.
+	targetArch := *iaasParams.BootstrapConstraints.Arch
+	if builtAgent.Version.Arch != targetArch ||
+		builtAgent.Version.Release != iaasParams.BootstrapBase.OS {
+		return errors.Errorf(
+			"cannot use agent built for %q using a client running on %q",
+			iaasParams.BootstrapBase, builtAgent.Version,
 		)
 	}
 
 	commonBootstrap.BootstrapConstraints = iaasParams.BootstrapConstraints
 	commonBootstrap.BootstrapBase = iaasParams.BootstrapBase
 	commonBootstrap.SupportedBootstrapBases = iaasParams.SupportedBootstrapBases
+	commonBootstrap.BootstrapSSHAuthorizedKeys = authorizedKeys
+	commonBootstrap.DialOpts.Timeout = 20 * time.Minute
+	commonBootstrap.DialOpts.IdentityFiles = keyFiles
+	commonBootstrap.DialOpts.RetryDelay = 5 * time.Second
+	commonBootstrap.DialOpts.AddressesDelay = 5 * time.Second
 	iaasParams.BootstrapParams = commonBootstrap
+	iaasParams.MachineId = info.MachineName
+	iaasParams.AvailableTools = tools.List{&tools.Tools{
+		Version: semversion.Binary{
+			Number:  info.AgentVersion,
+			Release: iaasParams.BootstrapBase.OS,
+			Arch:    targetArch,
+		},
+		URL:    "file://" + filepath.Join(builtAgent.Dir, builtAgent.StorageName),
+		SHA256: builtAgent.Sha256Hash,
+		Size:   builtAgent.Size,
+	}}
 	started, err := bootstrap.RecoverIAAS(provisionCtx, preparation.Environ, iaasParams)
 	if err != nil {
 		return errors.Capture(err)
 	}
-	// TODO(recovery): return success once finalisation and registration finish.
 	return errors.Errorf(
-		"controller recovery initialisation is not available in this build; provisioned replacement instance %s",
+		"controller recovery database import is not available in this build; started replacement agent on instance %s",
 		started,
 	)
 }

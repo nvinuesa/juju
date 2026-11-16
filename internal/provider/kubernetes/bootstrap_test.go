@@ -6,13 +6,13 @@ package kubernetes_test
 import (
 	"context"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/canonical/gomock/gomock"
 	jujuclock "github.com/juju/clock"
 	"github.com/juju/clock/testclock"
-	"github.com/juju/errors"
 	"github.com/juju/proxy"
 	"github.com/juju/tc"
 	"github.com/juju/worker/v5/workertest"
@@ -34,11 +34,14 @@ import (
 	"github.com/juju/juju/controller"
 	k8sannotations "github.com/juju/juju/core/annotations"
 	"github.com/juju/juju/core/constraints"
+	coreerrors "github.com/juju/juju/core/errors"
 	jujuversion "github.com/juju/juju/core/version"
 	"github.com/juju/juju/environs/config"
 	envtesting "github.com/juju/juju/environs/testing"
+	"github.com/juju/juju/internal/cloudconfig/instancecfg"
 	"github.com/juju/juju/internal/cloudconfig/podcfg"
 	"github.com/juju/juju/internal/docker"
+	"github.com/juju/juju/internal/errors"
 	"github.com/juju/juju/internal/featureflag"
 	"github.com/juju/juju/internal/provider/kubernetes"
 	k8sexec "github.com/juju/juju/internal/provider/kubernetes/exec"
@@ -326,6 +329,43 @@ func (s *bootstrapSuite) TestControllerSpecWaitsForLocalControllerCharm(c *tc.C)
 	c.Check(startup, tc.Contains, "until test -e $JUJU_DATA_DIR/charms/controller.charm; do sleep 1; done")
 	c.Check(startup, tc.Contains, "$JUJU_TOOLS_DIR/jujuagentd bootstrap-state --data-dir $JUJU_DATA_DIR --debug --timeout 10m0s")
 	c.Check(startup, tc.Not(tc.Contains), "test -e $JUJU_DATA_DIR/agents/controller-0/agent.conf ||")
+	c.Check(startup, tc.Not(tc.Contains), "recovery/params")
+}
+
+func (s *bootstrapSuite) TestControllerSpecRecoveryMode(c *tc.C) {
+	newK8sClientFunc, newK8sRestClientFunc := s.setupK8sRestClient(c, s.pcfg.ControllerName)
+	var bootstrapWatchers []k8swatcher.KubernetesNotifyWatcher
+	s.setupBroker(c, newK8sClientFunc, newK8sRestClientFunc, &bootstrapWatchers)
+
+	s.pcfg.Bootstrap.Timeout = 10 * time.Minute
+	s.pcfg.Bootstrap.RecoveryMode = true
+	spec := s.controllerStackerGetter().BuildContainerSpecForController(c)
+	var apiServer *core.Container
+	for i := range spec.Containers {
+		if spec.Containers[i].Name == "api-server" {
+			apiServer = &spec.Containers[i]
+			break
+		}
+	}
+	c.Assert(apiServer, tc.NotNil)
+	c.Assert(apiServer.Args, tc.HasLen, 2)
+
+	startup := apiServer.Args[1]
+	c.Check(startup, tc.Contains, "$JUJU_TOOLS_DIR/jujuagentd recover-state")
+	c.Check(startup, tc.Not(tc.Contains), "jujuagentd bootstrap-state")
+	bootstrapIndex := strings.Index(startup, "recover-state")
+	modeIndex := strings.Index(startup,
+		`: > "$JUJU_DATA_DIR/recovery/params"`)
+	c.Assert(bootstrapIndex >= 0, tc.IsTrue)
+	c.Assert(modeIndex >= 0, tc.IsTrue)
+	c.Check(modeIndex < bootstrapIndex, tc.IsTrue)
+	c.Check(startup, tc.Contains, `mkdir -p "$JUJU_DATA_DIR/recovery"`)
+
+	paramsData, err := s.pcfg.Bootstrap.StateInitializationParams.Marshal()
+	c.Assert(err, tc.ErrorIsNil)
+	var params instancecfg.StateInitializationParams
+	c.Assert(params.Unmarshal(paramsData), tc.ErrorIsNil)
+	c.Check(params.RecoveryMode, tc.IsTrue)
 }
 
 func (s *bootstrapSuite) TestIsLocalControllerCharmPath(c *tc.C) {
@@ -343,7 +383,7 @@ func (s *bootstrapSuite) TestControllerExecClientWithEmptyRestConfig(c *tc.C) {
 	s.broker.SetRestConfigForTest(nil)
 
 	_, err := s.controllerStackerGetter().ControllerExecClient()
-	c.Assert(err, tc.ErrorIs, errors.NotValid)
+	c.Assert(err, tc.ErrorIs, coreerrors.NotValid)
 }
 
 func (s *bootstrapSuite) TestUploadLocalControllerCharmSkipsNonLocalCharmPath(c *tc.C) {
@@ -388,11 +428,11 @@ func (s *bootstrapSuite) TestUploadLocalControllerCharmExecClientError(c *tc.C) 
 	s.pcfg.Bootstrap.ControllerCharmPath = "/tmp/controller.charm"
 	stack := s.controllerStackerGetter()
 	stack.SetControllerExecClientFactory(func() (k8sexec.Executor, error) {
-		return nil, errors.NotValidf("empty kubernetes rest config")
+		return nil, errors.Errorf("empty kubernetes rest config %w", coreerrors.NotValid)
 	})
 
 	err := stack.UploadLocalControllerCharm(c.Context(), s.pcfg.GetPodName())
-	c.Assert(err, tc.ErrorIs, errors.NotValid)
+	c.Assert(err, tc.ErrorIs, coreerrors.NotValid)
 }
 
 func (s *bootstrapSuite) TestUploadLocalControllerCharmMkdirError(c *tc.C) {
@@ -551,11 +591,11 @@ func (s *bootstrapSuite) TestUploadLocalControllerCharmWithRetryDoesNotRetryNotV
 	attempts := 0
 	stack.SetControllerExecClientFactory(func() (k8sexec.Executor, error) {
 		attempts++
-		return nil, errors.NotValidf("empty kubernetes rest config")
+		return nil, errors.Errorf("empty kubernetes rest config %w", coreerrors.NotValid)
 	})
 
 	err := stack.UploadLocalControllerCharmWithRetry(c.Context(), s.pcfg.GetPodName())
-	c.Assert(err, tc.ErrorIs, errors.NotValid)
+	c.Assert(err, tc.ErrorIs, coreerrors.NotValid)
 	c.Check(attempts, tc.Equals, 1)
 }
 
@@ -584,7 +624,7 @@ func (s *bootstrapSuite) testBootstrap(c *tc.C, enableServiceLinks bool) {
 
 	s.k8sWatcherFn = func(_ cache.SharedIndexInformer, n string, _ jujuclock.Clock) (k8swatcher.KubernetesNotifyWatcher, error) {
 		if watchCallCount >= len(watchers) {
-			return nil, errors.NotFoundf("no watcher available for index %d", watchCallCount)
+			return nil, errors.Errorf("no watcher available for index %d %w", watchCallCount, coreerrors.NotFound)
 		}
 		w := watchers[watchCallCount]
 		watchCallCount++

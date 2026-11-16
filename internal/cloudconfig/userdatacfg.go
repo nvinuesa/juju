@@ -15,20 +15,22 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/juju/errors"
 	"github.com/juju/loggo/v3"
 	"github.com/juju/names/v6"
 	"github.com/juju/proxy"
 	"github.com/juju/utils/v4"
 
 	"github.com/juju/juju/agent"
+	coreerrors "github.com/juju/juju/core/errors"
 	"github.com/juju/juju/core/os/ostype"
 	"github.com/juju/juju/environs/bootstrap"
 	"github.com/juju/juju/environs/simplestreams"
 	"github.com/juju/juju/internal/cloudconfig/cloudinit"
 	"github.com/juju/juju/internal/cloudconfig/instancecfg"
+	"github.com/juju/juju/internal/errors"
 	"github.com/juju/juju/internal/featureflag"
 	internallogger "github.com/juju/juju/internal/logger"
+	internalrecovery "github.com/juju/juju/internal/recovery"
 	jujunames "github.com/juju/juju/juju/names"
 	"github.com/juju/juju/juju/osenv"
 )
@@ -164,7 +166,7 @@ func NewUserdataConfig(icfg *instancecfg.InstanceConfig, conf cloudinit.CloudCon
 	// Protect icfg and conf better.
 	operatingSystem := ostype.OSTypeForName(icfg.Base.OS)
 	if operatingSystem != ostype.Ubuntu {
-		return nil, errors.NotSupportedf("OS %s", icfg.Base.OS)
+		return nil, errors.Errorf("OS %s %w", icfg.Base.OS, coreerrors.NotSupported)
 	}
 
 	return &userdataConfig{
@@ -210,7 +212,7 @@ func (w *userdataConfig) ConfigureBasic() error {
 		for i := len(preruncmds) - 1; i >= 0; i -= 1 {
 			cmd, err := runCmdToString(preruncmds[i])
 			if err != nil {
-				return errors.Annotate(err, "invalid preruncmd")
+				return errors.Errorf("invalid preruncmd: %w", err)
 			}
 			w.conf.PrependRunCmd(cmd)
 		}
@@ -234,7 +236,7 @@ func (w *userdataConfig) ConfigureBasic() error {
 		}
 		err := w.conf.SetSSHKeys(keys)
 		if err != nil {
-			return errors.Annotate(err, "setting ssh keys")
+			return errors.Errorf("setting ssh keys: %w", err)
 		}
 	}
 
@@ -274,7 +276,7 @@ func (w *userdataConfig) ConfigureJuju() error {
 		for i, v := range postruncmds {
 			cmd, err := runCmdToString(v)
 			if err != nil {
-				return errors.Annotate(err, "invalid postruncmd")
+				return errors.Errorf("invalid postruncmd: %w", err)
 			}
 			cmds[i] = cmd
 		}
@@ -327,7 +329,7 @@ func (w *userdataConfig) ConfigureJuju() error {
 		w.icfg.EnableOSRefreshUpdate,
 		w.icfg.EnableOSUpgrade,
 	); err != nil {
-		return errors.Trace(err)
+		return errors.Capture(err)
 	}
 
 	// Write out the normal proxy settings so that the settings are
@@ -372,7 +374,7 @@ func (w *userdataConfig) ConfigureJuju() error {
 
 	// Fetch the tools and unarchive them into it.
 	if err := w.addDownloadToolsCmds(); err != nil {
-		return errors.Trace(err)
+		return errors.Capture(err)
 	}
 
 	// We add the machine agent's configuration info
@@ -384,15 +386,15 @@ func (w *userdataConfig) ConfigureJuju() error {
 	machineTag := names.NewMachineTag(w.icfg.MachineId)
 	_, err := w.addAgentInfo(machineTag)
 	if err != nil {
-		return errors.Trace(err)
+		return errors.Capture(err)
 	}
 
 	if w.icfg.Bootstrap != nil {
 		if err = w.addLocalControllerCharmsUpload(); err != nil {
-			return errors.Trace(err)
+			return errors.Capture(err)
 		}
 		if err := w.configureBootstrap(); err != nil {
-			return errors.Trace(err)
+			return errors.Capture(err)
 		}
 	}
 
@@ -480,9 +482,18 @@ func (w *userdataConfig) configureBootstrap() error {
 	bootstrapParamsFile := path.Join(w.icfg.DataDir, FileNameBootstrapParams)
 	bootstrapParams, err := w.icfg.Bootstrap.StateInitializationParams.Marshal()
 	if err != nil {
-		return errors.Annotate(err, "marshalling bootstrap params")
+		return errors.Errorf("marshalling bootstrap params: %w", err)
 	}
 	w.conf.AddRunTextFile(bootstrapParamsFile, string(bootstrapParams), 0600)
+	bootstrapSubcommand := "bootstrap-state"
+	var recoveryArgs []string
+	if w.icfg.Bootstrap.RecoveryMode {
+		w.conf.AddRunTextFile(
+			path.Join(w.icfg.DataDir, internalrecovery.ParamsFile), "", 0600,
+		)
+		bootstrapSubcommand = "recover-state"
+		recoveryArgs = []string{"--machine-id", w.icfg.MachineId}
+	}
 
 	loggingOption := "--show-log"
 	if loggo.GetLogger("").LogLevel() == loggo.DEBUG {
@@ -496,11 +507,12 @@ func (w *userdataConfig) configureBootstrap() error {
 	}
 	bootstrapAgentArgs := []string{
 		featureFlags + w.icfg.JujuTools() + "/" + jujunames.JujuAgentd,
-		"bootstrap-state",
+		bootstrapSubcommand,
 		"--timeout", w.icfg.Bootstrap.Timeout.String(),
 		"--data-dir", shquote(w.icfg.DataDir),
 		loggingOption,
 	}
+	bootstrapAgentArgs = append(bootstrapAgentArgs, recoveryArgs...)
 	w.conf.AddRunCmd(cloudinit.LogProgressCmd("Installing Juju machine agent"))
 	w.conf.AddScripts(strings.Join(bootstrapAgentArgs, " "))
 
@@ -521,7 +533,7 @@ func (w *userdataConfig) addLocalControllerCharmsUpload() error {
 	logger.Infof(context.TODO(), "preparing to upload controller charm from %v", charmPath)
 	charmData, err := stdos.ReadFile(charmPath)
 	if err != nil {
-		return errors.Trace(err)
+		return errors.Capture(err)
 	}
 	w.conf.AddRunBinaryFile(path.Join(w.icfg.CharmDir(), bootstrap.ControllerCharmArchive), charmData, 0644)
 
@@ -609,7 +621,7 @@ func toolsDownloadCommand(curlCommand string, urls []string) string {
 		"URLs":                  urls,
 	})
 	if err != nil {
-		panic(errors.Annotate(err, "agent binaries download template error"))
+		panic(errors.Errorf("agent binaries download template error: %w", err))
 	}
 	return buf.String()
 }
@@ -619,12 +631,12 @@ func toolsDownloadCommand(curlCommand string, urls []string) string {
 func (c *userdataConfig) addAgentInfo(tag names.Tag) (agent.Config, error) {
 	acfg, err := c.icfg.AgentConfig(tag, c.icfg.AgentVersion().Number)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.Capture(err)
 	}
 	acfg.SetValue(agent.AgentServiceName, c.icfg.MachineAgentServiceName)
 	cmds, err := acfg.WriteCommands(c.conf.ShellRenderer())
 	if err != nil {
-		return nil, errors.Annotate(err, "failed to write commands")
+		return nil, errors.Errorf("failed to write commands: %w", err)
 	}
 	c.conf.AddScripts(fmt.Sprintf("if [ ! -e %s ]; then", shquote(agent.ConfigPath(c.icfg.DataDir, tag))))
 	c.conf.AddScripts(cmds...)
@@ -635,7 +647,7 @@ func (c *userdataConfig) addAgentInfo(tag names.Tag) (agent.Config, error) {
 func (c *userdataConfig) addMachineAgentToBoot() error {
 	svc, err := c.icfg.InitService(c.conf.ShellRenderer())
 	if err != nil {
-		return errors.Trace(err)
+		return errors.Capture(err)
 	}
 
 	// Make the agent run via a symbolic link to the actual tools
@@ -647,11 +659,11 @@ func (c *userdataConfig) addMachineAgentToBoot() error {
 	name := c.tag.String()
 	cmds, err := svc.InstallCommands()
 	if err != nil {
-		return errors.Annotatef(err, "cannot make cloud-init init script for the %s agent", name)
+		return errors.Errorf("cannot make cloud-init init script for the %s agent: %w", name, err)
 	}
 	startCmds, err := svc.StartCommands()
 	if err != nil {
-		return errors.Annotatef(err, "cannot make cloud-init init script for the %s agent", name)
+		return errors.Errorf("cannot make cloud-init init script for the %s agent: %w", name, err)
 	}
 	cmds = append(cmds, startCmds...)
 

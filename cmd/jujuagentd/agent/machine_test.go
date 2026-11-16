@@ -4,12 +4,14 @@
 package agent
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
-	jujuerrors "github.com/juju/errors"
 	"github.com/juju/tc"
 
 	internalerrors "github.com/juju/juju/internal/errors"
+	internalrecovery "github.com/juju/juju/internal/recovery"
 	internalworker "github.com/juju/juju/internal/worker"
 )
 
@@ -59,6 +61,17 @@ func (s *MachineSuite) TestIntegrationStub(c *tc.C) {
 - Test model workers respect the singular responsibility flag, by claiming the lease for the model and checking that
   the correct set of workers are started.
 `)
+}
+
+func (s *MachineSuite) TestValidateRecoveryEngineStart(c *tc.C) {
+	dataDir := c.MkDir()
+	c.Assert(validateRecoveryEngineStart(dataDir), tc.ErrorIsNil)
+
+	paramsPath := filepath.Join(dataDir, internalrecovery.ParamsFile)
+	c.Assert(os.MkdirAll(filepath.Dir(paramsPath), 0o700), tc.ErrorIsNil)
+	c.Assert(os.WriteFile(paramsPath, nil, 0o600), tc.ErrorIsNil)
+	err := validateRecoveryEngineStart(dataDir)
+	c.Check(err, tc.ErrorMatches, "recovery import has not completed")
 }
 
 // rebootDispatchSuite tests the error-dispatch logic in MachineAgent.Run that
@@ -117,10 +130,10 @@ func (s *rebootDispatchSuite) TestOtherErrorNotMisidentified(c *tc.C) {
 
 // isRebootError mirrors the first case of the switch in MachineAgent.Run.
 func isRebootError(err error) bool {
-	return jujuerrors.Is(err, internalworker.ErrRebootMachine)
+	return internalerrors.Is(err, internalworker.ErrRebootMachine)
 }
 
 // isShutdownError mirrors the second case of the switch in MachineAgent.Run.
 func isShutdownError(err error) bool {
-	return jujuerrors.Is(err, internalworker.ErrShutdownMachine)
+	return internalerrors.Is(err, internalworker.ErrShutdownMachine)
 }

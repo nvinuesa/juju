@@ -4,12 +4,16 @@
 package bootstrap
 
 import (
+	"github.com/juju/names/v6"
+
 	"github.com/juju/juju/cloud"
 	coreerrors "github.com/juju/juju/core/errors"
 	"github.com/juju/juju/core/instance"
 	"github.com/juju/juju/environs"
+	"github.com/juju/juju/internal/cloudconfig/instancecfg"
 	"github.com/juju/juju/internal/errors"
 	coretools "github.com/juju/juju/internal/tools"
+	jujunames "github.com/juju/juju/juju/names"
 )
 
 // IAASRecoveryParams holds the parameters for allocating a replacement
@@ -17,6 +21,9 @@ import (
 // bootstrap parameters and adds the machine recovery inputs.
 type IAASRecoveryParams struct {
 	BootstrapParams
+
+	// MachineId is the archived logical machine identity.
+	MachineId string
 
 	// AvailableTools is the exact archived agent set for machine recovery.
 	// It bypasses packaged-tool discovery and local tool building.
@@ -31,6 +38,9 @@ func (p IAASRecoveryParams) Validate() error {
 	}
 	if cloud.CloudIsCAAS(p.Cloud) {
 		return errors.Errorf("machine recovery for a Kubernetes cloud %w", coreerrors.NotValid)
+	}
+	if !names.IsValidMachine(p.MachineId) {
+		return errors.Errorf("recovery machine ID %q %w", p.MachineId, coreerrors.NotValid)
 	}
 	if p.BootstrapBase.Empty() {
 		return errors.Errorf("recovery without a bootstrap base %w", coreerrors.NotValid)
@@ -57,8 +67,8 @@ func (p IAASRecoveryParams) Validate() error {
 	return nil
 }
 
-// K8sRecoveryParams holds the parameters for allocating a replacement
-// Kubernetes controller namespace from a recovery archive.
+// K8sRecoveryParams holds the parameters for allocating and starting a
+// replacement Kubernetes controller agent from a recovery archive.
 type K8sRecoveryParams struct {
 	BootstrapParams
 }
@@ -92,15 +102,16 @@ func validateCommonRecoveryParams(p BootstrapParams) error {
 }
 
 // RecoverIAAS allocates a replacement machine controller instance from a
-// recovery archive through the allocation stages shared with Bootstrap,
-// preserving the archived agent version and base, and stops before installing
-// an agent or initialising its database. A fresh controller bootstrap is done
-// by Bootstrap.
+// recovery archive and installs and starts one replacement agent through the
+// ordinary provider finaliser, preserving the archived machine identity, agent
+// version and base, and stopping before Dqlite initialisation and state
+// import. A fresh controller bootstrap is done by Bootstrap.
 //
 // RecoverIAAS returns the replacement instance ID whenever the provider
-// reports a successful allocation, even if a later check fails. In that case
-// the error also names the instance for manual cleanup. If the provider itself
-// fails, RecoverIAAS returns an empty ID and preserves the provider's error.
+// reports a successful allocation, even if a later check or finaliser fails.
+// In that case the error also names the instance for manual cleanup. If the
+// provider itself fails, RecoverIAAS returns an empty ID and preserves the
+// provider's error.
 func RecoverIAAS(
 	ctx environs.BootstrapContext,
 	environ environs.BootstrapEnviron,
@@ -111,7 +122,8 @@ func RecoverIAAS(
 	}
 
 	bootstrapParams := providerBootstrapParams(args.BootstrapParams)
-	if _, err := prepareIAASBootstrap(ctx, environ, args.BootstrapParams, &bootstrapParams); err != nil {
+	prep, err := prepareIAASBootstrap(ctx, environ, args.BootstrapParams, &bootstrapParams)
+	if err != nil {
 		return "", errors.Capture(err)
 	}
 	bootstrapParams.AvailableTools = args.AvailableTools
@@ -136,6 +148,17 @@ func RecoverIAAS(
 	}
 	allocated := result.InstanceID
 	err = checkIAASRecoveryResult(args, result)
+	if err == nil {
+		var instanceConfig *instancecfg.InstanceConfig
+		instanceConfig, err = finishIAASBootstrap(ctx, environ, args.BootstrapParams, bootstrapParams, result, prep.customImageMetadata)
+		if err == nil {
+			instanceConfig.MachineId = args.MachineId
+			instanceConfig.MachineAgentServiceName = jujunames.JujuAgentd + "-" +
+				names.NewMachineTag(args.MachineId).String()
+			instanceConfig.Bootstrap.StateInitializationParams.RecoveryMode = true
+			err = result.CloudBootstrapFinalizer(ctx, instanceConfig, args.DialOpts)
+		}
+	}
 	if err == nil && IsContextDone(ctx) {
 		err = Cancelled()
 	}
@@ -149,13 +172,14 @@ func RecoverIAAS(
 		)
 	}
 
-	ctx.Infof("Replacement instance %q now allocated", allocated)
+	ctx.Infof("Replacement agent now started on instance %q", allocated)
 	return allocated, nil
 }
 
-// RecoverK8s prepares the replacement Kubernetes controller bootstrap
-// configuration and allocates its namespace, stopping before creating any
-// controller workloads. A fresh controller bootstrap is done by Bootstrap.
+// RecoverK8s allocates a replacement Kubernetes controller from a recovery
+// archive and starts one replacement agent through the ordinary provider
+// finaliser, stopping before Dqlite initialisation. A fresh controller
+// bootstrap is done by Bootstrap.
 func RecoverK8s(
 	ctx environs.BootstrapContext,
 	environ environs.BootstrapEnviron,
@@ -184,22 +208,16 @@ func RecoverK8s(
 	if err != nil {
 		return errors.Capture(err)
 	}
-	ctx.Verbosef("Prepared replacement controller pod configuration for %q", podConfig.ControllerName)
+	podConfig.Bootstrap.StateInitializationParams.RecoveryMode = true
 
-	resources, ok := environ.(environs.ModelResources)
-	if !ok {
-		return errors.Errorf("Kubernetes recovery allocation for %T %w", environ, coreerrors.NotSupported)
-	}
-	if err := resources.CreateModelResources(ctx, environs.CreateParams{
-		ControllerUUID: args.ControllerConfig.ControllerUUID(),
-	}); err != nil {
+	if err := result.CaasBootstrapFinalizer(ctx, podConfig, args.DialOpts); err != nil {
 		return errors.Capture(err)
 	}
 	if IsContextDone(ctx) {
 		return Cancelled()
 	}
 
-	ctx.Infof("Replacement controller resources now allocated")
+	ctx.Infof("Replacement agent now started")
 	return nil
 }
 
@@ -210,6 +228,9 @@ func checkIAASRecoveryResult(
 	args IAASRecoveryParams,
 	result *environs.BootstrapResult,
 ) error {
+	if result.CloudBootstrapFinalizer == nil {
+		return errors.New("provider returned no machine controller finaliser")
+	}
 	if result.Base != args.BootstrapBase {
 		return errors.New("replacement base differs from archived controller")
 	}
