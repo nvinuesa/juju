@@ -166,7 +166,7 @@ func RecoverK8s(
 	}
 
 	bootstrapParams := providerBootstrapParams(args.BootstrapParams)
-	bootstrapConstraints, err := prepareCAASConstraints(ctx, environ, args.BootstrapParams)
+	bootstrapConstraints, err := prepareK8sConstraints(ctx, environ, args.BootstrapParams)
 	if err != nil {
 		return errors.Capture(err)
 	}
@@ -180,7 +180,7 @@ func RecoverK8s(
 		return errors.New("provider returned no Kubernetes controller finaliser")
 	}
 
-	podConfig, err := finishCAASBootstrap(ctx, environ, args.BootstrapParams, result, bootstrapConstraints)
+	podConfig, err := finishK8sBootstrap(ctx, environ, args.BootstrapParams, result, bootstrapConstraints)
 	if err != nil {
 		return errors.Capture(err)
 	}
