@@ -284,9 +284,9 @@ func withDefaultCAASControllerConstraints(cons constraints.Value) constraints.Va
 	return cons
 }
 
-// prepareCAASConstraints merges and defaults the bootstrap constraints for a
+// prepareK8sConstraints merges and defaults the bootstrap constraints for a
 // Kubernetes controller, shared by fresh bootstrap and recovery allocation.
-func prepareCAASConstraints(
+func prepareK8sConstraints(
 	ctx environs.BootstrapContext,
 	environ environs.BootstrapEnviron,
 	args AllocationParams,
@@ -304,10 +304,10 @@ func prepareCAASConstraints(
 	return withDefaultCAASControllerConstraints(bootstrapConstraints), nil
 }
 
-// finishCAASBootstrap builds the controller pod configuration and finalizes
+// finishK8sBootstrap builds the controller pod configuration and finalizes
 // the bootstrap configuration. It does not invoke the provider finalizer;
 // callers apply any mode-specific overrides and invoke the finalizer.
-func finishCAASBootstrap(
+func finishK8sBootstrap(
 	ctx environs.BootstrapContext,
 	environ environs.BootstrapEnviron,
 	args BootstrapParams,
@@ -356,7 +356,7 @@ func bootstrapCAAS(
 		return errors.NotSupportedf("--bootstrap-series or --bootstrap-base when bootstrapping a k8s controller")
 	}
 
-	bootstrapConstraints, err := prepareCAASConstraints(ctx, environ, args.AllocationParams)
+	bootstrapConstraints, err := prepareK8sConstraints(ctx, environ, args.AllocationParams)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -367,7 +367,7 @@ func bootstrapCAAS(
 		return errors.Trace(err)
 	}
 
-	podConfig, err := finishCAASBootstrap(ctx, environ, args, result, bootstrapConstraints)
+	podConfig, err := finishK8sBootstrap(ctx, environ, args, result, bootstrapConstraints)
 	if err != nil {
 		return errors.Trace(err)
 	}

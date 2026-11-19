@@ -187,7 +187,7 @@ func RecoverK8s(
 	}
 
 	bootstrapParams := providerAllocationParams(args.AllocationParams)
-	bootstrapConstraints, err := prepareCAASConstraints(ctx, environ, args.AllocationParams)
+	bootstrapConstraints, err := prepareK8sConstraints(ctx, environ, args.AllocationParams)
 	if err != nil {
 		return errors.Capture(err)
 	}

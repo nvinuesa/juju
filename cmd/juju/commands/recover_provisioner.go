@@ -51,11 +51,11 @@ func provisionRecovery(
 	store jujuclient.ClientStore,
 	info *recovery.ArchiveInfo,
 ) error {
-	isCAAS := jujucloud.CloudTypeIsCAAS(info.CloudType)
+	isK8s := jujucloud.CloudTypeIsCAAS(info.CloudType)
 
 	var machineParams bootstrap.MachineRecoveryParams
 	var k8sParams bootstrap.K8sRecoveryParams
-	if isCAAS {
+	if isK8s {
 		var err error
 		k8sParams, err = k8sRecoveryParamsFromArchive(info)
 		if err != nil {
@@ -87,7 +87,7 @@ func provisionRecovery(
 	defer cancel()
 	provisionCtx := environscmd.BootstrapContext(stdCtx, ctx)
 
-	environ, err := bootstrap.OpenController(isCAAS, provisionCtx, environs.OpenParams{
+	environ, err := bootstrap.OpenController(isK8s, provisionCtx, environs.OpenParams{
 		Config:         modelConfig,
 		ControllerUUID: info.ControllerUUID,
 		Cloud:          credentials.spec,
@@ -96,7 +96,7 @@ func provisionRecovery(
 		return errors.Capture(err)
 	}
 	var k8sBroker recoveryK8sBroker
-	if isCAAS {
+	if isK8s {
 		broker, ok := environ.(recoveryK8sBroker)
 		if !ok {
 			return errors.Errorf(
@@ -108,7 +108,7 @@ func provisionRecovery(
 		return errors.Capture(err)
 	}
 
-	if isCAAS {
+	if isK8s {
 		k8sParams.Cloud = credentials.cloud
 		k8sParams.CloudRegion = credentials.spec.Region
 		k8sParams.CloudCredential = credentials.spec.Credential
@@ -213,7 +213,7 @@ type recoveryTarget struct {
 // recoveryCredentials resolves the archived cloud against the local cloud
 // definition, selected region and credentials used for allocation.
 func recoveryCredentials(ctx *cmd.Context, store jujuclient.ClientStore, info *recovery.ArchiveInfo) (*recoveryTarget, error) {
-	isCAAS := jujucloud.CloudTypeIsCAAS(info.CloudType)
+	isK8s := jujucloud.CloudTypeIsCAAS(info.CloudType)
 	cloud, err := common.CloudByName(info.CloudName)
 	if err != nil {
 		return nil, errors.Capture(err)
@@ -221,7 +221,7 @@ func recoveryCredentials(ctx *cmd.Context, store jujuclient.ClientStore, info *r
 	if err := info.CheckProviderFamily(cloud.Type); err != nil {
 		return nil, errors.Capture(err)
 	}
-	if !isCAAS && jujucloud.CloudIsCAAS(*cloud) {
+	if !isK8s && jujucloud.CloudIsCAAS(*cloud) {
 		return nil, errors.Errorf("Kubernetes recovery provisioning %w", coreerrors.NotSupported)
 	}
 	provider, err := lookupRecoveryProvider(info.CloudType)
@@ -235,11 +235,11 @@ func recoveryCredentials(ctx *cmd.Context, store jujuclient.ClientStore, info *r
 		}
 		cloud = &finalized
 	}
-	if isCAAS && cloud.HostCloudRegion == "" {
+	if isK8s && cloud.HostCloudRegion == "" {
 		return nil, errors.New("recovery cloud does not record a host cloud region; re-import it with juju add-k8s --client")
 	}
 	credentialArgs := modelcmd.GetCredentialsParams{Cloud: *cloud}
-	if !isCAAS {
+	if !isK8s {
 		credentialArgs.CloudRegion = info.CloudRegion
 	}
 	credential, _, regionName, _, err := common.GetOrDetectCredential(
@@ -253,7 +253,7 @@ func recoveryCredentials(ctx *cmd.Context, store jujuclient.ClientStore, info *r
 	// the location the archive records. A region this cloud definition does
 	// not know fails here rather than silently falling back.
 	targetRegion := info.CloudRegion
-	if isCAAS || targetRegion == "" {
+	if isK8s || targetRegion == "" {
 		targetRegion = regionName
 	}
 	region, err := common.ChooseCloudRegion(*cloud, targetRegion)
