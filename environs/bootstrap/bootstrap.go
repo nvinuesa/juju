@@ -794,7 +794,8 @@ func providerBootstrapParams(args BootstrapParams) environs.BootstrapParams {
 // Bootstrap bootstraps the given environment. The supplied constraints are
 // used to provision the instance, and are also set within the bootstrapped
 // environment. It always performs a fresh controller bootstrap; allocating a
-// replacement controller from a recovery archive is done by Recover.
+// replacement controller from a recovery archive is done by RecoverIAAS
+// or RecoverK8s.
 func Bootstrap(
 	ctx environs.BootstrapContext,
 	environ environs.BootstrapEnviron,

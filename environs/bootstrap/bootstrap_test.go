@@ -442,18 +442,20 @@ func recoveryIAASTools(archivedVersion semversion.Number, toolArch string) tools
 	}}
 }
 
-// validRecoveryParams returns recovery parameters that pass validation in
-// the IAAS recovery tests, observing an archived amd64 jammy controller.
-func validRecoveryParams(archivedVersion semversion.Number) bootstrap.RecoveryParams {
-	return bootstrap.RecoveryParams{
-		AdminSecret:             "fake-moon-landing",
-		CAPrivateKey:            coretesting.CAKey,
-		ControllerConfig:        coretesting.FakeControllerConfig(),
-		SupportedBootstrapBases: supportedJujuBases,
-		BootstrapBase:           jammyBootstrapBase,
-		BootstrapConstraints:    constraints.MustParse("arch=amd64"),
-		AgentVersion:            &archivedVersion,
-		AvailableTools:          recoveryIAASTools(archivedVersion, arch.AMD64),
+// validIAASRecoveryParams returns recovery parameters that pass validation
+// in the machine recovery tests, observing an archived amd64 jammy controller.
+func validIAASRecoveryParams(archivedVersion semversion.Number) bootstrap.IAASRecoveryParams {
+	return bootstrap.IAASRecoveryParams{
+		BootstrapParams: bootstrap.BootstrapParams{
+			AdminSecret:             "fake-moon-landing",
+			CAPrivateKey:            coretesting.CAKey,
+			ControllerConfig:        coretesting.FakeControllerConfig(),
+			SupportedBootstrapBases: supportedJujuBases,
+			BootstrapBase:           jammyBootstrapBase,
+			BootstrapConstraints:    constraints.MustParse("arch=amd64"),
+			AgentVersion:            &archivedVersion,
+		},
+		AvailableTools: recoveryIAASTools(archivedVersion, arch.AMD64),
 	}
 }
 
@@ -495,19 +497,21 @@ func (s *bootstrapSuite) TestBootstrapRecoveryIAAS(c *tc.C) {
 	ctx := envtesting.BootstrapContext(
 		context.WithValue(c.Context(), bootstrap.SimplestreamsFetcherContextKey, ss), c)
 
-	id, err := bootstrap.Recover(ctx, env, bootstrap.RecoveryParams{
-		AdminSecret:             "fake-moon-landing",
-		CAPrivateKey:            coretesting.CAKey,
-		ControllerConfig:        coretesting.FakeControllerConfig(),
-		SupportedBootstrapBases: supportedJujuBases,
-		BootstrapBase:           jammyBootstrapBase,
-		BootstrapConstraints:    constraints.MustParse("arch=amd64"),
-		AgentVersion:            &archivedVersion,
-		BuildAgentTarball: func(
-			bool, string, func(semversion.Number) semversion.Number,
-		) (*sync.BuiltAgent, error) {
-			c.Fatalf("local agent build ran during recovery")
-			return nil, errors.New("agent build attempted")
+	id, err := bootstrap.RecoverIAAS(ctx, env, bootstrap.IAASRecoveryParams{
+		BootstrapParams: bootstrap.BootstrapParams{
+			AdminSecret:             "fake-moon-landing",
+			CAPrivateKey:            coretesting.CAKey,
+			ControllerConfig:        coretesting.FakeControllerConfig(),
+			SupportedBootstrapBases: supportedJujuBases,
+			BootstrapBase:           jammyBootstrapBase,
+			BootstrapConstraints:    constraints.MustParse("arch=amd64"),
+			AgentVersion:            &archivedVersion,
+			BuildAgentTarball: func(
+				bool, string, func(semversion.Number) semversion.Number,
+			) (*sync.BuiltAgent, error) {
+				c.Fatalf("local agent build ran during recovery")
+				return nil, errors.New("agent build attempted")
+			},
 		},
 		AvailableTools: agentTools,
 	})
@@ -578,15 +582,17 @@ func (s *bootstrapSuite) TestBootstrapRecoveryIAASResultChecks(c *tc.C) {
 			bootstrapEnviron: newEnviron("foo", useDefaultKeys, nil),
 			result:           test.result,
 		}
-		id, err := bootstrap.Recover(envtesting.BootstrapTestContext(c), env, bootstrap.RecoveryParams{
-			AdminSecret:             "fake-moon-landing",
-			CAPrivateKey:            coretesting.CAKey,
-			ControllerConfig:        coretesting.FakeControllerConfig(),
-			SupportedBootstrapBases: supportedJujuBases,
-			BootstrapBase:           jammyBootstrapBase,
-			BootstrapConstraints:    constraints.MustParse("arch=amd64"),
-			AgentVersion:            &archivedVersion,
-			AvailableTools:          agentTools,
+		id, err := bootstrap.RecoverIAAS(envtesting.BootstrapTestContext(c), env, bootstrap.IAASRecoveryParams{
+			BootstrapParams: bootstrap.BootstrapParams{
+				AdminSecret:             "fake-moon-landing",
+				CAPrivateKey:            coretesting.CAKey,
+				ControllerConfig:        coretesting.FakeControllerConfig(),
+				SupportedBootstrapBases: supportedJujuBases,
+				BootstrapBase:           jammyBootstrapBase,
+				BootstrapConstraints:    constraints.MustParse("arch=amd64"),
+				AgentVersion:            &archivedVersion,
+			},
+			AvailableTools: agentTools,
 		})
 		c.Check(id, tc.Equals, test.wantID)
 		c.Check(err, tc.ErrorMatches, test.err)
@@ -622,9 +628,9 @@ func (s *bootstrapSuite) TestBootstrapRecoveryIAASAllocationError(c *tc.C) {
 			bootstrapEnviron: newEnviron("foo", useDefaultKeys, nil),
 			err:              test.err,
 		}
-		id, err := bootstrap.Recover(
+		id, err := bootstrap.RecoverIAAS(
 			envtesting.BootstrapTestContext(c), env,
-			validRecoveryParams(archivedVersion))
+			validIAASRecoveryParams(archivedVersion))
 		// The provider error arrives unchanged, and no ID is
 		// returned: naming any allocated instance is the provider's
 		// responsibility.
@@ -654,8 +660,8 @@ func (s *bootstrapSuite) TestBootstrapRecoveryIAASCancelled(c *tc.C) {
 		// code has no such callback.
 		afterAllocate: cancel,
 	}
-	id, err := bootstrap.Recover(
-		envtesting.BootstrapContext(ctx, c), env, validRecoveryParams(archivedVersion))
+	id, err := bootstrap.RecoverIAAS(
+		envtesting.BootstrapContext(ctx, c), env, validIAASRecoveryParams(archivedVersion))
 	// Cleanup gets the allocated ID without parsing the error message.
 	c.Check(id, tc.Equals, instance.Id("test-instance"))
 	c.Check(err, tc.ErrorIs, bootstrap.Cancelled())
@@ -683,9 +689,9 @@ func (s *bootstrapSuite) TestBootstrapRecoveryIAASPreAllocationFailure(c *tc.C) 
 		env := &recoveryBootstrapEnviron{
 			bootstrapEnviron: newEnviron("foo", useDefaultKeys, nil),
 		}
-		params := validRecoveryParams(archivedVersion)
+		params := validIAASRecoveryParams(archivedVersion)
 		params.BootstrapBase = test.base
-		id, err := bootstrap.Recover(
+		id, err := bootstrap.RecoverIAAS(
 			envtesting.BootstrapTestContext(c), env, params)
 		c.Check(id, tc.Equals, instance.Id(""))
 		c.Check(err, tc.ErrorMatches, test.err)
@@ -698,45 +704,42 @@ func (s *bootstrapSuite) TestBootstrapRecoveryIAASInvalidParams(c *tc.C) {
 	archivedVersion := coretesting.FakeVersionNumber
 	otherVersion := archivedVersion
 	otherVersion.Patch++
-	valid := func() bootstrap.RecoveryParams {
-		return bootstrap.RecoveryParams{
-			AdminSecret:             "fake-moon-landing",
-			CAPrivateKey:            coretesting.CAKey,
-			ControllerConfig:        coretesting.FakeControllerConfig(),
-			SupportedBootstrapBases: supportedJujuBases,
-			BootstrapBase:           jammyBootstrapBase,
-			BootstrapConstraints:    constraints.MustParse("arch=amd64"),
-			AgentVersion:            &archivedVersion,
-			AvailableTools:          recoveryIAASTools(archivedVersion, arch.AMD64),
-		}
+	valid := func() bootstrap.IAASRecoveryParams {
+		return validIAASRecoveryParams(archivedVersion)
 	}
 	tests := []struct {
 		name   string
-		mutate func(*bootstrap.RecoveryParams)
+		mutate func(*bootstrap.IAASRecoveryParams)
 		err    string
 	}{{
 		name:   "no agent version",
-		mutate: func(p *bootstrap.RecoveryParams) { p.AgentVersion = nil },
+		mutate: func(p *bootstrap.IAASRecoveryParams) { p.AgentVersion = nil },
 		err:    ".*recovery without an agent version not valid",
 	}, {
 		name:   "agent building",
-		mutate: func(p *bootstrap.RecoveryParams) { p.BuildAgent = true },
+		mutate: func(p *bootstrap.IAASRecoveryParams) { p.BuildAgent = true },
 		err:    ".*recovery with agent building enabled not valid",
 	}, {
+		name: "kubernetes cloud",
+		mutate: func(p *bootstrap.IAASRecoveryParams) {
+			p.Cloud = cloud.Cloud{Name: "recovery-k8s", Type: "kubernetes"}
+		},
+		err: ".*machine recovery for a Kubernetes cloud not valid",
+	}, {
 		name:   "no base",
-		mutate: func(p *bootstrap.RecoveryParams) { p.BootstrapBase = corebase.Base{} },
+		mutate: func(p *bootstrap.IAASRecoveryParams) { p.BootstrapBase = corebase.Base{} },
 		err:    ".*recovery without a bootstrap base not valid",
 	}, {
 		name:   "no arch",
-		mutate: func(p *bootstrap.RecoveryParams) { p.BootstrapConstraints = constraints.Value{} },
+		mutate: func(p *bootstrap.IAASRecoveryParams) { p.BootstrapConstraints = constraints.Value{} },
 		err:    ".*recovery without a bootstrap architecture not valid",
 	}, {
 		name:   "no tools",
-		mutate: func(p *bootstrap.RecoveryParams) { p.AvailableTools = nil },
+		mutate: func(p *bootstrap.IAASRecoveryParams) { p.AvailableTools = nil },
 		err:    ".*recovery without any agent tools not valid",
 	}, {
 		name: "tools for another version",
-		mutate: func(p *bootstrap.RecoveryParams) {
+		mutate: func(p *bootstrap.IAASRecoveryParams) {
 			p.AvailableTools = recoveryIAASTools(otherVersion, arch.AMD64)
 		},
 		err: `.*recovery tool version .* not matching agent version .* not valid`,
@@ -748,7 +751,7 @@ func (s *bootstrapSuite) TestBootstrapRecoveryIAASInvalidParams(c *tc.C) {
 		}
 		params := valid()
 		test.mutate(&params)
-		id, err := bootstrap.Recover(envtesting.BootstrapTestContext(c), env, params)
+		id, err := bootstrap.RecoverIAAS(envtesting.BootstrapTestContext(c), env, params)
 		c.Check(id, tc.Equals, instance.Id(""))
 		c.Check(err, tc.ErrorMatches, test.err)
 		c.Check(env.bootstrapCount, tc.Equals, 0)
@@ -770,7 +773,7 @@ func (s *bootstrapSuite) TestBootstrapRecoveryCAAS(c *tc.C) {
 	}
 	controllerConfig := coretesting.FakeControllerConfig()
 	archivedVersion := coretesting.FakeVersionNumber
-	_, err := bootstrap.Recover(envtesting.BootstrapTestContext(c), env, bootstrap.RecoveryParams{
+	err := bootstrap.RecoverK8s(envtesting.BootstrapTestContext(c), env, bootstrap.K8sRecoveryParams{
 		BootstrapParams: recoveryCAASParams(controllerConfig, &archivedVersion),
 	})
 	c.Assert(err, tc.ErrorIsNil)
@@ -805,7 +808,7 @@ func (s *bootstrapSuite) TestBootstrapRecoveryCAASCreateError(c *tc.C) {
 		},
 	}
 	archivedVersion := coretesting.FakeVersionNumber
-	_, err := bootstrap.Recover(envtesting.BootstrapTestContext(c), env, bootstrap.RecoveryParams{
+	err := bootstrap.RecoverK8s(envtesting.BootstrapTestContext(c), env, bootstrap.K8sRecoveryParams{
 		BootstrapParams: recoveryCAASParams(coretesting.FakeControllerConfig(), &archivedVersion),
 	})
 	c.Check(err, tc.ErrorIs, createErr)
@@ -827,7 +830,7 @@ func (s *bootstrapSuite) TestBootstrapRecoveryCAASUnsupportedEnviron(c *tc.C) {
 		},
 	}
 	archivedVersion := coretesting.FakeVersionNumber
-	_, err := bootstrap.Recover(envtesting.BootstrapTestContext(c), env, bootstrap.RecoveryParams{
+	err := bootstrap.RecoverK8s(envtesting.BootstrapTestContext(c), env, bootstrap.K8sRecoveryParams{
 		BootstrapParams: recoveryCAASParams(coretesting.FakeControllerConfig(), &archivedVersion),
 	})
 	c.Check(err, tc.ErrorIs, errors.NotSupported)
@@ -838,17 +841,23 @@ func (s *bootstrapSuite) TestBootstrapRecoveryCAASInvalidParams(c *tc.C) {
 	archivedVersion := coretesting.FakeVersionNumber
 	tests := []struct {
 		name   string
-		mutate func(*bootstrap.RecoveryParams)
+		mutate func(*bootstrap.K8sRecoveryParams)
 		err    string
 	}{{
-		name: "prebuilt tools",
-		mutate: func(p *bootstrap.RecoveryParams) {
-			p.AvailableTools = recoveryIAASTools(archivedVersion, arch.AMD64)
-		},
-		err: ".*recovery with prebuilt tools for a Kubernetes controller not valid",
+		name:   "no agent version",
+		mutate: func(p *bootstrap.K8sRecoveryParams) { p.AgentVersion = nil },
+		err:    ".*recovery without an agent version not valid",
+	}, {
+		name:   "agent building",
+		mutate: func(p *bootstrap.K8sRecoveryParams) { p.BuildAgent = true },
+		err:    ".*recovery with agent building enabled not valid",
+	}, {
+		name:   "machine cloud",
+		mutate: func(p *bootstrap.K8sRecoveryParams) { p.Cloud = cloud.Cloud{Name: "lxd", Type: "lxd"} },
+		err:    ".*Kubernetes recovery for a machine cloud not valid",
 	}, {
 		name:   "bootstrap base",
-		mutate: func(p *bootstrap.RecoveryParams) { p.BootstrapBase = jammyBootstrapBase },
+		mutate: func(p *bootstrap.K8sRecoveryParams) { p.BootstrapBase = jammyBootstrapBase },
 		err:    ".*recovery with a bootstrap base for a Kubernetes controller not valid",
 	}}
 	for i, test := range tests {
@@ -856,11 +865,11 @@ func (s *bootstrapSuite) TestBootstrapRecoveryCAASInvalidParams(c *tc.C) {
 		env := &recoveryCAASEnviron{
 			bootstrapEnviron: newEnviron("foo", useDefaultKeys, nil),
 		}
-		params := bootstrap.RecoveryParams{
+		params := bootstrap.K8sRecoveryParams{
 			BootstrapParams: recoveryCAASParams(coretesting.FakeControllerConfig(), &archivedVersion),
 		}
 		test.mutate(&params)
-		_, err := bootstrap.Recover(envtesting.BootstrapTestContext(c), env, params)
+		err := bootstrap.RecoverK8s(envtesting.BootstrapTestContext(c), env, params)
 		c.Check(err, tc.ErrorMatches, test.err)
 		c.Check(env.createParams, tc.HasLen, 0)
 	}

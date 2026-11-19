@@ -55,21 +55,18 @@ func provisionRecovery(
 ) error {
 	isCAAS := jujucloud.CloudTypeIsCAAS(info.CloudType)
 
-	var params bootstrap.RecoveryParams
+	var iaasParams bootstrap.IAASRecoveryParams
 	if isCAAS {
 		if info.ControllerName == "" {
 			return errors.New("recovery archive does not record the source controller name")
 		}
 	} else {
 		var err error
-		params, err = recoveryParamsFromArchive(info)
+		iaasParams, err = recoveryParamsFromArchive(info)
 		if err != nil {
 			return errors.Capture(err)
 		}
 	}
-	params.ControllerName = info.ControllerName
-	params.CAPrivateKey = info.CAPrivateKey
-	params.AgentVersion = &info.AgentVersion
 
 	credentials, err := recoveryCredentials(ctx, store, info)
 	if err != nil {
@@ -117,17 +114,25 @@ func provisionRecovery(
 		return errors.Capture(err)
 	}
 
-	params.Cloud = credentials.cloud
-	params.CloudRegion = credentials.spec.Region
-	params.CloudCredentialName = credentials.credentialName
-	params.CloudCredential = credentials.spec.Credential
-	params.ControllerConfig = controllerConfig
-	params.AdminSecret = adminPassword
+	commonBootstrap := bootstrap.BootstrapParams{
+		ControllerName:      info.ControllerName,
+		CAPrivateKey:        info.CAPrivateKey,
+		AgentVersion:        &info.AgentVersion,
+		Cloud:               credentials.cloud,
+		CloudRegion:         credentials.spec.Region,
+		CloudCredentialName: credentials.credentialName,
+		CloudCredential:     credentials.spec.Credential,
+		ControllerConfig:    controllerConfig,
+		AdminSecret:         adminPassword,
+	}
 
 	if isCAAS {
-		params.DialOpts.Timeout = 20 * time.Minute
-		params.SupportedBootstrapBases = base.ControllerBases()
-		if _, err := bootstrap.Recover(provisionCtx, preparation.Environ, params); err != nil {
+		commonBootstrap.DialOpts.Timeout = 20 * time.Minute
+		commonBootstrap.SupportedBootstrapBases = base.ControllerBases()
+		k8sParams := bootstrap.K8sRecoveryParams{
+			BootstrapParams: commonBootstrap,
+		}
+		if err := bootstrap.RecoverK8s(provisionCtx, preparation.Environ, k8sParams); err != nil {
 			return errors.Capture(err)
 		}
 		return errors.Errorf(
@@ -136,7 +141,11 @@ func provisionRecovery(
 		)
 	}
 
-	started, err := bootstrap.Recover(provisionCtx, preparation.Environ, params)
+	commonBootstrap.BootstrapConstraints = iaasParams.BootstrapConstraints
+	commonBootstrap.BootstrapBase = iaasParams.BootstrapBase
+	commonBootstrap.SupportedBootstrapBases = iaasParams.SupportedBootstrapBases
+	iaasParams.BootstrapParams = commonBootstrap
+	started, err := bootstrap.RecoverIAAS(provisionCtx, preparation.Environ, iaasParams)
 	if err != nil {
 		return errors.Capture(err)
 	}
@@ -149,25 +158,27 @@ func provisionRecovery(
 
 // recoveryParamsFromArchive prepares the machine-specific inputs before cloud
 // access. The client can run on a different platform from the controller.
-func recoveryParamsFromArchive(info *recovery.ArchiveInfo) (bootstrap.RecoveryParams, error) {
+func recoveryParamsFromArchive(info *recovery.ArchiveInfo) (bootstrap.IAASRecoveryParams, error) {
 	if info.SourceBase == "" {
-		return bootstrap.RecoveryParams{}, errors.New("archive does not record a usable controller base")
+		return bootstrap.IAASRecoveryParams{}, errors.New("archive does not record a usable controller base")
 	}
 	targetBase, err := base.ParseBaseFromString(info.SourceBase)
 	if err != nil {
-		return bootstrap.RecoveryParams{}, errors.Errorf("archive does not record a usable controller base: %w", err)
+		return bootstrap.IAASRecoveryParams{}, errors.Errorf("archive does not record a usable controller base: %w", err)
 	}
 	targetArch := arch.NormaliseArch(info.SourceArch)
 	if !arch.IsSupportedArch(targetArch) {
-		return bootstrap.RecoveryParams{}, errors.Errorf("archive does not record a usable controller architecture: %q", info.SourceArch)
+		return bootstrap.IAASRecoveryParams{}, errors.Errorf("archive does not record a usable controller architecture: %q", info.SourceArch)
 	}
-	return bootstrap.RecoveryParams{
-		ControllerName:          info.ControllerName,
-		CAPrivateKey:            info.CAPrivateKey,
-		AgentVersion:            &info.AgentVersion,
-		BootstrapConstraints:    constraints.Value{Arch: &targetArch},
-		BootstrapBase:           targetBase,
-		SupportedBootstrapBases: []base.Base{targetBase},
+	return bootstrap.IAASRecoveryParams{
+		BootstrapParams: bootstrap.BootstrapParams{
+			ControllerName:          info.ControllerName,
+			CAPrivateKey:            info.CAPrivateKey,
+			AgentVersion:            &info.AgentVersion,
+			BootstrapConstraints:    constraints.Value{Arch: &targetArch},
+			BootstrapBase:           targetBase,
+			SupportedBootstrapBases: []base.Base{targetBase},
+		},
 		// Allocation selects an image but does not download an agent, so
 		// only the binary identity is needed; URL, digest and size are unset.
 		// TODO(recovery): supply a verified agent tarball before installation.
