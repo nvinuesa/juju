@@ -26,7 +26,6 @@ import (
 	environscmd "github.com/juju/juju/environs/cmd"
 	"github.com/juju/juju/environs/config"
 	"github.com/juju/juju/internal/errors"
-	"github.com/juju/juju/internal/password"
 	internalstorage "github.com/juju/juju/internal/storage"
 )
 
@@ -54,14 +53,17 @@ func provisionRecovery(
 ) error {
 	isCAAS := jujucloud.CloudTypeIsCAAS(info.CloudType)
 
-	var params bootstrap.RecoveryParams
+	var machineParams bootstrap.MachineRecoveryParams
+	var k8sParams bootstrap.K8sRecoveryParams
 	if isCAAS {
-		if info.ControllerName == "" {
-			return errors.New("recovery archive does not record the source controller name")
+		var err error
+		k8sParams, err = k8sRecoveryParamsFromArchive(info)
+		if err != nil {
+			return errors.Capture(err)
 		}
 	} else {
 		var err error
-		params, err = recoveryParamsFromArchive(info)
+		machineParams, err = recoveryParamsFromArchive(info)
 		if err != nil {
 			return errors.Capture(err)
 		}
@@ -93,55 +95,38 @@ func provisionRecovery(
 	if err != nil {
 		return errors.Capture(err)
 	}
-	if err := environ.PrepareForBootstrap(provisionCtx, info.ControllerName); err != nil {
-		return errors.Capture(err)
-	}
-
+	var k8sBroker recoveryK8sBroker
 	if isCAAS {
 		broker, ok := environ.(recoveryK8sBroker)
 		if !ok {
 			return errors.Errorf(
 				"Kubernetes recovery provisioning for %T %w", environ, coreerrors.NotSupported)
 		}
-		adminPassword, err := password.RandomPassword()
-		if err != nil {
-			return errors.Capture(err)
-		}
-		// Recovery allocates only the namespace; the archived identity and
-		// secrets are still needed to build the controller pod configuration.
-		bootstrapParams := bootstrap.BootstrapParams{
-			AllocationParams: bootstrap.AllocationParams{
-				ControllerName:          info.ControllerName,
-				Cloud:                   credentials.cloud,
-				CloudRegion:             credentials.spec.Region,
-				CloudCredential:         credentials.spec.Credential,
-				ControllerConfig:        controllerConfig,
-				SupportedBootstrapBases: base.ControllerBases(),
-			},
-			CloudCredentialName: credentials.credentialName,
-			AgentVersion:        &info.AgentVersion,
-			AdminSecret:         adminPassword,
-			CAPrivateKey:        info.CAPrivateKey,
-			DialOpts: environs.BootstrapDialOpts{
-				Timeout: recoveryAllocationTimeout,
-			},
-		}
-		if err := bootstrap.RecoverK8s(provisionCtx, environ, bootstrap.K8sRecoveryParams{
-			BootstrapParams: bootstrapParams,
-		}); err != nil {
+		k8sBroker = broker
+	}
+	if err := environ.PrepareForBootstrap(provisionCtx, info.ControllerName); err != nil {
+		return errors.Capture(err)
+	}
+
+	if isCAAS {
+		k8sParams.Cloud = credentials.cloud
+		k8sParams.CloudRegion = credentials.spec.Region
+		k8sParams.CloudCredential = credentials.spec.Credential
+		k8sParams.ControllerConfig = controllerConfig
+		if err := bootstrap.RecoverK8s(provisionCtx, environ, k8sParams); err != nil {
 			return errors.Capture(err)
 		}
 		return errors.Errorf(
 			"controller recovery initialisation is not available in this build; provisioned replacement namespace %s",
-			broker.Namespace(),
+			k8sBroker.Namespace(),
 		)
 	}
 
-	params.Cloud = credentials.cloud
-	params.CloudRegion = credentials.spec.Region
-	params.CloudCredential = credentials.spec.Credential
-	params.ControllerConfig = controllerConfig
-	started, err := bootstrap.Recover(provisionCtx, environ, params)
+	machineParams.Cloud = credentials.cloud
+	machineParams.CloudRegion = credentials.spec.Region
+	machineParams.CloudCredential = credentials.spec.Credential
+	machineParams.ControllerConfig = controllerConfig
+	started, err := bootstrap.RecoverMachine(provisionCtx, environ, machineParams)
 	if err != nil {
 		return errors.Capture(err)
 	}
@@ -154,23 +139,23 @@ func provisionRecovery(
 
 // recoveryParamsFromArchive prepares the machine-specific inputs before cloud
 // access. The client can run on a different platform from the controller.
-func recoveryParamsFromArchive(info *recovery.ArchiveInfo) (bootstrap.RecoveryParams, error) {
+func recoveryParamsFromArchive(info *recovery.ArchiveInfo) (bootstrap.MachineRecoveryParams, error) {
 	if info.SourceBase == "" {
-		return bootstrap.RecoveryParams{}, errors.New("archive does not record a usable controller base")
+		return bootstrap.MachineRecoveryParams{}, errors.New("archive does not record a usable controller base")
 	}
 	targetBase, err := base.ParseBaseFromString(info.SourceBase)
 	if err != nil {
-		return bootstrap.RecoveryParams{}, errors.Errorf("archive does not record a usable controller base: %w", err)
+		return bootstrap.MachineRecoveryParams{}, errors.Errorf("archive does not record a usable controller base: %w", err)
 	}
 	targetArch := arch.NormaliseArch(info.SourceArch)
 	if !arch.IsSupportedArch(targetArch) {
-		return bootstrap.RecoveryParams{}, errors.Errorf("archive does not record a usable controller architecture: %q", info.SourceArch)
+		return bootstrap.MachineRecoveryParams{}, errors.Errorf("archive does not record a usable controller architecture: %q", info.SourceArch)
 	}
 	// The archived architecture is authoritative: allocation pins it over
 	// whatever the recorded constraint says.
 	bootstrapConstraints := info.ControllerConstraints
 	bootstrapConstraints.Arch = &targetArch
-	return bootstrap.RecoveryParams{
+	return bootstrap.MachineRecoveryParams{
 		AllocationParams: bootstrap.AllocationParams{
 			ControllerName:          info.ControllerName,
 			ModelConstraints:        info.ModelConstraints,
@@ -181,6 +166,24 @@ func recoveryParamsFromArchive(info *recovery.ArchiveInfo) (bootstrap.RecoveryPa
 		},
 		AgentVersion: info.AgentVersion,
 		Arch:         targetArch,
+	}, nil
+}
+
+// k8sRecoveryParamsFromArchive prepares the Kubernetes allocation inputs
+// before cloud access.
+func k8sRecoveryParamsFromArchive(info *recovery.ArchiveInfo) (bootstrap.K8sRecoveryParams, error) {
+	if info.ControllerName == "" {
+		return bootstrap.K8sRecoveryParams{}, errors.New("recovery archive does not record the source controller name")
+	}
+	return bootstrap.K8sRecoveryParams{
+		AllocationParams: bootstrap.AllocationParams{
+			ControllerName:          info.ControllerName,
+			ModelConstraints:        info.ModelConstraints,
+			BootstrapConstraints:    info.ControllerConstraints,
+			StoragePools:            cloneStoragePools(info.StoragePools),
+			SupportedBootstrapBases: base.ControllerBases(),
+		},
+		AgentVersion: info.AgentVersion,
 	}, nil
 }
 
@@ -199,9 +202,8 @@ func cloneStoragePools(pools map[string]internalstorage.Attrs) map[string]intern
 }
 
 type recoveryTarget struct {
-	cloud          jujucloud.Cloud
-	spec           cloudspec.CloudSpec
-	credentialName string
+	cloud jujucloud.Cloud
+	spec  cloudspec.CloudSpec
 
 	// provider is the cloud's provider, kept so configuration building does
 	// not look it up a second time.
@@ -240,7 +242,7 @@ func recoveryCredentials(ctx *cmd.Context, store jujuclient.ClientStore, info *r
 	if !isCAAS {
 		credentialArgs.CloudRegion = info.CloudRegion
 	}
-	credential, name, regionName, _, err := common.GetOrDetectCredential(
+	credential, _, regionName, _, err := common.GetOrDetectCredential(
 		ctx, store, provider, credentialArgs,
 	)
 	if err != nil {
@@ -264,10 +266,9 @@ func recoveryCredentials(ctx *cmd.Context, store jujuclient.ClientStore, info *r
 	}
 	spec.IsControllerCloud = true
 	return &recoveryTarget{
-		cloud:          *cloud,
-		spec:           spec,
-		credentialName: name,
-		provider:       provider,
+		cloud:    *cloud,
+		spec:     spec,
+		provider: provider,
 	}, nil
 }
 

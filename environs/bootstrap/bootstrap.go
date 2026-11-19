@@ -289,7 +289,7 @@ func withDefaultCAASControllerConstraints(cons constraints.Value) constraints.Va
 func prepareCAASConstraints(
 	ctx environs.BootstrapContext,
 	environ environs.BootstrapEnviron,
-	args BootstrapParams,
+	args AllocationParams,
 ) (constraints.Value, error) {
 	constraintsValidator, err := environ.ConstraintsValidator(ctx)
 	if err != nil {
@@ -356,7 +356,7 @@ func bootstrapCAAS(
 		return errors.NotSupportedf("--bootstrap-series or --bootstrap-base when bootstrapping a k8s controller")
 	}
 
-	bootstrapConstraints, err := prepareCAASConstraints(ctx, environ, args)
+	bootstrapConstraints, err := prepareCAASConstraints(ctx, environ, args.AllocationParams)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -832,7 +832,8 @@ func providerBootstrapParams(args BootstrapParams) environs.BootstrapParams {
 // Bootstrap bootstraps the given environment. The supplied constraints are
 // used to provision the instance, and are also set within the bootstrapped
 // environment. It always performs a fresh controller bootstrap; allocating a
-// replacement controller from a recovery archive is done by Recover.
+// replacement controller from a recovery archive is done by RecoverMachine
+// or RecoverK8s.
 func Bootstrap(
 	ctx environs.BootstrapContext,
 	environ environs.BootstrapEnviron,
