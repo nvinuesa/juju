@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/juju/names/v6"
 	"github.com/juju/tc"
@@ -74,6 +75,12 @@ func (s *freshControllerSuite) TestRecoveryK8sController(c *tc.C) {
 	s.assertRecoveryController(c, true, agent.BootstrapControllerId)
 }
 
+// TestRecoveryRunsUnderDeadline checks that the recovery timeout bounds the
+// initialisation without aborting its fast local work.
+func (s *freshControllerSuite) TestRecoveryRunsUnderDeadline(c *tc.C) {
+	s.assertControllerRun(c, controllerRunSpec{recovery: true, timeout: 30 * time.Second})
+}
+
 // controllerRunSpec holds the mode-dependent inputs for the shared
 // fresh-bootstrap and recovery controller assertions.
 type controllerRunSpec struct {
@@ -83,6 +90,9 @@ type controllerRunSpec struct {
 	// databaseErr is only meaningful for the fresh-bootstrap workflow;
 	// recovery never initialises a database.
 	databaseErr error
+	// timeout is only meaningful for the recovery workflow; it bounds the
+	// recovery initialisation.
+	timeout time.Duration
 }
 
 func (s *freshControllerSuite) assertFreshController(c *tc.C, isK8s bool, databaseErr error) {
@@ -181,6 +191,7 @@ func (s *freshControllerSuite) assertControllerRun(c *tc.C, spec controllerRunSp
 		command := NewRecoverCommand()
 		command.AgentConf = agentconf.NewAgentConf(dataDir)
 		command.MachineID = machineId
+		command.Timeout = spec.timeout
 		err = command.Run(cmdtesting.Context(c))
 		c.Assert(err, tc.ErrorIsNil)
 	} else {

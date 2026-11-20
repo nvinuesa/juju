@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"context"
 	"os"
 	"path"
 	"time"
@@ -30,6 +31,7 @@ type RecoverCommand struct {
 	cmd.CommandBase
 	agentconf.AgentConf
 	// Timeout is the maximum duration to wait for recovery to complete.
+	// A zero timeout means no deadline.
 	Timeout time.Duration
 	// MachineID is the archived logical machine identity whose agent
 	// configuration is read for the replacement controller.
@@ -78,7 +80,16 @@ func (c *RecoverCommand) Run(ctx *cmd.Context) error {
 	if err := args.Unmarshal(bootstrapParamsData); err != nil {
 		return errors.Capture(err)
 	}
-	return errors.Capture(c.initialiseRecoveryController(ctx, args))
+	// The timeout bounds the recovery initialisation; a zero timeout means
+	// no deadline. Later recovery stages inherit the deadline for their
+	// blocking work (archive validation, database initialisation).
+	recoveryCtx := ctx.Context
+	if c.Timeout > 0 {
+		var cancel context.CancelFunc
+		recoveryCtx, cancel = context.WithTimeout(recoveryCtx, c.Timeout)
+		defer cancel()
+	}
+	return errors.Capture(c.initialiseRecoveryController(recoveryCtx, args))
 }
 
 // initialiseRecoveryController prepares a replacement controller's local
@@ -88,7 +99,9 @@ func (c *RecoverCommand) Run(ctx *cmd.Context) error {
 // addresses: the replacement runs the exact archived agent version and keeps
 // the archived logical machine identity, so surviving agents keep trusting
 // the replacement controller.
-func (c *RecoverCommand) initialiseRecoveryController(ctx *cmd.Context, args instancecfg.StateInitializationParams) error {
+func (c *RecoverCommand) initialiseRecoveryController(
+	ctx context.Context, args instancecfg.StateInitializationParams,
+) error {
 	isK8s := args.ControllerCloud.Type == cloud.CloudTypeKubernetes
 	if isK8s {
 		if err := ensureConfigFilesForK8s(c.DataDir()); err != nil {
