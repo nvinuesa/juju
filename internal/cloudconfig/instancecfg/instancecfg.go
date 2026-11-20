@@ -439,11 +439,11 @@ type stateInitializationParamsInternal struct {
 func (p *StateInitializationParams) Marshal() ([]byte, error) {
 	customImageMetadataJSON, err := json.Marshal(p.CustomImageMetadata)
 	if err != nil {
-		return nil, errors.Errorf("marshalling custom image metadata: %w", err)
+		return nil, errors.Errorf("marshalling custom image metadata").Add(err)
 	}
 	controllerCloud, err := cloud.MarshalCloud(p.ControllerCloud)
 	if err != nil {
-		return nil, errors.Errorf("marshalling cloud definition: %w", err)
+		return nil, errors.Errorf("marshalling cloud definition").Add(err)
 	}
 	internal := stateInitializationParamsInternal{
 		AgentVersion:                            p.AgentVersion.String(),
@@ -478,7 +478,7 @@ func (p *StateInitializationParams) Marshal() ([]byte, error) {
 func (p *StateInitializationParams) Unmarshal(data []byte) error {
 	var internal stateInitializationParamsInternal
 	if err := yaml.Unmarshal(data, &internal); err != nil {
-		return errors.Errorf("unmarshalling state initialization params: %w", err)
+		return errors.Errorf("unmarshalling state initialization params").Add(err)
 	}
 	var imageMetadata []*imagemetadata.ImageMetadata
 	if err := json.Unmarshal([]byte(internal.CustomImageMetadataJSON), &imageMetadata); err != nil {
@@ -604,7 +604,7 @@ func (cfg *InstanceConfig) AgentConfig(
 	if cfg.TracingTailSamplingThreshold != nil && *cfg.TracingTailSamplingThreshold != "" {
 		d, err := time.ParseDuration(*cfg.TracingTailSamplingThreshold)
 		if err != nil {
-			return nil, errors.Errorf("parsing open telemetry tail sampling threshold %q: %w", *cfg.TracingTailSamplingThreshold, err)
+			return nil, errors.Errorf("parsing open telemetry tail sampling threshold %q", *cfg.TracingTailSamplingThreshold).Add(err)
 		}
 		if d < 0 {
 			return nil, errors.Errorf("open telemetry tail sampling threshold %q %w", *cfg.TracingTailSamplingThreshold, coreerrors.NotValid)
@@ -737,7 +737,7 @@ func (cfg *InstanceConfig) SetControllerCharm(controllerCharmPath string) error 
 
 	_, err := os.Stat(controllerCharmPath)
 	if err != nil {
-		return errors.Errorf("unable set local controller charm (at %s): %w", controllerCharmPath, err)
+		return errors.Errorf("unable set local controller charm (at %s)", controllerCharmPath).Add(err)
 	}
 
 	cfg.Bootstrap.ControllerCharm = controllerCharmPath
@@ -749,7 +749,7 @@ func (cfg *InstanceConfig) SetControllerCharm(controllerCharmPath string) error 
 func (cfg *InstanceConfig) VerifyConfig() (err error) {
 	defer func() {
 		if err != nil {
-			err = errors.Errorf("invalid machine configuration: %w", err)
+			err = errors.Errorf("invalid machine configuration").Add(err)
 		}
 	}()
 	if !names.IsValidMachine(cfg.MachineId) {
@@ -808,7 +808,7 @@ func (cfg *InstanceConfig) VerifyConfig() (err error) {
 func (cfg *InstanceConfig) verifyBootstrapConfig() (err error) {
 	defer func() {
 		if err != nil {
-			err = errors.Errorf("invalid bootstrap configuration: %w", err)
+			err = errors.Errorf("invalid bootstrap configuration").Add(err)
 		}
 	}()
 	if cfg.ControllerConfig == nil {
@@ -1026,7 +1026,7 @@ func FinishInstanceConfig(
 ) (err error) {
 	defer func() {
 		if err != nil {
-			err = errors.Errorf("cannot complete machine configuration: %w", err)
+			err = errors.Errorf("cannot complete machine configuration").Add(err)
 		}
 	}()
 	if err := PopulateInstanceConfig(

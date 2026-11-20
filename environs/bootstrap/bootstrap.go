@@ -645,10 +645,51 @@ func prepareProviderBootstrap(
 	return nil
 }
 
+// bootstrapIAAS performs a fresh IAAS controller bootstrap.
+func bootstrapIAAS(
+	ctx environs.BootstrapContext,
+	environ environs.BootstrapEnviron,
+	args BootstrapParams,
+	bootstrapParams environs.BootstrapParams,
+) error {
+	prep, err := prepareIAASBootstrap(ctx, environ, args, &bootstrapParams)
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	availableTools, agentVersion, builtTools, err := discoverBootstrapTools(ctx, environ, prep, args)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	if builtTools != nil {
+		defer func(path string) { _ = os.RemoveAll(path) }(builtTools.Dir)
+	}
+	bootstrapParams.AvailableTools = availableTools
+
+	if err := prepareProviderBootstrap(ctx, environ, args, &bootstrapParams, agentVersion); err != nil {
+		return errors.Trace(err)
+	}
+
+	ctx.Verbosef("Starting new instance for initial controller")
+	result, err := environ.Bootstrap(ctx, bootstrapParams)
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	instanceConfig, err := finishIAASBootstrap(ctx, environ, args, bootstrapParams, result, prep.customImageMetadata)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	if err := result.CloudBootstrapFinalizer(ctx, instanceConfig, args.DialOpts); err != nil {
+		return errors.Trace(err)
+	}
+	return nil
+}
+
 // finishIAASBootstrap builds the instance configuration for the started
-// instance: matching tools, finalising credentials and finalizing the
-// bootstrap configuration. It does not invoke the provider finalizer; callers
-// apply any mode-specific overrides and invoke the finalizer themselves.
+// instance: matching tools, finalising credentials and finalising the
+// bootstrap configuration. It does not invoke the provider finaliser; callers
+// apply any mode-specific overrides and invoke the finaliser themselves.
 func finishIAASBootstrap(
 	ctx environs.BootstrapContext,
 	environ environs.BootstrapEnviron,
@@ -732,47 +773,6 @@ func finishIAASBootstrap(
 		return nil, errors.Annotate(err, "finalizing bootstrap instance config")
 	}
 	return instanceConfig, nil
-}
-
-// bootstrapIAAS performs a fresh IAAS controller bootstrap.
-func bootstrapIAAS(
-	ctx environs.BootstrapContext,
-	environ environs.BootstrapEnviron,
-	args BootstrapParams,
-	bootstrapParams environs.BootstrapParams,
-) error {
-	prep, err := prepareIAASBootstrap(ctx, environ, args, &bootstrapParams)
-	if err != nil {
-		return errors.Trace(err)
-	}
-
-	availableTools, agentVersion, builtTools, err := discoverBootstrapTools(ctx, environ, prep, args)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	if builtTools != nil {
-		defer os.RemoveAll(builtTools.Dir)
-	}
-	bootstrapParams.AvailableTools = availableTools
-
-	if err := prepareProviderBootstrap(ctx, environ, args, &bootstrapParams, agentVersion); err != nil {
-		return errors.Trace(err)
-	}
-
-	ctx.Verbosef("Starting new instance for initial controller")
-	result, err := environ.Bootstrap(ctx, bootstrapParams)
-	if err != nil {
-		return errors.Trace(err)
-	}
-
-	instanceConfig, err := finishIAASBootstrap(ctx, environ, args, bootstrapParams, result, prep.customImageMetadata)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	if err := result.CloudBootstrapFinalizer(ctx, instanceConfig, args.DialOpts); err != nil {
-		return errors.Trace(err)
-	}
-	return nil
 }
 
 func finaliseInstanceRole(

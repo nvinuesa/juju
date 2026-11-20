@@ -133,7 +133,7 @@ func (p machineControllerStartupValueProvider) LocalValues() (apiserver.LocalVal
 	cfg := p.agent.CurrentConfig()
 	logSinkConfig, err := logSinkConfigFromAgentConfig(cfg)
 	if err != nil {
-		return apiserver.LocalValues{}, errors.Errorf("getting log sink config: %w", err)
+		return apiserver.LocalValues{}, errors.Errorf("getting log sink config").Add(err)
 	}
 	return apiserver.LocalValues{
 		DataDir:       cfg.DataDir(),
@@ -519,7 +519,7 @@ func upgradeCertificateDNSNames(config agent.ConfigSetter) error {
 	authority, err := pki.NewDefaultAuthorityPemCAKey([]byte(config.CACert()),
 		[]byte(si.CAPrivateKey))
 	if err != nil {
-		return errors.Errorf("building authority from ca pem: %w", err)
+		return errors.Errorf("building authority from ca pem").Add(err)
 	}
 
 	// Validate the current certificate and private key pair, and then
@@ -534,13 +534,13 @@ func upgradeCertificateDNSNames(config agent.ConfigSetter) error {
 			AddDNSNames(controller.DefaultDNSNames...).
 			Commit()
 		if err != nil {
-			return errors.Errorf("generating new default controller certificate: %w", err)
+			return errors.Errorf("generating new default controller certificate").Add(err)
 		}
 	}
 
 	cert, privateKey, err := leaf.ToPemParts()
 	if err != nil {
-		return errors.Errorf("transforming controller certificate to pem format: %w", err)
+		return errors.Errorf("transforming controller certificate to pem format").Add(err)
 	}
 
 	si.Cert, si.PrivateKey = string(cert), string(privateKey)
@@ -564,7 +564,7 @@ func (a *MachineAgent) Run(ctx *cmd.Context) (err error) {
 	// active backend (LogSink or Loki).
 	bufferedLogger, err := logsender.EnsureBufferedLogWriterOnDefaultContext(1048576)
 	if err != nil {
-		return errors.Errorf("unable to install buffered log writer: %w", err)
+		return errors.Errorf("unable to install buffered log writer").Add(err)
 	}
 	defer func() { _ = logsender.UninstallBufferedLogWriter() }()
 
@@ -598,7 +598,7 @@ func (a *MachineAgent) Run(ctx *cmd.Context) (err error) {
 	// This needs to be done before any possible restart of the mongo service.
 	// See bug http://pad.lv/1434680
 	if err := a.AgentConfigWriter.ChangeConfig(upgradeCertificateDNSNames); err != nil {
-		return errors.Errorf("error upgrading server certificate: %w", err)
+		return errors.Errorf("error upgrading server certificate").Add(err)
 	}
 
 	// Moved from NewMachineAgent here because the agent config could not be
@@ -658,6 +658,9 @@ func (a *MachineAgent) Run(ctx *cmd.Context) (err error) {
 	return cmdutil.AgentDone(logger, err)
 }
 
+// validateRecoveryEngineStart returns an error when dataDir marks a recovery
+// import that has not completed, preventing the dependency engine from
+// starting.
 func validateRecoveryEngineStart(dataDir string) error {
 	isRecovery, err := internalrecovery.IsRecovery(dataDir)
 	if err != nil {
@@ -1004,14 +1007,14 @@ func (a *MachineAgent) createJujudSymlinks(dataDir string) error {
 		// For IAAS, this is done in systemd for for caas we need to do it here.
 		caasJujud := filepath.Join(tools.ToolsDir(dataDir, ""), jujunames.JujuAgentd)
 		if err := a.createSymlink(caasJujud, jujud); err != nil {
-			return errors.Errorf("failed to create %s symlink: %w", jujud, err)
+			return errors.Errorf("failed to create %s symlink", jujud).Add(err)
 		}
 		symlinks = caasJujudSymlinks
 	}
 	for _, link := range symlinks {
 		err := a.createSymlink(jujud, link)
 		if err != nil {
-			return errors.Errorf("failed to create %s symlink: %w", link, err)
+			return errors.Errorf("failed to create %s symlink", link).Add(err)
 		}
 	}
 	return nil
@@ -1033,7 +1036,7 @@ func (a *MachineAgent) createSymlink(target, link string) error {
 			return nil
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return errors.Errorf("cannot check if %q is a symlink: %w", fullLink, err)
+		return errors.Errorf("cannot check if %q is a symlink", fullLink).Add(err)
 	}
 
 	currentTarget, err := symlink.Read(fullLink)
@@ -1070,10 +1073,10 @@ func (a *MachineAgent) machineStartup(ctx context.Context, apiConn api.Connectio
 	// information which can change between reboots.
 	hostname, err := getHostname()
 	if err != nil {
-		return errors.Errorf("getting machine hostname: %w", err)
+		return errors.Errorf("getting machine hostname").Add(err)
 	}
 	if err := a.recordAgentStartInformation(ctx, apiConn, hostname); err != nil {
-		return errors.Errorf("recording agent start information: %w", err)
+		return errors.Errorf("recording agent start information").Add(err)
 	}
 
 	return nil
@@ -1096,11 +1099,11 @@ func (a *MachineAgent) recordAgentStartInformation(ctx context.Context, apiConn 
 		return internalworker.ErrTerminateAgent
 	}
 	if err != nil {
-		return errors.Errorf("cannot load machine %s from state: %w", a.CurrentConfig().Tag(), err)
+		return errors.Errorf("cannot load machine %s from state", a.CurrentConfig().Tag()).Add(err)
 	}
 
 	if err := m.RecordAgentStartInformation(ctx, hostname); err != nil {
-		return errors.Errorf("cannot record agent start information: %w", err)
+		return errors.Errorf("cannot record agent start information").Add(err)
 	}
 	return nil
 }
@@ -1114,14 +1117,14 @@ func logSinkConfigFromAgentConfig(cfg agent.Config) (coreapiserver.LogSinkConfig
 	if v := cfg.Value(agent.LogSinkRateLimitBurst); v != "" {
 		burst, err := strconv.ParseInt(v, 10, 64)
 		if err != nil {
-			return result, errors.Errorf("parsing %s: %w", agent.LogSinkRateLimitBurst, err)
+			return result, errors.Errorf("parsing %s", agent.LogSinkRateLimitBurst).Add(err)
 		}
 		result.RateLimitBurst = burst
 	}
 	if v := cfg.Value(agent.LogSinkRateLimitRefill); v != "" {
 		refill, err := time.ParseDuration(v)
 		if err != nil {
-			return result, errors.Errorf("parsing %s: %w", agent.LogSinkRateLimitRefill, err)
+			return result, errors.Errorf("parsing %s", agent.LogSinkRateLimitRefill).Add(err)
 		}
 		result.RateLimitRefill = refill
 	}

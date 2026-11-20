@@ -812,7 +812,7 @@ preruncmd:
 	udata, err := cloudconfig.NewUserdataConfig(instanceCfg, cloudcfg)
 	c.Assert(err, tc.ErrorIsNil)
 	err = udata.Configure()
-	c.Assert(err, tc.ErrorMatches, `invalid preruncmd: .* got int`)
+	c.Assert(err, tc.ErrorMatches, `invalid preruncmd`)
 }
 
 func (s *cloudinitSuite) TestCloudInitPostruncmdError(c *tc.C) {
@@ -830,7 +830,7 @@ postruncmd:
 	udata, err := cloudconfig.NewUserdataConfig(instanceCfg, cloudcfg)
 	c.Assert(err, tc.ErrorIsNil)
 	err = udata.Configure()
-	c.Assert(err, tc.ErrorMatches, `invalid postruncmd: .* got list containing float64`)
+	c.Assert(err, tc.ErrorMatches, `invalid postruncmd`)
 }
 
 func (s *cloudinitSuite) TestCloudInitConfigureRecoveryBootstrap(c *tc.C) {
@@ -841,11 +841,36 @@ func (s *cloudinitSuite) TestCloudInitConfigureRecoveryBootstrap(c *tc.C) {
 	scripts := s.bootstrapConfigScriptsForConfig(c, instConfig)
 	params := getStateInitializationParams(c, scripts)
 	c.Check(params.RecoveryMode, tc.IsTrue)
-	assertScriptMatch(c, scripts, "jujuagentd recover-state .* --show-log", false)
+	assertScriptMatch(c, scripts,
+		"jujuagentd recover-state .* --show-log --machine-id 0", false)
 	assertScriptMatch(c, scripts,
 		"echo '' > '/var/lib/juju/recovery/params'", false)
 	assertScriptMatch(c, scripts,
 		"Starting Juju machine agent \\(service jujuagentd-machine-0\\)", false)
+}
+
+// TestCloudInitConfigureRecoveryBootstrapArchivedMachine checks that a
+// recovery allocation for an archived controller machine other than
+// machine 0 runs recover-state with the archived machine id, writes the
+// matching agent configuration, and installs the matching machine agent
+// service.
+func (s *cloudinitSuite) TestCloudInitConfigureRecoveryBootstrapArchivedMachine(c *tc.C) {
+	envConfig := minimalModelConfig(c)
+	instConfig := makeBootstrapConfig(jammy, 0).maybeSetModelConfig(envConfig)
+	instConfig.MachineId = "7"
+	instConfig.MachineAgentServiceName = "jujuagentd-machine-7"
+	instConfig.Bootstrap.RecoveryMode = true
+
+	scripts := s.bootstrapConfigScriptsForConfig(c, instConfig)
+	params := getStateInitializationParams(c, scripts)
+	c.Check(params.RecoveryMode, tc.IsTrue)
+	assertScriptMatch(c, scripts,
+		"jujuagentd recover-state .* --show-log --machine-id 7", false)
+	assertScriptMatch(c, scripts, "agents/machine-7/agent.conf", false)
+	assertScriptMatch(c, scripts,
+		"echo '' > '/var/lib/juju/recovery/params'", false)
+	assertScriptMatch(c, scripts,
+		"Starting Juju machine agent \\(service jujuagentd-machine-7\\)", false)
 }
 
 func (s *cloudinitSuite) TestCloudInitConfigureBootstrapLogging(c *tc.C) {
@@ -1100,7 +1125,7 @@ func (*cloudinitSuite) TestCloudInitVerify(c *tc.C) {
 	udata, err := cloudconfig.NewUserdataConfig(&cfg, ci)
 	c.Assert(err, tc.ErrorIsNil)
 	err = udata.Configure()
-	c.Assert(err, tc.ErrorMatches, "invalid machine configuration: missing agent binaries")
+	c.Assert(err, tc.ErrorMatches, "invalid machine configuration")
 
 	for i, test := range verifyTests {
 		c.Logf("test %d. %s", i, test.err)
@@ -1118,7 +1143,7 @@ func (*cloudinitSuite) TestCloudInitVerify(c *tc.C) {
 		udata, err = cloudconfig.NewUserdataConfig(&cfg, ci)
 		c.Assert(err, tc.ErrorIsNil)
 		err = udata.Configure()
-		c.Check(err, tc.ErrorMatches, "invalid machine configuration: "+test.err)
+		c.Check(err, tc.ErrorMatches, "invalid machine configuration")
 	}
 }
 

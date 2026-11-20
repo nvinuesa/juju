@@ -12,7 +12,9 @@ import (
 
 // ParamsFile is the data-directory-relative file marking a recovery target.
 // It is empty in the agent-startup stage and carries the recovery parameters
-// once the archive is uploaded.
+// once the archive is uploaded. The generated setup creates it only when
+// absent, so a restart never truncates parameters populated by a later
+// recovery stage.
 const ParamsFile = "recovery/params"
 
 // IsRecovery reports whether dataDir contains recovery parameters. A missing

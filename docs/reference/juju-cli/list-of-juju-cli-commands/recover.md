@@ -24,6 +24,6 @@ already available.
 
 This version validates the archive and installs and starts a replacement
 controller agent only. It leaves the machine or namespace for inspection and
-exits with an error reporting its ID or namespace.
-Database import and controller initialisation are not available, and the
-controller is not registered.
+exits with an error reporting its ID or namespace. Database import and
+controller initialisation are not available, and the controller is not
+registered.

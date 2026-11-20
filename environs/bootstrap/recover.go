@@ -22,8 +22,8 @@ import (
 type IAASRecoveryParams struct {
 	BootstrapParams
 
-	// MachineId is the archived logical machine identity.
-	MachineId string
+	// MachineID is the archived logical machine identity.
+	MachineID string
 
 	// AvailableTools is the exact archived agent set for machine recovery.
 	// It bypasses packaged-tool discovery and local tool building.
@@ -39,8 +39,8 @@ func (p IAASRecoveryParams) Validate() error {
 	if cloud.CloudIsCAAS(p.Cloud) {
 		return errors.Errorf("machine recovery for a Kubernetes cloud %w", coreerrors.NotValid)
 	}
-	if !names.IsValidMachine(p.MachineId) {
-		return errors.Errorf("recovery machine ID %q %w", p.MachineId, coreerrors.NotValid)
+	if !names.IsValidMachine(p.MachineID) {
+		return errors.Errorf("recovery machine ID %q %w", p.MachineID, coreerrors.NotValid)
 	}
 	if p.BootstrapBase.Empty() {
 		return errors.Errorf("recovery without a bootstrap base %w", coreerrors.NotValid)
@@ -149,14 +149,13 @@ func RecoverIAAS(
 	allocated := result.InstanceID
 	err = checkIAASRecoveryResult(args, result)
 	if err == nil {
-		var instanceConfig *instancecfg.InstanceConfig
-		instanceConfig, err = finishIAASBootstrap(ctx, environ, args.BootstrapParams, bootstrapParams, result, prep.customImageMetadata)
+		var cfg *instancecfg.InstanceConfig
+		cfg, err = finishIAASBootstrap(ctx, environ, args.BootstrapParams, bootstrapParams, result, prep.customImageMetadata)
 		if err == nil {
-			instanceConfig.MachineId = args.MachineId
-			instanceConfig.MachineAgentServiceName = jujunames.JujuAgentd + "-" +
-				names.NewMachineTag(args.MachineId).String()
-			instanceConfig.Bootstrap.StateInitializationParams.RecoveryMode = true
-			err = result.CloudBootstrapFinalizer(ctx, instanceConfig, args.DialOpts)
+			cfg.MachineId = args.MachineID
+			cfg.MachineAgentServiceName = jujunames.JujuAgentd + "-" + names.NewMachineTag(args.MachineID).String()
+			cfg.Bootstrap.StateInitializationParams.RecoveryMode = true
+			err = result.CloudBootstrapFinalizer(ctx, cfg, args.DialOpts)
 		}
 	}
 	if err == nil && IsContextDone(ctx) {

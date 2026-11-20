@@ -43,19 +43,19 @@ func TestFreshControllerSuite(t *testing.T) {
 }
 
 func (s *freshControllerSuite) TestFreshIAASController(c *tc.C) {
-	s.assertFreshController(c, false, nil, false, agent.BootstrapControllerId)
+	s.assertFreshController(c, false, nil)
 }
 
 func (s *freshControllerSuite) TestFreshK8sController(c *tc.C) {
-	s.assertFreshController(c, true, nil, false, agent.BootstrapControllerId)
+	s.assertFreshController(c, true, nil)
 }
 
 func (s *freshControllerSuite) TestDatabaseFailureDoesNotPersistNewPassword(c *tc.C) {
-	s.assertFreshController(c, false, errors.New("database failed"), false, agent.BootstrapControllerId)
+	s.assertFreshController(c, false, errors.New("database failed"))
 }
 
 func (s *freshControllerSuite) TestRecoverySkipsDqliteInitialisation(c *tc.C) {
-	s.assertFreshController(c, false, nil, true, agent.BootstrapControllerId)
+	s.assertRecoveryController(c, false, agent.BootstrapControllerId)
 }
 
 // TestRecoveryUsesArchivedMachineId checks that recovery from an archive
@@ -63,7 +63,7 @@ func (s *freshControllerSuite) TestRecoverySkipsDqliteInitialisation(c *tc.C) {
 // configuration for the archived logical machine identity, while still
 // skipping BootstrapAgent and Dqlite initialisation.
 func (s *freshControllerSuite) TestRecoveryUsesArchivedMachineId(c *tc.C) {
-	s.assertFreshController(c, false, nil, true, "7")
+	s.assertRecoveryController(c, false, "7")
 }
 
 // TestRecoveryK8sController checks that the Kubernetes recovery workflow
@@ -71,12 +71,38 @@ func (s *freshControllerSuite) TestRecoveryUsesArchivedMachineId(c *tc.C) {
 // configuration, while still skipping BootstrapAgent and Dqlite
 // initialisation.
 func (s *freshControllerSuite) TestRecoveryK8sController(c *tc.C) {
-	s.assertFreshController(c, true, nil, true, agent.BootstrapControllerId)
+	s.assertRecoveryController(c, true, agent.BootstrapControllerId)
 }
 
-func (s *freshControllerSuite) assertFreshController(
-	c *tc.C, isK8s bool, databaseErr error, skipDqlite bool, machineId string,
-) {
+// controllerRunSpec holds the mode-dependent inputs for the shared
+// fresh-bootstrap and recovery controller assertions.
+type controllerRunSpec struct {
+	isK8s     bool
+	recovery  bool
+	machineId string
+	// databaseErr is only meaningful for the fresh-bootstrap workflow;
+	// recovery never initialises a database.
+	databaseErr error
+}
+
+func (s *freshControllerSuite) assertFreshController(c *tc.C, isK8s bool, databaseErr error) {
+	s.assertControllerRun(c, controllerRunSpec{isK8s: isK8s, databaseErr: databaseErr})
+}
+
+// assertRecoveryController checks the recovery workflow against the given
+// archived logical machine identity.
+func (s *freshControllerSuite) assertRecoveryController(c *tc.C, isK8s bool, machineId string) {
+	s.assertControllerRun(c, controllerRunSpec{isK8s: isK8s, recovery: true, machineId: machineId})
+}
+
+func (s *freshControllerSuite) assertControllerRun(c *tc.C, spec controllerRunSpec) {
+	isK8s := spec.isK8s
+	skipDqlite := spec.recovery
+	databaseErr := spec.databaseErr
+	machineId := spec.machineId
+	if machineId == "" {
+		machineId = agent.BootstrapControllerId
+	}
 	dataDir := c.MkDir()
 	modelUUID := tc.Must0(c, coremodel.NewUUID)
 	cloudType := "dummy"
@@ -154,7 +180,7 @@ func (s *freshControllerSuite) assertFreshController(
 	if skipDqlite {
 		command := NewRecoverCommand()
 		command.AgentConf = agentconf.NewAgentConf(dataDir)
-		command.MachineId = machineId
+		command.MachineID = machineId
 		err = command.Run(cmdtesting.Context(c))
 		c.Assert(err, tc.ErrorIsNil)
 	} else {
@@ -198,12 +224,15 @@ func (s *freshControllerSuite) assertFreshController(
 			c.Check(err, tc.ErrorIs, databaseErr)
 		}
 	}
-	c.Check(databaseCalled, tc.Equals, !skipDqlite)
-	c.Check(bootstrapAgentCalled, tc.Equals, !skipDqlite)
 	if skipDqlite {
+		c.Check(databaseCalled, tc.IsFalse)
+		c.Check(bootstrapAgentCalled, tc.IsFalse)
 		identity, err := os.ReadFile(cfg.SystemIdentityPath())
 		c.Assert(err, tc.ErrorIsNil)
 		c.Check(string(identity), tc.Equals, expectedIdentity)
+	} else {
+		c.Check(databaseCalled, tc.IsTrue)
+		c.Check(bootstrapAgentCalled, tc.IsTrue)
 	}
 	stored, err := agent.ReadConfig(agent.ConfigPath(dataDir, tag))
 	c.Assert(err, tc.ErrorIsNil)

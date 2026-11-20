@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/juju/names/v6"
 	"github.com/juju/tc"
 
+	"github.com/juju/juju/core/semversion"
 	internalerrors "github.com/juju/juju/internal/errors"
 	internalrecovery "github.com/juju/juju/internal/recovery"
 	internalworker "github.com/juju/juju/internal/worker"
@@ -72,6 +74,42 @@ func (s *MachineSuite) TestValidateRecoveryEngineStart(c *tc.C) {
 	c.Assert(os.WriteFile(paramsPath, nil, 0o600), tc.ErrorIsNil)
 	err := validateRecoveryEngineStart(dataDir)
 	c.Check(err, tc.ErrorMatches, "recovery import has not completed")
+}
+
+// TestEngineCreatorRefusesRecoveryImport checks that the machine agent's
+// engine creator itself refuses to construct the dependency engine while
+// the data dir marks an incomplete recovery import. If the gate call were
+// ever dropped, the creator would proceed into engine construction and the
+// nil-worker assertion below would fail.
+func (s *MachineSuite) TestEngineCreatorRefusesRecoveryImport(c *tc.C) {
+	dataDir := c.MkDir()
+	paramsPath := filepath.Join(dataDir, internalrecovery.ParamsFile)
+	c.Assert(os.MkdirAll(filepath.Dir(paramsPath), 0o700), tc.ErrorIsNil)
+	c.Assert(os.WriteFile(paramsPath, nil, 0o600), tc.ErrorIsNil)
+
+	agent := s.newEngineCreatorAgent(c, dataDir)
+	engineWorker, err := agent.makeEngineCreator(
+		"machine-0", semversion.Zero, nil, nil, nil,
+	)(c.Context())
+	c.Check(engineWorker, tc.IsNil)
+	c.Check(err, tc.ErrorMatches, "recovery import has not completed")
+}
+
+// newEngineCreatorAgent builds a minimal machine agent whose engine creator
+// can be exercised against the given data dir. The recovery gate returns
+// before any engine construction, so only the agent config wiring is needed;
+// the full IAAS manifold engine is exercised by integration QA instead of a
+// unit test.
+func (s *MachineSuite) newEngineCreatorAgent(c *tc.C, dataDir string) *MachineAgent {
+	config := &fakeMachineConfig{
+		dataDir: dataDir,
+		logDir:  c.MkDir(),
+		tag:     names.NewMachineTag("0"),
+	}
+	return &MachineAgent{
+		AgentConfigWriter: &fakeMachineAgentConfigWriter{config: config},
+		agentTag:          config.Tag(),
+	}
 }
 
 // rebootDispatchSuite tests the error-dispatch logic in MachineAgent.Run that

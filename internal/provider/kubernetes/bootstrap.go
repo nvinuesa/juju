@@ -58,6 +58,7 @@ import (
 	k8sproxy "github.com/juju/juju/internal/provider/kubernetes/proxy"
 	"github.com/juju/juju/internal/provider/kubernetes/resources"
 	providerutils "github.com/juju/juju/internal/provider/kubernetes/utils"
+	internalrecovery "github.com/juju/juju/internal/recovery"
 	"github.com/juju/juju/internal/service/pebble/plan"
 	"github.com/juju/juju/juju/osenv"
 )
@@ -1520,7 +1521,15 @@ func (c *controllerStack) buildContainerSpecForController() (*core.PodSpec, erro
 		agentconstants.AgentConfigFilename,
 	)
 	if c.pcfg.Bootstrap.RecoveryMode {
-		setupCmd = `mkdir -p "$JUJU_DATA_DIR/recovery" && : > "$JUJU_DATA_DIR/recovery/params"; ` + setupCmd
+		// The recovery marker is created only when absent, so a container
+		// restart never re-marks the data dir or truncates recovery
+		// parameters that a later stage has populated.
+		paramsPath := "$JUJU_DATA_DIR/" + internalrecovery.ParamsFile
+		paramsDir := "$JUJU_DATA_DIR/" + path.Dir(internalrecovery.ParamsFile)
+		setupCmd = fmt.Sprintf(
+			`if ! test -e "%s"; then mkdir -p "%s" && : > "%s"; fi; `,
+			paramsPath, paramsDir, paramsPath,
+		) + setupCmd
 	}
 
 	machineCmd := fmt.Sprintf(

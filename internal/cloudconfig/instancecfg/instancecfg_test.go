@@ -4,6 +4,7 @@
 package instancecfg_test
 
 import (
+	"strings"
 	stdtesting "testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 
 	"github.com/juju/juju/agent"
 	"github.com/juju/juju/api"
+	"github.com/juju/juju/cloud"
 	"github.com/juju/juju/controller"
 	"github.com/juju/juju/core/model"
 	"github.com/juju/juju/core/semversion"
@@ -251,4 +253,37 @@ func (*instancecfgSuite) TestAgentConfigTracingConfigHTTPFallback(c *tc.C) {
 	c.Check(config.OpenTelemetryEnabled(), tc.IsTrue)
 	c.Check(config.OpenTelemetryHTTPEndpoint(), tc.Equals, "http://otel.example.com:4318")
 	c.Check(config.OpenTelemetryGRPCEndpoint(), tc.Equals, "")
+}
+
+// TestStateInitializationParamsRecoveryModeRoundTrip checks that the
+// recovery marker round-trips through the marshalled representation in both
+// directions, and that the key is omitted for ordinary bootstraps so
+// parameters written by pre-recovery agents unmarshal as false.
+func (*instancecfgSuite) TestStateInitializationParamsRecoveryModeRoundTrip(c *tc.C) {
+	modelConfig := testing.CustomModelConfig(c, testing.Attrs{})
+	params := instancecfg.StateInitializationParams{
+		AgentVersion: semversion.MustParse("4.1.0"),
+		ControllerCloud: cloud.Cloud{
+			Name:      "test-cloud",
+			Type:      "dummy",
+			AuthTypes: cloud.AuthTypes{cloud.EmptyAuthType},
+			Regions:   []cloud.Region{{Name: "localhost"}},
+		},
+		ControllerModelConfig: modelConfig,
+	}
+
+	data, err := params.Marshal()
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(strings.Contains(string(data), "recovery-mode"), tc.IsFalse)
+	var unmarshalled instancecfg.StateInitializationParams
+	c.Assert(unmarshalled.Unmarshal(data), tc.ErrorIsNil)
+	c.Check(unmarshalled.RecoveryMode, tc.IsFalse)
+
+	params.RecoveryMode = true
+	data, err = params.Marshal()
+	c.Assert(err, tc.ErrorIsNil)
+	c.Check(strings.Contains(string(data), "recovery-mode"), tc.IsTrue)
+	unmarshalled = instancecfg.StateInitializationParams{}
+	c.Assert(unmarshalled.Unmarshal(data), tc.ErrorIsNil)
+	c.Check(unmarshalled.RecoveryMode, tc.IsTrue)
 }

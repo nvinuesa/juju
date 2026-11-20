@@ -455,7 +455,7 @@ func validIAASRecoveryParams(archivedVersion semversion.Number) bootstrap.IAASRe
 			BootstrapConstraints:    constraints.MustParse("arch=amd64"),
 			AgentVersion:            &archivedVersion,
 		},
-		MachineId:      "7",
+		MachineID:      "7",
 		AvailableTools: recoveryIAASTools(archivedVersion, arch.AMD64),
 	}
 }
@@ -517,7 +517,7 @@ func (s *bootstrapSuite) TestBootstrapRecoveryIAAS(c *tc.C) {
 				return nil, errors.New("agent build attempted")
 			},
 		},
-		MachineId:      "7",
+		MachineID:      "7",
 		AvailableTools: agentTools,
 	})
 	c.Assert(err, tc.ErrorIsNil)
@@ -622,7 +622,7 @@ func (s *bootstrapSuite) TestBootstrapRecoveryIAASResultChecks(c *tc.C) {
 				BootstrapConstraints:    constraints.MustParse("arch=amd64"),
 				AgentVersion:            &archivedVersion,
 			},
-			MachineId:      "7",
+			MachineID:      "7",
 			AvailableTools: agentTools,
 		})
 		c.Check(id, tc.Equals, test.wantID)
@@ -866,7 +866,7 @@ func (s *bootstrapSuite) TestBootstrapRecoveryIAASInvalidParams(c *tc.C) {
 		err: ".*machine recovery for a Kubernetes cloud not valid",
 	}, {
 		name:   "invalid machine ID",
-		mutate: func(p *bootstrap.IAASRecoveryParams) { p.MachineId = "" },
+		mutate: func(p *bootstrap.IAASRecoveryParams) { p.MachineID = "" },
 		err:    `.*recovery machine ID "" not valid`,
 	}, {
 		name:   "no base",

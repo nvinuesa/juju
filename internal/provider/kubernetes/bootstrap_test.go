@@ -359,7 +359,9 @@ func (s *bootstrapSuite) TestControllerSpecRecoveryMode(c *tc.C) {
 	c.Assert(bootstrapIndex >= 0, tc.IsTrue)
 	c.Assert(modeIndex >= 0, tc.IsTrue)
 	c.Check(modeIndex < bootstrapIndex, tc.IsTrue)
-	c.Check(startup, tc.Contains, `mkdir -p "$JUJU_DATA_DIR/recovery"`)
+	c.Check(startup, tc.Contains,
+		`if ! test -e "$JUJU_DATA_DIR/recovery/params"; then`+
+			` mkdir -p "$JUJU_DATA_DIR/recovery" && : > "$JUJU_DATA_DIR/recovery/params"; fi; `)
 
 	paramsData, err := s.pcfg.Bootstrap.StateInitializationParams.Marshal()
 	c.Assert(err, tc.ErrorIsNil)

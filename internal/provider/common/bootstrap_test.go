@@ -754,7 +754,7 @@ func (s *BootstrapSuite) TestSuccess(c *tc.C) {
 		IdentityFiles: identityFiles,
 		Timeout:       coretesting.LongWait,
 	})
-	c.Assert(err, tc.ErrorMatches, "invalid machine configuration: .*") // icfg hasn't been finalized
+	c.Assert(err, tc.ErrorMatches, "invalid machine configuration") // icfg hasn't been finalized
 	c.Assert(innerInstanceConfig.Bootstrap.InitialSSHHostKeys, tc.HasLen, 3)
 	var computedKnownHosts strings.Builder
 	computedHostKeyAlgos := []string{}

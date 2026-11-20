@@ -24,6 +24,7 @@ import (
 	"github.com/juju/juju/core/base"
 	"github.com/juju/juju/core/constraints"
 	coreerrors "github.com/juju/juju/core/errors"
+	coreos "github.com/juju/juju/core/os"
 	"github.com/juju/juju/core/semversion"
 	jujuversion "github.com/juju/juju/core/version"
 	"github.com/juju/juju/domain/recovery"
@@ -43,7 +44,11 @@ import (
 // after the client has resolved the cloud and credentials.
 const recoveryAllocationTimeout = 20 * time.Minute
 
-var lookupRecoveryProvider = environs.Provider
+var (
+	lookupRecoveryProvider = environs.Provider
+	openRecoveryController = bootstrap.OpenController
+	recoverIAAS            = bootstrap.RecoverIAAS
+)
 
 // recoveryK8sBroker is the namespace-bearing surface the recovery
 // provisioner needs from a Kubernetes environ.
@@ -102,7 +107,7 @@ func provisionRecovery(
 	if err != nil {
 		return errors.Capture(err)
 	}
-	preparation, err := bootstrap.OpenController(isK8s, provisionCtx, bootstrap.PrepareParams{
+	preparation, err := openRecoveryController(isK8s, provisionCtx, bootstrap.PrepareParams{
 		ModelConfig:      modelConfig.AllAttrs(),
 		ControllerConfig: controllerConfig,
 		ControllerName:   info.ControllerName,
@@ -163,7 +168,7 @@ func provisionRecovery(
 		return errors.Capture(err)
 	}
 	builtAgent, err := sync.BuildAgentTarball(
-		true, "bootstrap", func(semversion.Number) semversion.Number {
+		false, "bootstrap", func(semversion.Number) semversion.Number {
 			return info.AgentVersion
 		},
 	)
@@ -172,16 +177,9 @@ func provisionRecovery(
 	}
 	defer func() { _ = os.RemoveAll(builtAgent.Dir) }()
 
-	// A locally built agent only runs on the client platform, so
-	// refuse to install it on a replacement with a different base
-	// or architecture.
 	targetArch := *iaasParams.BootstrapConstraints.Arch
-	if builtAgent.Version.Arch != targetArch ||
-		builtAgent.Version.Release != iaasParams.BootstrapBase.OS {
-		return errors.Errorf(
-			"cannot use agent built for %q using a client running on %q",
-			iaasParams.BootstrapBase, builtAgent.Version,
-		)
+	if err := checkAgentPlatform(builtAgent, iaasParams); err != nil {
+		return errors.Capture(err)
 	}
 
 	commonBootstrap.BootstrapConstraints = iaasParams.BootstrapConstraints
@@ -193,7 +191,7 @@ func provisionRecovery(
 	commonBootstrap.DialOpts.RetryDelay = 5 * time.Second
 	commonBootstrap.DialOpts.AddressesDelay = 5 * time.Second
 	iaasParams.BootstrapParams = commonBootstrap
-	iaasParams.MachineId = info.MachineName
+	iaasParams.MachineID = info.MachineName
 	iaasParams.AvailableTools = tools.List{&tools.Tools{
 		Version: semversion.Binary{
 			Number:  info.AgentVersion,
@@ -204,7 +202,7 @@ func provisionRecovery(
 		SHA256: builtAgent.Sha256Hash,
 		Size:   builtAgent.Size,
 	}}
-	started, err := bootstrap.RecoverIAAS(provisionCtx, preparation.Environ, iaasParams)
+	started, err := recoverIAAS(provisionCtx, preparation.Environ, iaasParams)
 	if err != nil {
 		return errors.Capture(err)
 	}
@@ -212,6 +210,27 @@ func provisionRecovery(
 		"controller recovery database import is not available in this build; started replacement agent on instance %s",
 		started,
 	)
+}
+
+// checkAgentPlatform verifies that the agent packaged from the client
+// install can run on the replacement controller. The replacement runs the
+// archived base and architecture, so both must match the client host the
+// packaged agent was taken from.
+func checkAgentPlatform(
+	builtAgent *sync.BuiltAgent, params bootstrap.IAASRecoveryParams,
+) error {
+	targetArch := *params.BootstrapConstraints.Arch
+	hostBase, err := coreos.HostBase()
+	if err != nil {
+		return errors.Capture(err)
+	}
+	if builtAgent.Version.Arch != targetArch || hostBase != params.BootstrapBase {
+		return errors.Errorf(
+			"replacement requires base %q and arch %q, but the client host is base %q and arch %q",
+			params.BootstrapBase, targetArch, hostBase, builtAgent.Version.Arch,
+		)
+	}
+	return nil
 }
 
 // recoveryParamsFromArchive prepares the machine-specific inputs before cloud
@@ -239,7 +258,6 @@ func recoveryParamsFromArchive(info *recovery.ArchiveInfo) (bootstrap.IAASRecove
 		},
 		// Allocation selects an image but does not download an agent, so
 		// only the binary identity is needed; URL, digest and size are unset.
-		// TODO(recovery): supply a verified agent tarball before installation.
 		AvailableTools: tools.List{{Version: semversion.Binary{
 			Number: info.AgentVersion, Release: targetBase.OS, Arch: targetArch,
 		}}},

@@ -212,7 +212,7 @@ func (w *userdataConfig) ConfigureBasic() error {
 		for i := len(preruncmds) - 1; i >= 0; i -= 1 {
 			cmd, err := runCmdToString(preruncmds[i])
 			if err != nil {
-				return errors.Errorf("invalid preruncmd: %w", err)
+				return errors.Errorf("invalid preruncmd").Add(err)
 			}
 			w.conf.PrependRunCmd(cmd)
 		}
@@ -236,7 +236,7 @@ func (w *userdataConfig) ConfigureBasic() error {
 		}
 		err := w.conf.SetSSHKeys(keys)
 		if err != nil {
-			return errors.Errorf("setting ssh keys: %w", err)
+			return errors.Errorf("setting ssh keys").Add(err)
 		}
 	}
 
@@ -276,7 +276,7 @@ func (w *userdataConfig) ConfigureJuju() error {
 		for i, v := range postruncmds {
 			cmd, err := runCmdToString(v)
 			if err != nil {
-				return errors.Errorf("invalid postruncmd: %w", err)
+				return errors.Errorf("invalid postruncmd").Add(err)
 			}
 			cmds[i] = cmd
 		}
@@ -482,7 +482,7 @@ func (w *userdataConfig) configureBootstrap() error {
 	bootstrapParamsFile := path.Join(w.icfg.DataDir, FileNameBootstrapParams)
 	bootstrapParams, err := w.icfg.Bootstrap.StateInitializationParams.Marshal()
 	if err != nil {
-		return errors.Errorf("marshalling bootstrap params: %w", err)
+		return errors.Errorf("marshalling bootstrap params").Add(err)
 	}
 	w.conf.AddRunTextFile(bootstrapParamsFile, string(bootstrapParams), 0600)
 	bootstrapSubcommand := "bootstrap-state"
@@ -621,7 +621,7 @@ func toolsDownloadCommand(curlCommand string, urls []string) string {
 		"URLs":                  urls,
 	})
 	if err != nil {
-		panic(errors.Errorf("agent binaries download template error: %w", err))
+		panic(errors.Errorf("agent binaries download template error").Add(err))
 	}
 	return buf.String()
 }
@@ -636,7 +636,7 @@ func (c *userdataConfig) addAgentInfo(tag names.Tag) (agent.Config, error) {
 	acfg.SetValue(agent.AgentServiceName, c.icfg.MachineAgentServiceName)
 	cmds, err := acfg.WriteCommands(c.conf.ShellRenderer())
 	if err != nil {
-		return nil, errors.Errorf("failed to write commands: %w", err)
+		return nil, errors.Errorf("failed to write commands").Add(err)
 	}
 	c.conf.AddScripts(fmt.Sprintf("if [ ! -e %s ]; then", shquote(agent.ConfigPath(c.icfg.DataDir, tag))))
 	c.conf.AddScripts(cmds...)
@@ -659,11 +659,11 @@ func (c *userdataConfig) addMachineAgentToBoot() error {
 	name := c.tag.String()
 	cmds, err := svc.InstallCommands()
 	if err != nil {
-		return errors.Errorf("cannot make cloud-init init script for the %s agent: %w", name, err)
+		return errors.Errorf("cannot make cloud-init init script for the %s agent", name).Add(err)
 	}
 	startCmds, err := svc.StartCommands()
 	if err != nil {
-		return errors.Errorf("cannot make cloud-init init script for the %s agent: %w", name, err)
+		return errors.Errorf("cannot make cloud-init init script for the %s agent", name).Add(err)
 	}
 	cmds = append(cmds, startCmds...)
 

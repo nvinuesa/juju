@@ -4,7 +4,6 @@
 package agent
 
 import (
-	"fmt"
 	"os"
 	"path"
 	"time"
@@ -30,15 +29,18 @@ import (
 type RecoverCommand struct {
 	cmd.CommandBase
 	agentconf.AgentConf
-	Timeout   time.Duration
-	MachineId string
+	// Timeout is the maximum duration to wait for recovery to complete.
+	Timeout time.Duration
+	// MachineID is the archived logical machine identity whose agent
+	// configuration is read for the replacement controller.
+	MachineID string
 }
 
 // NewRecoverCommand returns a new RecoverCommand that has been initialised.
 func NewRecoverCommand() *RecoverCommand {
 	return &RecoverCommand{
 		AgentConf: agentconf.NewAgentConf(""),
-		MachineId: agent.BootstrapControllerId,
+		MachineID: agent.BootstrapControllerId,
 	}
 }
 
@@ -54,7 +56,7 @@ func (c *RecoverCommand) Info() *cmd.Info {
 func (c *RecoverCommand) SetFlags(f *gnuflag.FlagSet) {
 	c.AgentConf.AddFlags(f)
 	f.DurationVar(&c.Timeout, "timeout", time.Duration(0), "set the recovery timeout")
-	f.StringVar(&c.MachineId, "machine-id", agent.BootstrapControllerId,
+	f.StringVar(&c.MachineID, "machine-id", agent.BootstrapControllerId,
 		"the archived logical machine identity whose agent configuration to read")
 }
 
@@ -96,13 +98,13 @@ func (c *RecoverCommand) initialiseRecoveryController(ctx *cmd.Context, args ins
 
 	// The replacement agent configuration is written for the archived logical
 	// machine, which need not be the bootstrap controller machine.
-	if err := agentconfig.ReadAgentConfig(c, c.MachineId); err != nil {
+	if err := agentconfig.ReadAgentConfig(c, c.MachineID); err != nil {
 		return errors.Errorf("cannot read config: %w", err)
 	}
 	agentConfig := c.CurrentConfig()
 	info, ok := agentConfig.ControllerAgentInfo()
 	if !ok {
-		return fmt.Errorf("bootstrap machine config has no state serving info")
+		return errors.Errorf("bootstrap machine config has no state serving info")
 	}
 	if err := ensureKeys(isK8s, &args, &info); err != nil {
 		return errors.Capture(err)
@@ -111,7 +113,7 @@ func (c *RecoverCommand) initialiseRecoveryController(ctx *cmd.Context, args ins
 		agentConfig.SetControllerAgentInfo(info)
 		return nil
 	}); err != nil {
-		return fmt.Errorf("cannot write agent config: %v", err)
+		return errors.Errorf("cannot write agent config: %w", err)
 	}
 
 	agentConfig = c.CurrentConfig()

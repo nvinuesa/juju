@@ -15,8 +15,10 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/juju/tc"
+	jujusshtools "github.com/juju/utils/v4/ssh"
 
 	"github.com/juju/juju/api/jujuclient"
 	jujucloud "github.com/juju/juju/cloud"
@@ -26,13 +28,19 @@ import (
 	"github.com/juju/juju/core/arch"
 	corebackups "github.com/juju/juju/core/backups"
 	"github.com/juju/juju/core/base"
+	"github.com/juju/juju/core/constraints"
+	"github.com/juju/juju/core/instance"
+	coreos "github.com/juju/juju/core/os"
 	"github.com/juju/juju/core/semversion"
 	"github.com/juju/juju/core/version"
 	"github.com/juju/juju/domain/recovery"
 	"github.com/juju/juju/environs"
 	"github.com/juju/juju/environs/bootstrap"
+	"github.com/juju/juju/environs/config"
+	"github.com/juju/juju/environs/sync"
 	"github.com/juju/juju/internal/errors"
 	coretesting "github.com/juju/juju/internal/testing"
+	osenv "github.com/juju/juju/juju/osenv"
 )
 
 type recoverySuite struct {
@@ -482,6 +490,52 @@ func (s *recoverySuite) TestProvisionRecoveryRequiresIAASMachineName(c *tc.C) {
 	c.Check(err, tc.ErrorMatches, "archive does not record a usable controller machine")
 }
 
+// TestCheckAgentPlatform checks that the packaged agent is accepted only
+// when the client host base and architecture match the archived controller
+// base and architecture: the packaged agent runs on the client platform, so
+// a series or architecture mismatch is refused.
+func (s *recoverySuite) TestCheckAgentPlatform(c *tc.C) {
+	jammy := base.MustParseBaseFromString("ubuntu@22.04")
+	noble := base.MustParseBaseFromString("ubuntu@24.04")
+	s.PatchValue(&coreos.HostBase, func() (base.Base, error) {
+		return noble, nil
+	})
+
+	archivedVersion := version.Current
+	params := bootstrap.IAASRecoveryParams{
+		BootstrapParams: bootstrap.BootstrapParams{
+			AgentVersion:         &archivedVersion,
+			BootstrapBase:        jammy,
+			BootstrapConstraints: constraints.MustParse("arch=amd64"),
+		},
+	}
+	builtAgent := &sync.BuiltAgent{
+		Version: semversion.Binary{
+			Number:  archivedVersion,
+			Release: "ubuntu",
+			Arch:    arch.AMD64,
+		},
+	}
+
+	// A noble client host cannot package an agent for a jammy replacement.
+	err := checkAgentPlatform(builtAgent, params)
+	c.Check(err, tc.ErrorMatches, regexp.QuoteMeta(
+		"replacement requires base \""+jammy.String()+"\" and arch \"amd64\", "+
+			"but the client host is base \""+noble.String()+"\" and arch \"amd64\""))
+
+	// An architecture mismatch is refused even when the base matches.
+	params.BootstrapBase = noble
+	builtAgent.Version.Arch = arch.ARM64
+	err = checkAgentPlatform(builtAgent, params)
+	c.Check(err, tc.ErrorMatches, regexp.QuoteMeta(
+		"replacement requires base \""+noble.String()+"\" and arch \"amd64\", "+
+			"but the client host is base \""+noble.String()+"\" and arch \"arm64\""))
+
+	// A matching base and architecture is accepted.
+	builtAgent.Version.Arch = arch.AMD64
+	c.Check(checkAgentPlatform(builtAgent, params), tc.ErrorIsNil)
+}
+
 // TestProvisionRecoveryFinalizesKubernetesCloudHostRegion checks that
 // FinalizeCloud runs before the host-cloud-region guard so built-in clouds
 // such as microk8s (whose HostCloudRegion is discovered during finalization)
@@ -522,6 +576,242 @@ type fakeK8sRecoveryProvider struct {
 func (p fakeK8sRecoveryProvider) FinalizeCloud(_ environs.FinalizeCloudContext, cld jujucloud.Cloud) (jujucloud.Cloud, error) {
 	cld.HostCloudRegion = *p.hostCloudRegion
 	return cld, nil
+}
+
+// oneCredentialProvider detects exactly one credential so the machine
+// recovery provisioning tests can pass cloud-credential resolution without
+// a populated client store.
+type oneCredentialProvider struct {
+	environs.CloudEnvironProvider
+}
+
+func (oneCredentialProvider) DetectCredentials(string) (*jujucloud.CloudCredential, error) {
+	return &jujucloud.CloudCredential{
+		DefaultRegion: "localhost",
+		AuthCredentials: map[string]jujucloud.Credential{
+			"recovery-cred": jujucloud.NewCredential("one", nil),
+		},
+	}, nil
+}
+
+func (oneCredentialProvider) CredentialSchemas() map[jujucloud.AuthType]jujucloud.CredentialSchema {
+	return map[jujucloud.AuthType]jujucloud.CredentialSchema{"one": {}}
+}
+
+func (oneCredentialProvider) FinalizeCredential(
+	_ environs.FinalizeCredentialContext, fp environs.FinalizeCredentialParams,
+) (*jujucloud.Credential, error) {
+	credential := fp.Credential
+	return &credential, nil
+}
+
+// fakeRecoveryEnviron stands in for the opened controller environ so a
+// test can reach the machine agent installation block without a provider
+// registry entry.
+type fakeRecoveryEnviron struct {
+	environs.BootstrapEnviron
+
+	preparedFor string
+}
+
+func (e *fakeRecoveryEnviron) PrepareForBootstrap(
+	_ environs.BootstrapContext, controllerName string,
+) error {
+	e.preparedFor = controllerName
+	return nil
+}
+
+// iaasRecoveryFakes bundles the fakes installed for the machine recovery
+// provisioning tests.
+type iaasRecoveryFakes struct {
+	environ    *fakeRecoveryEnviron
+	info       *recovery.ArchiveInfo
+	openParams bootstrap.PrepareParams
+}
+
+// patchIAASRecovery installs the cloud metadata, provider and controller
+// fakes that let provisionRecovery resolve the archived cloud and open a
+// fake controller environ, so a test can reach and inspect the machine
+// agent installation block.
+func (s *recoverySuite) patchIAASRecovery(c *tc.C) *iaasRecoveryFakes {
+	c.Assert(jujucloud.WritePersonalCloudMetadata(map[string]jujucloud.Cloud{
+		"recovery-lxd": {
+			Name:    "recovery-lxd",
+			Type:    "lxd",
+			Regions: []jujucloud.Region{{Name: "localhost"}},
+		},
+	}), tc.ErrorIsNil)
+
+	fakes := &iaasRecoveryFakes{
+		environ: &fakeRecoveryEnviron{},
+		info: &recovery.ArchiveInfo{
+			ControllerUUID:      "c0ffee00-1111-2222-3333-444455556666",
+			ControllerName:      "recovered",
+			ControllerModelUUID: "c0ffee00-aaaa-2222-3333-444455556666",
+			CACert:              coretesting.CACert,
+			CAPrivateKey:        coretesting.CAKey,
+			AgentVersion:        version.Current,
+			SourceBase:          "ubuntu@24.04",
+			SourceArch:          "amd64",
+			MachineName:         "0",
+			CloudName:           "recovery-lxd",
+			CloudType:           "lxd",
+		},
+	}
+	s.PatchValue(&lookupRecoveryProvider, func(string) (environs.EnvironProvider, error) {
+		return oneCredentialProvider{}, nil
+	})
+	s.PatchValue(&openRecoveryController, func(
+		_ bool, _ environs.BootstrapContext, params bootstrap.PrepareParams,
+	) (*bootstrap.ControllerPreparation, error) {
+		fakes.openParams = params
+		return &bootstrap.ControllerPreparation{Environ: fakes.environ}, nil
+	})
+	return fakes
+}
+
+// TestProvisionRecoveryRequiresSSHKeys checks that a machine recovery with
+// no client SSH keys is refused after the controller environ is prepared,
+// before any agent is packaged or instance allocated.
+func (s *recoverySuite) TestProvisionRecoveryRequiresSSHKeys(c *tc.C) {
+	fakes := s.patchIAASRecovery(c)
+	jujusshtools.ClearClientKeys()
+
+	err := provisionRecovery(cmdtesting.Context(c), jujuclient.NewMemStore(), fakes.info)
+	c.Check(err, tc.ErrorMatches, "no Juju SSH keys available for recovery")
+	c.Check(fakes.environ.preparedFor, tc.Equals, "recovered")
+}
+
+// TestProvisionRecoveryAgentBuildFailure checks that a failure to package
+// the agent tarball is reported before any cloud allocation happens.
+func (s *recoverySuite) TestProvisionRecoveryAgentBuildFailure(c *tc.C) {
+	fakes := s.patchIAASRecovery(c)
+	c.Assert(jujusshtools.LoadClientKeys(osenv.JujuXDGDataHomePath("ssh")), tc.ErrorIsNil)
+	s.PatchValue(&sync.BuildAgentTarball, func(
+		bool, string, func(semversion.Number) semversion.Number,
+	) (*sync.BuiltAgent, error) {
+		return nil, errors.New("agent build failed")
+	})
+
+	err := provisionRecovery(cmdtesting.Context(c), jujuclient.NewMemStore(), fakes.info)
+	c.Check(err, tc.ErrorMatches, "agent build failed")
+}
+
+// TestProvisionRecoveryRejectsPlatformMismatch checks that the packaged
+// agent is refused when its architecture cannot run on the archived
+// controller machine.
+func (s *recoverySuite) TestProvisionRecoveryRejectsPlatformMismatch(c *tc.C) {
+	fakes := s.patchIAASRecovery(c)
+	c.Assert(jujusshtools.LoadClientKeys(osenv.JujuXDGDataHomePath("ssh")), tc.ErrorIsNil)
+	noble := base.MustParseBaseFromString("ubuntu@24.04")
+	s.PatchValue(&coreos.HostBase, func() (base.Base, error) {
+		return noble, nil
+	})
+	s.PatchValue(&sync.BuildAgentTarball, func(
+		bool, string, func(semversion.Number) semversion.Number,
+	) (*sync.BuiltAgent, error) {
+		return &sync.BuiltAgent{
+			Version: semversion.Binary{
+				Number: version.Current, Release: "ubuntu", Arch: arch.ARM64,
+			},
+		}, nil
+	})
+
+	err := provisionRecovery(cmdtesting.Context(c), jujuclient.NewMemStore(), fakes.info)
+	c.Check(err, tc.ErrorMatches, regexp.QuoteMeta(
+		"replacement requires base \""+noble.String()+"\" and arch \"amd64\", "+
+			"but the client host is base \""+noble.String()+"\" and arch \"arm64\""))
+}
+
+// TestProvisionRecoveryPreparesIAASRecovery checks the machine agent
+// installation block end to end: the packaged agent tarball, the archived
+// identity and the client SSH keys are wired into the recovery parameters,
+// and the terminal message reports the started replacement agent.
+func (s *recoverySuite) TestProvisionRecoveryPreparesIAASRecovery(c *tc.C) {
+	fakes := s.patchIAASRecovery(c)
+	c.Assert(jujusshtools.LoadClientKeys(osenv.JujuXDGDataHomePath("ssh")), tc.ErrorIsNil)
+	noble := base.MustParseBaseFromString("ubuntu@24.04")
+	s.PatchValue(&coreos.HostBase, func() (base.Base, error) {
+		return noble, nil
+	})
+	builtAgent := &sync.BuiltAgent{
+		Version: semversion.Binary{
+			Number: version.Current, Release: "ubuntu", Arch: arch.AMD64,
+		},
+		Dir:         c.MkDir(),
+		StorageName: "agents.tar.gz",
+		Sha256Hash:  "cafebabe",
+		Size:        1234,
+	}
+	var gotBuild bool
+	s.PatchValue(&sync.BuildAgentTarball, func(
+		build bool, _ string, _ func(semversion.Number) semversion.Number,
+	) (*sync.BuiltAgent, error) {
+		gotBuild = build
+		return builtAgent, nil
+	})
+	var gotEnviron environs.BootstrapEnviron
+	var gotParams bootstrap.IAASRecoveryParams
+	s.PatchValue(&recoverIAAS, func(
+		_ environs.BootstrapContext, environ environs.BootstrapEnviron,
+		params bootstrap.IAASRecoveryParams,
+	) (instance.Id, error) {
+		gotEnviron = environ
+		gotParams = params
+		return "test-instance", nil
+	})
+
+	err := provisionRecovery(cmdtesting.Context(c), jujuclient.NewMemStore(), fakes.info)
+	c.Check(err, tc.ErrorMatches,
+		"controller recovery database import is not available in this build; "+
+			"started replacement agent on instance test-instance")
+
+	// The agent tarball is packaged from the client install, never built.
+	c.Check(gotBuild, tc.IsFalse)
+	c.Check(gotEnviron, tc.Equals, environs.BootstrapEnviron(fakes.environ))
+	c.Check(fakes.environ.preparedFor, tc.Equals, "recovered")
+
+	keyFiles := jujusshtools.PrivateKeyFiles()
+	sorted := append([]string(nil), keyFiles...)
+	sort.Strings(sorted)
+
+	c.Assert(gotParams.AvailableTools, tc.HasLen, 1)
+	tool := gotParams.AvailableTools[0]
+	c.Check(tool.Version.Number, tc.Equals, version.Current)
+	c.Check(tool.Version.Release, tc.Equals, "ubuntu")
+	c.Check(tool.Version.Arch, tc.Equals, arch.AMD64)
+	c.Check(tool.URL, tc.Equals,
+		"file://"+filepath.Join(builtAgent.Dir, builtAgent.StorageName))
+	c.Check(tool.SHA256, tc.Equals, builtAgent.Sha256Hash)
+	c.Check(tool.Size, tc.Equals, builtAgent.Size)
+
+	c.Check(gotParams.MachineID, tc.Equals, "0")
+	c.Check(gotParams.BootstrapBase, tc.Equals, noble)
+	c.Check(gotParams.SupportedBootstrapBases, tc.DeepEquals, []base.Base{noble})
+	c.Assert(gotParams.BootstrapConstraints.Arch, tc.NotNil)
+	c.Check(*gotParams.BootstrapConstraints.Arch, tc.Equals, arch.AMD64)
+	c.Check(gotParams.CAPrivateKey, tc.Equals, coretesting.CAKey)
+	c.Check(gotParams.ControllerConfig.ControllerUUID(), tc.Equals, fakes.info.ControllerUUID)
+	c.Check(gotParams.AdminSecret, tc.Not(tc.Equals), "")
+	c.Check(gotParams.Cloud.Name, tc.Equals, "recovery-lxd")
+	c.Check(gotParams.CloudRegion, tc.Equals, "localhost")
+	c.Check(gotParams.CloudCredentialName, tc.Equals, "recovery-cred")
+
+	c.Check(gotParams.BootstrapSSHAuthorizedKeys, tc.HasLen, len(sorted))
+	c.Check(gotParams.DialOpts.IdentityFiles, tc.DeepEquals, sorted)
+	c.Check(gotParams.DialOpts.Timeout, tc.Equals, 20*time.Minute)
+	c.Check(gotParams.DialOpts.RetryDelay, tc.Equals, 5*time.Second)
+	c.Check(gotParams.DialOpts.AddressesDelay, tc.Equals, 5*time.Second)
+
+	// The controller preparation carried the archived identity.
+	c.Check(fakes.openParams.ControllerName, tc.Equals, "recovered")
+	c.Check(fakes.openParams.Cloud.Name, tc.Equals, "recovery-lxd")
+	c.Check(fakes.openParams.Cloud.Region, tc.Equals, "localhost")
+	c.Check(fakes.openParams.CredentialName, tc.Equals, "recovery-cred")
+	c.Check(fakes.openParams.AdminSecret, tc.Not(tc.Equals), "")
+	c.Check(fakes.openParams.ModelConfig[config.UUIDKey], tc.Equals, fakes.info.ControllerModelUUID)
+	c.Check(fakes.openParams.ModelConfig[config.TypeKey], tc.Equals, "lxd")
+	c.Check(fakes.openParams.ControllerConfig.ControllerUUID(), tc.Equals, fakes.info.ControllerUUID)
 }
 
 // hookedOpenFS delegates every filesystem operation, except Open, to
