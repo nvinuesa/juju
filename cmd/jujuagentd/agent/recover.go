@@ -104,33 +104,45 @@ func (c *RecoverCommand) Run(ctx *cmd.Context) error {
 		return errors.New("recover-state requires provisioned recovery parameters")
 	}
 
-	bootstrapParamsData, err := os.ReadFile(path.Join(c.DataDir(), cloudconfig.FileNameBootstrapParams))
-	if err != nil {
-		return errors.Errorf("reading bootstrap params file: %w", err)
-	}
-	var node instancecfg.StateInitializationParams
-	if err := node.Unmarshal(bootstrapParamsData); err != nil {
-		return errors.Capture(err)
-	}
-	isK8s := node.ControllerCloud.Type == cloud.CloudTypeKubernetes
-
 	paramsData, err := os.ReadFile(filepath.Join(c.DataDir(), internalrecovery.ParamsFile))
 	if err != nil {
 		return errors.Errorf("reading recovery parameters: %w", err)
 	}
 	if len(bytes.TrimSpace(paramsData)) == 0 {
-		if isK8s {
-			// Kubernetes delivers its archive later; until then it keeps
-			// the agent-startup behaviour.
+		// An empty parameters file marks the agent-startup stage of a
+		// Kubernetes replacement: its archive is uploaded only after
+		// the agent starts, so until then the replacement keeps the
+		// agent-startup behaviour. A machine replacement is provisioned
+		// with its archive, so empty parameters there are an error.
+		node, err := readBootstrapParams(c.DataDir())
+		if err != nil {
+			return errors.Capture(err)
+		}
+		if node.ControllerCloud.Type == cloud.CloudTypeKubernetes {
 			return errors.Capture(c.initialiseRecoveryController(ctx, node))
 		}
 		return errors.New("recovery parameters are empty")
 	}
-	params, err := internalrecovery.ReadParams(c.DataDir())
-	if err != nil {
+
+	var params internalrecovery.Params
+	if err := params.Unmarshal(paramsData); err != nil {
 		return errors.Capture(err)
 	}
 	return errors.Capture(c.initialiseRecoveryDatabase(ctx, params))
+}
+
+// readBootstrapParams reads the bootstrap parameters provisioned for the
+// replacement instance.
+func readBootstrapParams(dataDir string) (instancecfg.StateInitializationParams, error) {
+	data, err := os.ReadFile(path.Join(dataDir, cloudconfig.FileNameBootstrapParams))
+	if err != nil {
+		return instancecfg.StateInitializationParams{}, errors.Errorf("reading bootstrap params file: %w", err)
+	}
+	var node instancecfg.StateInitializationParams
+	if err := node.Unmarshal(data); err != nil {
+		return instancecfg.StateInitializationParams{}, errors.Capture(err)
+	}
+	return node, nil
 }
 
 // initialiseRecoveryController prepares a replacement controller's local
@@ -187,7 +199,7 @@ func (c *RecoverCommand) initialiseRecoveryDatabase(ctx *cmd.Context, params int
 	); err != nil {
 		return errors.Capture(err)
 	} else if started {
-		return errors.New("previous recovery import did not complete; provision a new replacement")
+		return errors.New("recovery initialisation was already started; provision a new replacement")
 	}
 
 	stdCtx := ctx.Context
@@ -206,12 +218,6 @@ func (c *RecoverCommand) initialiseRecoveryDatabase(ctx *cmd.Context, params int
 	}
 
 	node := params.Node
-	isK8s := node.ControllerCloud.Type == cloud.CloudTypeKubernetes
-	if isK8s {
-		if err := ensureConfigFilesForK8s(c.DataDir()); err != nil {
-			return errors.Capture(err)
-		}
-	}
 	if err := agentconfig.ReadAgentConfig(c, params.MachineName); err != nil {
 		return errors.Errorf("reading recovery agent config: %w", err)
 	}
@@ -231,12 +237,11 @@ func (c *RecoverCommand) initialiseRecoveryDatabase(ctx *cmd.Context, params int
 		Cloud:          cloudSpec,
 		Config:         node.ControllerModelConfig,
 	}
-	var env environs.BootstrapEnviron
-	if isK8s {
-		env, err = environsNewK8s(stdCtx, openParams, environs.NoopCredentialInvalidator())
-	} else {
-		env, err = environsNewIAAS(stdCtx, openParams, environs.NoopCredentialInvalidator())
-	}
+	// Populated parameters arrive with machine replacements only, so the
+	// machine environment is the only one to open here: Kubernetes
+	// replacements keep the empty agent-startup stage until their archive
+	// upload, which never reaches this path.
+	env, err := environsNewIAAS(stdCtx, openParams, environs.NoopCredentialInvalidator())
 	if err != nil {
 		return errors.Capture(err)
 	}
@@ -283,9 +288,7 @@ func recoverDqlite(
 	logger corelogger.Logger,
 ) error {
 	return database.WithDqlite(ctx, mgr, bindAddress, logger, func(ctx context.Context, session *database.DqliteSession) error {
-		_, controllerRunner, err := session.OpenDatabaseForImport(
-			ctx, coredatabase.ControllerNS, schema.ControllerDDL(),
-		)
+		controllerRunner, err := session.OpenDatabase(ctx, coredatabase.ControllerNS, schema.ControllerDDL())
 		if err != nil {
 			return errors.Capture(err)
 		}

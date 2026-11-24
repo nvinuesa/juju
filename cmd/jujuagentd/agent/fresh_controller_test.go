@@ -73,6 +73,39 @@ func (s *freshControllerSuite) TestRecoveryK8sController(c *tc.C) {
 	s.assertFreshController(c, true, nil, true, agent.BootstrapControllerId)
 }
 
+// TestRecoveryMachineRequiresPopulatedParams checks that a machine
+// replacement never runs the agent-startup compatibility path: machines
+// are provisioned with their archive, so empty parameters are an error.
+func (s *freshControllerSuite) TestRecoveryMachineRequiresPopulatedParams(c *tc.C) {
+	dataDir := c.MkDir()
+	modelConfig := jujutesting.CustomModelConfig(c, jujutesting.Attrs{
+		"name": "controller", "uuid": tc.Must0(c, coremodel.NewUUID).String(), "type": "dummy",
+		"agent-version": jujuversion.Current.String(),
+	})
+	params := instancecfg.StateInitializationParams{
+		ControllerConfig:      jujutesting.FakeControllerConfig(),
+		ControllerModelConfig: modelConfig,
+		ControllerCloud: cloud.Cloud{
+			Name: "test-cloud", Type: "dummy", AuthTypes: cloud.AuthTypes{cloud.EmptyAuthType},
+		},
+	}
+	paramsData, err := params.Marshal()
+	c.Assert(err, tc.ErrorIsNil)
+	err = os.WriteFile(filepath.Join(dataDir, cloudconfig.FileNameBootstrapParams), paramsData, 0600)
+	c.Assert(err, tc.ErrorIsNil)
+	// An empty parameters file marks the agent-startup stage, which only
+	// a Kubernetes replacement keeps.
+	paramsPath := filepath.Join(dataDir, internalrecovery.ParamsFile)
+	c.Assert(os.MkdirAll(filepath.Dir(paramsPath), 0o700), tc.ErrorIsNil)
+	c.Assert(os.WriteFile(paramsPath, nil, 0o600), tc.ErrorIsNil)
+
+	command := NewRecoverCommand()
+	command.AgentConf = agentconf.NewAgentConf(dataDir)
+	command.MachineId = agent.BootstrapControllerId
+	err = command.Run(cmdtesting.Context(c))
+	c.Check(err, tc.ErrorMatches, "recovery parameters are empty")
+}
+
 func (s *freshControllerSuite) assertFreshController(
 	c *tc.C, isK8s bool, databaseErr error, skipDqlite bool, machineId string,
 ) {

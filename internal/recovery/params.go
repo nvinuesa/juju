@@ -28,7 +28,8 @@ const (
 	ArchiveFile = "recovery/archive.tar.gz"
 
 	// StartedFile records that database initialisation was claimed. It is
-	// retained on failure so an interrupted import is never replayed.
+	// retained on failure so an interrupted initialisation is never
+	// replayed.
 	StartedFile = "recovery/initialisation-started"
 )
 
@@ -55,29 +56,40 @@ func (p Params) Marshal() ([]byte, error) {
 	return yaml.Marshal(p)
 }
 
-// ReadParams reads and validates the recovery parameters from dataDir.
-func ReadParams(dataDir string) (Params, error) {
-	var p Params
-	data, err := os.ReadFile(filepath.Join(dataDir, ParamsFile))
-	if err != nil {
-		return p, errors.Errorf("reading recovery parameters: %w", err)
-	}
-	if err := yaml.Unmarshal(data, &p); err != nil {
-		return p, errors.Capture(err)
+// Unmarshal parses and validates the recovery parameters, including the
+// embedded node configuration. The caller reads the parameters file once
+// itself and decides what an empty file means: the agent-startup stage
+// carries no parameters to validate.
+func (p *Params) Unmarshal(data []byte) error {
+	if err := yaml.Unmarshal(data, p); err != nil {
+		return errors.Capture(err)
 	}
 	if err := p.Node.Unmarshal([]byte(p.NodeConfig)); err != nil {
-		return p, errors.Capture(err)
+		return errors.Capture(err)
 	}
 	sum := strings.TrimPrefix(p.SHA256, "sha256-")
 	if p.ArchivePath == "" || len(sum) != 64 || p.AgentVersion == semversion.Zero ||
 		p.MachineName == "" || p.Node.AgentVersion != p.AgentVersion {
-		return p, errors.New("incomplete recovery parameters")
+		return errors.New("incomplete recovery parameters")
 	}
 	if _, err := hex.DecodeString(sum); err != nil {
-		return p, errors.New("invalid recovery checksum")
+		return errors.New("invalid recovery checksum")
 	}
 	if err := machine.Name(p.MachineName).Validate(); err != nil {
-		return p, errors.Capture(err)
+		return errors.Capture(err)
+	}
+	return nil
+}
+
+// ReadParams reads and validates the recovery parameters from dataDir.
+func ReadParams(dataDir string) (Params, error) {
+	data, err := os.ReadFile(filepath.Join(dataDir, ParamsFile))
+	if err != nil {
+		return Params{}, errors.Errorf("reading recovery parameters: %w", err)
+	}
+	var p Params
+	if err := p.Unmarshal(data); err != nil {
+		return Params{}, err
 	}
 	return p, nil
 }
@@ -119,9 +131,10 @@ func HasMarker(dataDir, name, checksum string) (bool, error) {
 	return true, nil
 }
 
-// BeginInitialisation records exclusive ownership before database import.
-// The marker is retained on failure: partially imported databases must never
-// be replayed or opened by another initialiser.
+// BeginInitialisation records exclusive ownership before database
+// initialisation. The marker is retained on failure: a partially
+// initialised database must never be replayed or opened by another
+// initialiser.
 func BeginInitialisation(dataDir, checksum string) error {
 	filename := filepath.Join(dataDir, StartedFile)
 	if err := os.MkdirAll(filepath.Dir(filename), 0700); err != nil {
