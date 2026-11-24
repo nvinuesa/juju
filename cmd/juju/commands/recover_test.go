@@ -304,8 +304,9 @@ func (s *recoverySuite) TestRunPassesArchiveInfoToProvisioner(c *tc.C) {
 	terminalErr := errors.New("recovery stopped after allocation")
 	var got *recovery.ArchiveInfo
 	command := newRecoveryCommandWithProvisioner(func(
-		_ *cmd.Context, _ jujuclient.ClientStore, _ string, info *recovery.ArchiveInfo,
+		_ *cmd.Context, _ jujuclient.ClientStore, archivePath string, info *recovery.ArchiveInfo,
 	) error {
+		c.Check(archivePath, tc.Equals, filepath.Join(dir, "backup.tar.gz"))
 		got = info
 		return terminalErr
 	})
@@ -340,8 +341,9 @@ func (s *recoverySuite) TestRunPassesKubernetesArchiveInfoToProvisioner(c *tc.C)
 	terminalErr := errors.New("recovery stopped after allocation")
 	var got *recovery.ArchiveInfo
 	command := newRecoveryCommandWithProvisioner(func(
-		_ *cmd.Context, _ jujuclient.ClientStore, _ string, info *recovery.ArchiveInfo,
+		_ *cmd.Context, _ jujuclient.ClientStore, archivePath string, info *recovery.ArchiveInfo,
 	) error {
+		c.Check(archivePath, tc.Equals, filepath.Join(dir, "backup.tar.gz"))
 		got = info
 		return terminalErr
 	})

@@ -10,6 +10,7 @@ import (
 
 	"github.com/juju/tc"
 
+	coreerrors "github.com/juju/juju/core/errors"
 	"github.com/juju/juju/core/semversion"
 	"github.com/juju/juju/environs/config"
 	"github.com/juju/juju/internal/cloudconfig/instancecfg"
@@ -110,7 +111,10 @@ func (s *paramsSuite) TestReadParamsRejectsVersionDisagreement(c *tc.C) {
 func (s *paramsSuite) TestReadParamsRejectsInvalidMachine(c *tc.C) {
 	params := s.validParams(c)
 	params.MachineName = "not a machine"
-	s.assertInvalidParams(c, params, ".*")
+	dataDir := c.MkDir()
+	writeParams(c, dataDir, params)
+	_, err := recovery.ReadParams(dataDir)
+	c.Assert(err, tc.ErrorIs, coreerrors.NotValid)
 }
 
 func (s *paramsSuite) TestReadParamsMissingFile(c *tc.C) {

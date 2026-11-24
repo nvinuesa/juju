@@ -404,8 +404,8 @@ type StateInitializationParams struct {
 	// RecoveryMode marks this instance as a recovery allocation: a
 	// replacement controller restored from an archive. The setup generated
 	// for it runs recover-state and writes the recovery mode file instead of
-	// performing a fresh bootstrap, so Dqlite initialisation and state import
-	// are stopped before they begin.
+	// performing a fresh bootstrap. Machine recovery initialises Dqlite;
+	// Kubernetes recovery starts the agent only. Neither imports state.
 	RecoveryMode bool
 
 	// RecoveryArchivePath is the local path of the verified recovery

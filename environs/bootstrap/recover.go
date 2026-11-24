@@ -121,8 +121,9 @@ func validateCommonRecoveryParams(p BootstrapParams) error {
 // RecoverIAAS allocates a replacement machine controller instance from a
 // recovery archive and installs and starts one replacement agent through the
 // ordinary provider finaliser, preserving the archived machine identity, agent
-// version and base, and stopping before Dqlite initialisation and state
-// import. A fresh controller bootstrap is done by Bootstrap.
+// version and base. It uploads and verifies the archive, then initialises
+// Dqlite with the replacement controller-node row. It does not import the
+// archived state. A fresh controller bootstrap is done by Bootstrap.
 //
 // RecoverIAAS returns the replacement instance ID whenever the provider
 // reports a successful allocation, even if a later check or finaliser fails.

@@ -53,7 +53,7 @@ type recoveryK8sBroker interface {
 
 // provisionRecovery installs and starts a replacement controller agent
 // from the recovery archive, through the ordinary bootstrap allocation
-// pipeline, and deliberately stops before initialising its database.
+// pipeline. Machine recovery initialises Dqlite; neither path imports state.
 func provisionRecovery(
 	ctx *cmd.Context,
 	store jujuclient.ClientStore,
