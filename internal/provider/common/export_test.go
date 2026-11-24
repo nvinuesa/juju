@@ -4,7 +4,9 @@
 package common
 
 var (
-	ConnectSSH            = &connectSSH
-	FormatHardware        = formatHardware
-	UploadRecoveryArchive = uploadRecoveryArchive
+	ConnectSSH                      = &connectSSH
+	FormatHardware                  = formatHardware
+	UploadRecoveryArchive           = uploadRecoveryArchive
+	UploadRecoveryArchiveIfRequired = uploadRecoveryArchiveIfRequired
+	RecoveryCleanupTimeout          = &recoveryCleanupTimeout
 )
