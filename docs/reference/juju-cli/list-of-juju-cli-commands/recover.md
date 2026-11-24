@@ -22,8 +22,9 @@ The client must be able to resolve the cloud named in the archive. On a new
 workstation, add the cloud with 'juju add-cloud --client' if it is not
 already available.
 
-This version validates the archive and installs and starts a replacement
-controller agent only. It leaves the machine or namespace for inspection and
-exits with an error reporting its ID or namespace.
-Database import and controller initialisation are not available, and the
-controller is not registered.
+On a machine, recovery uploads and verifies the archive, then initialises the
+replacement Dqlite database with its controller-node row. On Kubernetes, it
+installs and starts the replacement agent without initialising the database.
+Neither path imports archived state or registers the controller. The command
+leaves the replacement for inspection and exits with an error reporting its
+instance ID or namespace.
