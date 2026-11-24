@@ -196,6 +196,10 @@ func (s *recoveryMachineSuite) TestRecoverMachineRefusesCrossVersionArchive(c *t
 // session and is readable from a fresh one, and no fresh bootstrap
 // seeding lands in the database.
 func (s *recoveryMachineSuite) TestRecoverDqliteAddsNodeRowWithoutSeeding(c *tc.C) {
+	// go-dqlite derives its abstract TLS socket name from the initial node
+	// ID, which is fixed even when the TCP port and data dir are unique.
+	// Isolate it from Dqlite sessions in concurrently running test binaries.
+	c.Setenv("SNAP_INSTANCE_NAME", "juju-recovery-test-"+strconv.Itoa(os.Getpid()))
 	dataDir := c.MkDir()
 	mgr := newLoopbackNodeManager(c, dataDir)
 	logger := loggertesting.WrapCheckLog(c)
